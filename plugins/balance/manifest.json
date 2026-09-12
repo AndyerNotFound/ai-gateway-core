@@ -1,0 +1,13 @@
+{
+  "id": "balance",
+  "name": "渠道余额代查",
+  "version": "1.0.0",
+  "description": "代查上游渠道余额(内置 deepseek/siliconflow/openai/bigmodel 预设, 支持自定义 balanceUrl+balancePath)",
+  "hasServer": true,
+  "permissions": [
+    "network",
+    "storage"
+  ],
+  "configSchema": [],
+  "icon": "msym:account_balance_wallet"
+}

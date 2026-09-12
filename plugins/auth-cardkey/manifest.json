@@ -1,0 +1,25 @@
+{
+  "id": "auth-cardkey",
+  "name": "卡密认证",
+  "version": "1.1.0",
+  "type": "auth",
+  "icon": "msym:key",
+  "description": "卡密(API Key)认证: 发卡/额度/过期/模型与分支白名单, /credits 余额查询",
+  "hasServer": true,
+  "adminPage": "pages/admin.html",
+  "permissions": [
+    "auth:registerAuth",
+    "gateway:registerGlobalKey",
+    "gateway:topRoute",
+    "storage"
+  ],
+  "configSchema": [
+    {
+      "key": "keyLength",
+      "label": "卡密长度(8-128)",
+      "type": "number",
+      "default": 24
+    }
+  ],
+  "dataScope": "global"
+}

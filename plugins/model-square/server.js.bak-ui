@@ -1,0 +1,285 @@
+'use strict';
+/* model-square - 模型广场(带筛选)
+ *
+ * 为什么做成插件页: 页面是服务端渲染的 gcui JSON, App 直接渲染,
+ * 所以**改这里不用重编 App** —— 加筛选/改样式只要重启网关。
+ *
+ * 三个筛选维度:
+ *   分组(group)     : 客户端可见模型名的"系列"; 管理员配了 modelMap 时, 别名本身就是一个分组
+ *   提供商(provider): 渠道名
+ *   用户分组(ugroup): 用户在「用户体系」里的分组; 渠道可配 groups:[] 白名单(空=所有分组可用)
+ *
+ * 筛选状态按 (uid|卡密) 存在插件数据里; 每次点筛选芯片 → intent → 服务端返回整页 → App 原地重渲染。
+ */
+
+function jsonRes(res, code, o) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(o));
+}
+
+module.exports.activate = (ctx) => {
+  const cfg = ctx.config;
+  if (!cfg.filters || typeof cfg.filters !== 'object') cfg.filters = {};
+
+  /* ---------- 数据 ---------- */
+  const fkey = (uk) => (uk && (uk.uid || uk.key)) || 'anon';
+
+  const allFilter = () => ({ group: '', provider: '', ugroup: '' });
+  const filterOf = (uk) => Object.assign(allFilter(), cfg.filters[fkey(uk)] || {});
+  const saveFilter = (uk, patch) => {
+    cfg.filters[fkey(uk)] = Object.assign(filterOf(uk), patch);
+    ctx.setPluginConfig(cfg);
+    return cfg.filters[fkey(uk)];
+  };
+
+  /** 去重后的渠道列表 */
+  const channels = () => {
+    const seen = new Map();
+    for (const pick of ctx.pickChannels()) {
+      const ch = pick && pick.ch;
+      if (ch && ch.name && !seen.has(ch.name)) seen.set(ch.name, ch);
+    }
+    return [...seen.values()];
+  };
+
+  /** 客户端可见的模型名: models 列表 ∪ modelMap 的 key(别名) */
+  const namesOf = (ch) => {
+    const mm = (ch.modelMap && typeof ch.modelMap === 'object') ? ch.modelMap : {};
+    const set = new Set();
+    for (const m of (Array.isArray(ch.models) ? ch.models : [])) if (m) set.add(String(m));
+    for (const k of Object.keys(mm)) if (k) set.add(String(k));
+    return [...set];
+  };
+
+  /** 分组名: 取名字的第一段(gpt-4o→gpt / claude-…→claude); 别名则自身即分组 */
+  const groupOfName = (name) => {
+    const n = String(name || '').trim();
+    const first = n.split(/[-_./: ]+/)[0];
+    return first || n;
+  };
+
+  const modelsOf = (ch) => {
+    const mm = (ch.modelMap && typeof ch.modelMap === 'object') ? ch.modelMap : {};
+    const groups = Array.isArray(ch.groups) ? ch.groups.map(String) : [];
+    return namesOf(ch).map((n) => ({
+      name: n,
+      group: groupOfName(n),
+      upstream: mm[n] ? String(mm[n]) : '',
+      channel: ch.name,
+      type: ch.type || 'openai',
+      groups,
+    }));
+  };
+
+  /** 全部模型(按 渠道 → 模型 顺序) */
+  const allModels = () => {
+    const out = [];
+    for (const ch of channels()) out.push(...modelsOf(ch));
+    return out;
+  };
+
+  /** 该模型对某用户分组是否可见: 渠道 groups 空 = 所有分组都可用 */
+  const visibleToGroup = (m, g) => !g || !m.groups.length || m.groups.includes(g);
+
+  /* ---------- 用户分组(读「用户体系」插件的配置) ---------- */
+  const userOf = (uk) => {
+    if (!uk || !uk.uid) return null;
+    try {
+      const c = ctx.getPluginConfig('auth-user');
+      return ((c && c.users) || []).find(x => x && x.uid === uk.uid) || null;
+    } catch (_) { return null; }
+  };
+  const groupsList = () => {
+    try {
+      const c = ctx.getPluginConfig('auth-user');
+      if (c && Array.isArray(c.groups) && c.groups.length) return c.groups.map(String);
+      if (c && c.defaultGroup) return [String(c.defaultGroup)];
+    } catch (_) { }
+    return ['默认'];   /* 用户体系还没落盘时给个兜底, 保证筛选栏始终可用 */
+  };
+  const myGroup = (uk) => {
+    const u = userOf(uk);
+    if (u && u.group) return String(u.group);
+    const gs = groupsList();
+    return gs.length ? gs[0] : '';
+  };
+
+  /* ---------- gcui 页面 ---------- */
+  const chip = (label, selected, facet, value) => ({
+    type: 'chip',
+    text: label,
+    selected: !!selected,
+    action: { type: 'intent', endpoint: './intent/square/filter', body: { facet, value }, then: 'reload' },
+  });
+
+  const typeTone = (t) => (t === 'claude' ? 'tertiary' : t === 'gemini' ? 'primary' : 'success');
+
+  const buildPage = (uk) => {
+    const f = filterOf(uk);
+    const chs = channels();
+    const models = allModels();
+    const my = myGroup(uk);
+    const ug = f.ugroup;   /* '' = 不限分组 */
+
+    const groups = [...new Set(models.map(m => m.group))].sort();
+    const providers = chs.map(c => c.name);
+    const ugroups = groupsList();
+
+    const shown = models.filter(m =>
+      (!f.group || m.group === f.group) &&
+      (!f.provider || m.channel === f.provider) &&
+      visibleToGroup(m, ug)
+    );
+
+    /* 各组在各分组下的可见数量, 给芯片带个数字 */
+    const countFor = (patch) => models.filter(m =>
+      (!(patch.group !== undefined ? patch.group : f.group) || m.group === (patch.group !== undefined ? patch.group : f.group)) &&
+      (!(patch.provider !== undefined ? patch.provider : f.provider) || m.channel === (patch.provider !== undefined ? patch.provider : f.provider)) &&
+      visibleToGroup(m, (patch.ugroup !== undefined ? patch.ugroup : ug))
+    ).length;
+
+    const children = [];
+
+    /* 概览 */
+    const active = [];
+    if (f.group) active.push('分组 ' + f.group);
+    if (f.provider) active.push('提供商 ' + f.provider);
+    if (ug) active.push('用户分组 ' + ug);
+    children.push({
+      type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'row', gap: 14, children: [
+          { type: 'avatar', text: '◈', size: 52 },
+          { type: 'column', weight: 1, gap: 6, children: [
+            { type: 'text', text: '模型广场', style: 'title3' },
+            { type: 'text', text: '共 ' + models.length + ' 个模型 · 当前显示 ' + shown.length + ' 个', style: 'caption' },
+          ] },
+        ] },
+        { type: 'kv', label: '筛选', value: active.length ? active.join(' · ') : '未筛选' },
+        { type: 'kv', label: '我的分组', value: my || '（未启用用户体系）' },
+      ],
+    });
+
+    /* 分组 */
+    children.push({
+      type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'text', text: '分组', style: 'title4' },
+        { type: 'text', text: '按模型系列分组；渠道配了 modelMap 时，别名本身就是一个分组', style: 'caption' },
+        { type: 'hscroll', gap: 8, children: [
+          chip('全部 (' + countFor({ group: '' }) + ')', !f.group, 'group', ''),
+          ...groups.map(g => chip(g + ' (' + countFor({ group: g }) + ')', f.group === g, 'group', g)),
+        ] },
+      ],
+    });
+
+    /* 提供商 */
+    children.push({
+      type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'text', text: '提供商', style: 'title4' },
+        { type: 'text', text: '模型来自哪个渠道', style: 'caption' },
+        { type: 'hscroll', gap: 8, children: [
+          chip('全部 (' + countFor({ provider: '' }) + ')', !f.provider, 'provider', ''),
+          ...providers.map(p => chip(p + ' (' + countFor({ provider: p }) + ')', f.provider === p, 'provider', p)),
+        ] },
+      ],
+    });
+
+    /* 用户分组 */
+    if (ugroups.length) {
+      children.push({
+        type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+          { type: 'text', text: '用户分组', style: 'title4' },
+          { type: 'text', text: '只看某个分组能用的模型；渠道没配分组白名单 = 所有分组都能用', style: 'caption' },
+          { type: 'hscroll', gap: 8, children: [
+            chip('不限 (' + countFor({ ugroup: '' }) + ')', !ug, 'ugroup', ''),
+            ...ugroups.map(g => chip(g + ' (' + countFor({ ugroup: g }) + ')', ug === g, 'ugroup', g)),
+          ] },
+        ],
+      });
+    }
+
+    /* 模型列表 */
+    if (!shown.length) {
+      children.push({
+        type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+          { type: 'text', text: '没有符合条件的模型', style: 'body' },
+          { type: 'text', text: '换个筛选条件试试；或者在管理端「模型列表」里同步上游模型。', style: 'caption' },
+        ],
+      });
+    } else {
+      const max = 150;
+      for (const m of shown.slice(0, max)) {
+        const badges = [
+          { type: 'badge', text: m.channel, tone: typeTone(m.type) },
+          { type: 'badge', text: '分组 ' + m.group, tone: 'neutral' },
+        ];
+        if (m.upstream) badges.push({ type: 'badge', text: '→ ' + m.upstream, tone: 'tertiary' });
+        if (m.groups.length) badges.push({ type: 'badge', text: '限 ' + m.groups.join('/'), tone: 'warning' });
+        children.push({
+          type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+            { type: 'row', gap: 12, children: [
+              { type: 'avatar', text: String(m.name).slice(0, 1).toUpperCase(), size: 38 },
+              { type: 'column', weight: 1, gap: 6, children: [
+                { type: 'text', text: m.name, style: 'title4' },
+                { type: 'row', gap: 6, children: badges },
+              ] },
+            ] },
+            { type: 'button', text: '复制模型名', style: 'outlined', shape: 'full',
+              action: { type: 'copy', text: m.name, toast: '已复制 ' + m.name } },
+          ],
+        });
+      }
+      if (shown.length > max) {
+        children.push({
+          type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+            { type: 'text', text: '只显示了前 ' + max + ' 个（共 ' + shown.length + ' 个）', style: 'caption' },
+            { type: 'text', text: '用上面的筛选缩小范围', style: 'caption' },
+          ],
+        });
+      }
+    }
+
+    return { gcui: 1, title: '模型广场', root: { type: 'column', gap: 12, children } };
+  };
+
+  /* ---------- 路由 ---------- */
+  /* 与 auth-cardkey 同源查卡, 拿到 uid → 才能知道用户属于哪个分组 */
+  const apis = () => ctx.gateway.authApis();
+  const ukOf = (p) => {
+    const t = (p && p.token) || '';
+    if (!t || !apis().findKey) return null;
+    let uk = null;
+    try { uk = apis().findKey(null, t); } catch (_) { uk = null; }
+    return (uk && uk.enable !== false) ? uk : null;
+  };
+
+  ctx.registerRoute('GET', '/ui/square', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    jsonRes(res, 200, buildPage(uk));
+  });
+
+  /* 给网页端用的 JSON(结构化的筛选数据, 网页自己渲染) */
+  ctx.registerRoute('GET', '/data/square', (req, res, p) => {
+    const uk = ukOf(p);
+    const models = allModels();
+    jsonRes(res, 200, {
+      ok: true,
+      myGroup: uk ? myGroup(uk) : '',
+      groups: [...new Set(models.map(m => m.group))].sort(),
+      providers: channels().map(c => c.name),
+      ugroups: groupsList(),
+      models,
+    });
+  });
+
+  ctx.registerRoute('POST', '/intent/square/filter', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要登录' };
+    const b = p.body || {};
+    const facet = String(b.facet || '');
+    if (!['group', 'provider', 'ugroup'].includes(facet)) return { ok: false, error: '未知筛选项: ' + facet };
+    saveFilter(uk, { [facet]: String(b.value == null ? '' : b.value) });
+    return { ok: true, ui: buildPage(uk) };
+  }));
+
+  ctx.log('模型广场已激活 (bottomBar 页面 ui=/ui/square)');
+};

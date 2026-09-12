@@ -1,0 +1,33 @@
+{
+  "id": "probe",
+  "name": "渠道成功率探测",
+  "version": "1.0.0",
+  "description": "定时探活渠道(GET /models 免费 / 1-token chat), 统计成功率",
+  "hasServer": true,
+  "permissions": [
+    "network",
+    "storage",
+    "cron"
+  ],
+  "configSchema": [
+    {
+      "key": "enable",
+      "label": "启用",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "intervalMin",
+      "label": "间隔(分钟)",
+      "type": "number",
+      "default": 10
+    },
+    {
+      "key": "mode",
+      "label": "模式 models|chat",
+      "type": "string",
+      "default": "models"
+    }
+  ],
+  "icon": "msym:monitor_heart"
+}

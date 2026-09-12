@@ -1,0 +1,25 @@
+{
+  "id": "record",
+  "name": "请求记录",
+  "version": "1.0.0",
+  "description": "记录每条请求的模型/渠道/token/耗时到 JSONL",
+  "hasServer": true,
+  "permissions": [
+    "storage"
+  ],
+  "configSchema": [
+    {
+      "key": "enable",
+      "label": "启用",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "maxChars",
+      "label": "正文记录上限",
+      "type": "number",
+      "default": 2000
+    }
+  ],
+  "icon": "msym:receipt_long"
+}

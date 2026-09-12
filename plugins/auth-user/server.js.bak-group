@@ -1,0 +1,676 @@
+'use strict';
+/* auth-user 插件 (type:auth) - 用户体系: 注册/账密登录/自助发卡/资料编辑
+ * 配置: { users: [{uid,name,passwordHash,nickname,avatar,note,createdAt}], registration: {...} }
+ * 依赖: auth-cardkey 插件 (经 gateway.authApis() 操作卡密)
+ * 顶层端点: POST /auth/login /auth/register, GET /auth/register /auth/me /v1/branches,
+ *           POST /auth/profile, GET|POST /auth/mykeys, POST /auth/mykeys-update /auth/mykeys-delete
+ */
+const crypto = require('crypto');
+const https = require('https');
+const net = require('net');
+const tls = require('tls');
+const { hashPassword, verifyPassword } = require('../../src/auth');
+
+function jsonRes(res, code, o) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(o));
+}
+
+/* ---------- 极简 SMTP 客户端 (AUTH LOGIN, 支持 smtps://465 与 smtp://587 STARTTLS) ---------- */
+function smtpSend(smtpUrl, from, to, subject, text) {
+  return new Promise((resolve, reject) => {
+    let mu;
+    try { mu = new URL(smtpUrl); } catch (e) { return reject(new Error('SMTP 地址格式错误: 需 smtps://user:pass@host:465 或 smtp://user:pass@host:587')); }
+    const isSsl = mu.protocol === 'smtps:';
+    if (!isSsl && mu.protocol !== 'smtp:') return reject(new Error('SMTP 协议只支持 smtp:// 或 smtps://'));
+    const port = Number(mu.port) || (isSsl ? 465 : 587);
+    const user = decodeURIComponent(mu.username || ''), pass = decodeURIComponent(mu.password || '');
+    const host = mu.hostname;
+    let sock, buf = '', step = 0, done = false;
+    const caps = {};
+    const fail = (m) => { if (!done) { done = true; try { sock && sock.destroy(); } catch (_) {} reject(new Error(m)); } };
+    const timer = setTimeout(() => fail('SMTP 超时'), 20000);
+    const finish = () => { if (!done) { done = true; clearTimeout(timer); try { sock && sock.end(); } catch (_) {} resolve(true); } };
+    const send = (line) => { try { sock.write(line + '\r\n'); } catch (e) { fail(e.message); } };
+    const expect = (codes, next) => ({ codes, next });
+    /* 状态机: 序列推进 */
+    let steps;
+    const buildSteps = () => {
+      steps = [
+        expect([220], () => send('EHLO gateway.local')),
+        expect([250], () => {
+          if (isSsl || sock.encrypted) { steps.splice(step, 1); return send('AUTH LOGIN'); } // SSL 直连: 移除多余的EHLO重复步
+          if (!caps.starttls) { steps.splice(step, 2); return send('AUTH LOGIN'); } // 无 STARTTLS: 移除 STARTTLS步+TLS后EHLO步
+          send('STARTTLS');
+        }),
+      ];
+      if (!isSsl) steps.push(expect([220], () => {
+        /* STARTTLS 升级 */
+        const tlsSock = tls.connect({ socket: sock, servername: host, rejectUnauthorized: false }, () => {
+          sock = tlsSock; send('EHLO gateway.local');
+        });
+        tlsSock.on('error', (e) => fail('STARTTLS 失败: ' + e.message));
+        tlsSock.on('data', onData);
+        buf = '';
+      }));
+      steps.push(
+        expect([250], () => send('AUTH LOGIN')),
+        expect([334], () => send(Buffer.from(user).toString('base64'))),
+        expect([334], () => send(Buffer.from(pass).toString('base64'))),
+        expect([235], () => send('MAIL FROM:<' + (from || user) + '>')),
+        expect([250], () => send('RCPT TO:<' + to + '>')),
+        expect([250, 251], () => send('DATA')),
+        expect([354], () => {
+          const hdr = 'From: <' + (from || user) + '>\r\nTo: <' + to + '>\r\nSubject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n';
+          send(hdr + text + '\r\n.');
+        }),
+        expect([250], () => { send('QUIT'); finish(); }),
+      );
+    };
+    const onLine = (line) => {
+      if (/^250[ -]STARTTLS$/i.test(line.trim())) caps.starttls = true;
+      const m = /^(\d{3})([ -])/.exec(line);
+      if (!m) return;
+      if (m[2] === '-') return; // 多行响应中间行
+      const code = Number(m[1]);
+      const st = steps[step];
+      if (!st) return;
+      if (!st.codes.includes(code)) return fail('SMTP 响应 ' + code + ': ' + line.slice(4).trim().slice(0, 120));
+      step++;
+      try { st.next && st.next(); } catch (e) { fail(e.message); }
+    };
+    const onData = (chunk) => {
+      buf += chunk.toString('utf8');
+      let i;
+      while ((i = buf.indexOf('\r\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2); onLine(line); }
+    };
+    const onConnect = () => { /* 等 220 横幅 */ };
+    const s0 = isSsl
+      ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, onConnect)
+      : net.connect({ host, port }, onConnect);
+    sock = s0;
+    buildSteps();
+    s0.on('data', onData);
+    s0.on('error', (e) => fail('SMTP 连接失败: ' + e.message));
+  });
+}
+
+/* 邮箱验证码 (内存态, 10 分钟过期, 每邮箱 60s 冷却) */
+const emailCodes = new Map(); // email -> {code, exp, lastSent}
+function newEmailCode(email) {
+  const code = String(crypto.randomInt(100000, 999999));
+  emailCodes.set(email, { code, exp: Date.now() + 600000, lastSent: Date.now() });
+  return code;
+}
+function checkEmailCode(email, code) {
+  const r = emailCodes.get(email);
+  if (!r) return '请先获取验证码';
+  if (Date.now() > r.exp) { emailCodes.delete(email); return '验证码已过期, 请重新获取'; }
+  if (r.code !== String(code || '').trim()) return '验证码错误';
+  emailCodes.delete(email);
+  return null;
+}
+
+module.exports.activate = (ctx) => {
+  const cfg = ctx.config;
+  cfg.users = Array.isArray(cfg.users) ? cfg.users : [];
+  cfg.registration = cfg.registration && typeof cfg.registration === 'object' ? cfg.registration : {};
+  const reg = cfg.registration || {};   /* 兼容未配置注册的情况(默认: 注册关闭 + 零额度) */
+  const save = () => ctx.setPluginConfig(cfg);
+  const apis = () => ctx.gateway.authApis(); // auth-cardkey 提供
+
+  const myKeysOf = (uid, mainKey) => {
+    const all = apis().listKeys ? apis().listKeys() : [];
+    return uid ? all.filter(k => k.uid === uid) : (mainKey ? all.filter(k => k.key === mainKey) : []);
+  };
+  const branchesOf = (uk) => {
+    const all = ctx.gateway.listInstances().filter(i => i.enabled).map(i => i.name);
+    if (!uk) return all;
+    const b = uk.branches || [];
+    return b.length ? all.filter(n => b.includes(n)) : all;
+  };
+  const requireUser = (auth, res) => {
+    const r = auth();
+    if (!r.ok) { jsonRes(res, r.status || 401, { error: r.error || 'invalid key' }); return null; }
+    if (!r.userKey) { jsonRes(res, 403, { error: '需要用户卡密(非管理员key)' }); return null; }
+    return r.userKey;
+  };
+
+  /* ---- POST /auth/login {username|uid,password} → 该用户卡密 ----
+   * 兼容: 先按 username 查, 再按 uid 查 (旧账号) */
+  ctx.registerTopRoute('POST', '/auth/login', ({ res, body }) => {
+    const loginId = String((body && (body.username || body.uid)) || '').trim();
+    const user = cfg.users.find(x => x.username === loginId || x.uid === loginId || x.name === loginId);
+    if (!user || !verifyPassword((body && body.password) || '', user.passwordHash))
+      return jsonRes(res, 401, { error: '用户名或密码错误' });
+    if (user.banned) return jsonRes(res, 403, { error: '该账号已被封禁' + (user.banReason ? ': ' + user.banReason : ''), banned: true });
+    const keys = myKeysOf(user.uid);
+    jsonRes(res, 200, { ok: true, uid: user.uid, username: user.username || user.name || '', name: user.name || '', nickname: user.nickname || '', avatar: user.avatar || '', keys: keys.map(k => Object.assign({ key: k.key, isMain: !!k.isMain }, apis().creditsJSON(k))) });
+  });
+
+  /* POST /auth/password 改密码 (需登录态) */
+  ctx.registerTopRoute('POST', '/auth/password', ({ res, auth, body }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    if (!uk.uid) return jsonRes(res, 400, { error: '卡密未绑定账号, 无法改密码' });
+    const user = cfg.users.find(x => x.uid === uk.uid);
+    if (!user) return jsonRes(res, 404, { error: '账号不存在' });
+    const oldPw = String((body && body.oldPassword) || '');
+    const newPw = String((body && body.newPassword) || '');
+    if (!verifyPassword(oldPw, user.passwordHash)) return jsonRes(res, 403, { error: '原密码错误' });
+    if (newPw.length < (reg.minPasswordLen || 8)) return jsonRes(res, 400, { error: '新密码至少 ' + (reg.minPasswordLen || 8) + ' 位' });
+    user.passwordHash = hashPassword(newPw);
+    save();
+    jsonRes(res, 200, { ok: true });
+  });
+
+  /* ---- 注册 ---- */
+  ctx.registerTopRoute('GET', '/auth/register', ({ res }) => {
+    jsonRes(res, 200, { enable: !!reg.enable, captchaProvider: reg.captchaProvider || 'none', captchaSiteKey: reg.captchaSiteKey || '', minPasswordLen: reg.minPasswordLen || 8, emailVerify: !!(reg.emailVerify && reg.emailVerify.enable) });
+  });
+  /* POST /auth/email-code {email} 发送验证码 (需开启 emailVerify) */
+  ctx.registerTopRoute('POST', '/auth/email-code', async ({ res, body }) => {
+    if (!reg.enable) return jsonRes(res, 403, { error: '该服务器未开放注册' });
+    const ev = reg.emailVerify || {};
+    if (!ev.enable) return jsonRes(res, 400, { error: '未开启邮箱验证' });
+    if (!ev.smtpUrl) return jsonRes(res, 500, { error: '管理端未配置 SMTP (emailVerify.smtpUrl)' });
+    const email = String((body && body.email) || '').trim().toLowerCase();
+    if (!/^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(email)) return jsonRes(res, 400, { error: '邮箱格式不正确' });
+    if (cfg.users.some(x => (x.email || '') === email)) return jsonRes(res, 409, { error: '该邮箱已注册' });
+    const prev = emailCodes.get(email);
+    if (prev && Date.now() - prev.lastSent < 60000) return jsonRes(res, 429, { error: '发送太频繁, 请 60 秒后再试' });
+    const code = newEmailCode(email);
+    try {
+      await smtpSend(ev.smtpUrl, ev.from || '', email, '注册验证码', '你的验证码是: ' + code + '\n10 分钟内有效。\n\n(若非本人操作请忽略)');
+      jsonRes(res, 200, { ok: true, msg: '验证码已发送, 10 分钟内有效' });
+    } catch (e) {
+      emailCodes.delete(email);
+      jsonRes(res, 502, { error: '邮件发送失败: ' + e.message });
+    }
+  });
+  ctx.registerTopRoute('POST', '/auth/register', async ({ res, body }) => {
+    if (!reg.enable) return jsonRes(res, 403, { error: '该服务器未开放注册' });
+    const username = String((body && (body.username || body.uid)) || '').trim();
+    const pw = String((body && body.password) || '');
+    if (!/^[A-Za-z0-9_-]{3,32}$/.test(username)) return jsonRes(res, 400, { error: '用户名需 3-32 位字母/数字/下划线' });
+    if (pw.length < (reg.minPasswordLen || 8)) return jsonRes(res, 400, { error: '密码至少 ' + (reg.minPasswordLen || 8) + ' 位' });
+    if (cfg.users.some(x => x.username === username || x.name === username)) return jsonRes(res, 409, { error: '该用户名已被注册' });
+    /* 邮箱验证 */
+    const ev = reg.emailVerify || {};
+    let email = '';
+    if (ev.enable) {
+      email = String((body && body.email) || '').trim().toLowerCase();
+      if (!/^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(email)) return jsonRes(res, 400, { error: '邮箱格式不正确' });
+      if (cfg.users.some(x => (x.email || '') === email)) return jsonRes(res, 409, { error: '该邮箱已注册' });
+      const codeErr = checkEmailCode(email, (body && body.emailCode));
+      if (codeErr) return jsonRes(res, 400, { error: codeErr });
+    }
+    if (reg.captchaProvider === 'turnstile') {
+      if (!reg.captchaSecret) return jsonRes(res, 500, { error: '管理端未配置 captchaSecret' });
+      const token = String((body && body.captchaToken) || '');
+      if (!token) return jsonRes(res, 400, { error: '缺少人机验证' });
+      const okT = await new Promise(resolve => {
+        const postData = 'secret=' + encodeURIComponent(reg.captchaSecret) + '&response=' + encodeURIComponent(token);
+        const rq = https.request({ hostname: 'challenges.cloudflare.com', path: '/turnstile/v0/siteverify', method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) }, timeout: 10000 }, (r2) => {
+          let d = ''; r2.on('data', c => d += c); r2.on('end', () => { try { resolve(!!JSON.parse(d).success); } catch (_) { resolve(false); } });
+        });
+        rq.on('error', () => resolve(false)); rq.on('timeout', () => { rq.destroy(); resolve(false); });
+        rq.write(postData); rq.end();
+      });
+      if (!okT) return jsonRes(res, 403, { error: '人机验证失败' });
+    }
+    /* UID 随机生成 (不暴露给用户, 防止删号后同 UID 继承资产) */
+    const uid = 'u' + crypto.randomBytes(4).toString('hex');
+    const user = { uid, username, name: username, passwordHash: hashPassword(pw), nickname: '', avatar: '', email, banned: false, note: '注册', createdAt: new Date().toISOString() };
+    cfg.users.push(user);
+    save();
+    // 发默认卡
+    let mainKey = null;
+    if (apis().addKey) {
+      const dq = Math.floor(Number(reg.defaultQuota) || 0);
+      /* defaultQuota>0 = 新用户自动获得该额度; 默认 0/未设 = 零额度卡(-1), 需管理员充值后才可用 */
+      /* 约定: quotaTokens 0 = 零额度(不可用) / -1 = 不限 / >0 = 具体额度。
+       * 新用户默认给「零额度」, 管理员充值后才可用 —— 之前写成 -1 等于白送不限额度。 */
+      mainKey = { key: apis().genKey(), name: username + ' 的主卡', enable: true, quotaTokens: dq > 0 ? dq : 0, uid, models: [], branches: [], isMain: true, by: 'auto', createdAt: new Date().toISOString() };
+      apis().addKey(mainKey);
+    }
+    jsonRes(res, 200, { ok: true, uid, username, key: mainKey ? mainKey.key : null });
+  });
+
+  /* ---- GET /auth/me ---- */
+  ctx.registerTopRoute('GET', '/auth/me', ({ res, auth }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
+    const keys = myKeysOf(uk.uid, uk.key);
+    jsonRes(res, 200, {
+      ok: true, uid: uk.uid || '', username: (user && (user.username || user.name)) || uk.name || '',
+      name: (user && user.name) || uk.name || '',
+      nickname: (user && user.nickname) || '', avatar: (user && user.avatar) || '',
+      mainKey: uk.key,
+      keys: keys.map(k => Object.assign({ key: k.key, isMain: k.key === uk.key }, apis().creditsJSON(k))),
+      branches: branchesOf(uk),
+    });
+  });
+
+  /* ---- POST /auth/profile ---- */
+  ctx.registerTopRoute('POST', '/auth/profile', ({ res, auth, body }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    const j = body || {};
+    if (uk.uid) {
+      const user = cfg.users.find(x => x.uid === uk.uid);
+      if (user) {
+        if (j.nickname !== undefined) user.nickname = String(j.nickname).slice(0, 64);
+        if (j.name !== undefined) user.name = String(j.name).slice(0, 64);
+        if (j.avatar !== undefined) user.avatar = String(j.avatar).slice(0, 300);
+        save();
+      }
+    }
+    if (j.cardName !== undefined && apis().updateKey) apis().updateKey(uk.key, { name: String(j.cardName).slice(0, 64) });
+    jsonRes(res, 200, { ok: true });
+  });
+
+  /* ---- 我的卡密 ---- */
+  ctx.registerTopRoute('GET', '/auth/mykeys', ({ res, auth }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    const keys = myKeysOf(uk.uid, uk.key);
+    jsonRes(res, 200, { keys: keys.map(k => Object.assign({ key: k.key, redact: k.redact == null ? null : !!k.redact, isMain: k.key === uk.key }, apis().creditsJSON(k))) });
+  });
+  ctx.registerTopRoute('POST', '/auth/mykeys', ({ res, auth, body }) => { // 自助发子卡(父卡子集)
+    const uk = requireUser(auth, res); if (!uk) return;
+    const j = body || {};
+    if (uk.quotaTokens === 0) return jsonRes(res, 403, { error: '主卡额度为 0, 无法发子卡, 请联系管理员充值' });
+    const pm = uk.models || [], pb = uk.branches || [];
+    const models = Array.isArray(j.models) ? j.models.map(String).filter(m => !pm.length || pm.includes(m)) : [];
+    const branches = Array.isArray(j.branches) ? j.branches.map(String).filter(b => !pb.length || pb.includes(b)) : [];
+    let quota = Math.max(0, Number(j.quotaTokens) || 0);
+    if (uk.quotaTokens === -1) {
+      quota = quota > 0 ? quota : -1; /* 主卡不限(-1): 子卡默认也不限 */
+    } else if (uk.quotaTokens > 0) {
+      const remaining = uk.quotaTokens - (uk.usedTokens || 0); if (quota <= 0 || quota > remaining) quota = remaining;
+      apis().updateKey(uk.key, { quotaTokens: uk.quotaTokens - quota }); /* 从主卡扣除 */
+    }
+    const nk = { key: apis().genKey(), name: String(j.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, branches, note: String(j.note || '用户自助').slice(0, 200), by: 'user', createdAt: new Date().toISOString() };
+    apis().addKey(nk);
+    jsonRes(res, 200, { ok: true, key: nk });
+  });
+  ctx.registerTopRoute('POST', '/auth/mykeys-update', ({ res, auth, body }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    const j = body || {};
+    const target = myKeysOf(uk.uid, uk.key).find(k => k.key === j.key);
+    if (!target) return jsonRes(res, 404, { error: '卡密不存在或不属于你' });
+    const patch = {};
+    if (j.name !== undefined) patch.name = String(j.name).slice(0, 64);
+    if (j.models !== undefined) { const pm = uk.models || []; patch.models = Array.isArray(j.models) ? j.models.map(String).filter(m => !pm.length || pm.includes(m)) : []; }
+    if (j.branches !== undefined) { const pb = uk.branches || []; patch.branches = Array.isArray(j.branches) ? j.branches.map(String).filter(b => !pb.length || pb.includes(b)) : []; }
+    if (j.redact !== undefined) patch.redact = j.redact == null ? null : !!j.redact;
+    if (j.quotaTokens !== undefined && j.key !== uk.key) {
+      let q = Math.max(0, Number(j.quotaTokens) || 0);
+      if (uk.quotaTokens > 0) q = Math.min(q, uk.quotaTokens - (uk.usedTokens || 0));
+      patch.quotaTokens = q;
+    }
+    apis().updateKey(j.key, patch);
+    jsonRes(res, 200, { ok: true });
+  });
+  ctx.registerTopRoute('POST', '/auth/mykeys-delete', ({ res, auth, body }) => {
+    const uk = requireUser(auth, res); if (!uk) return;
+    if (body && body.key === uk.key) return jsonRes(res, 400, { error: '不能删除主卡' });
+    const target = myKeysOf(uk.uid, uk.key).find(k => k.key === (body && body.key));
+    if (!target) return jsonRes(res, 404, { error: '卡密不存在或不属于你' });
+    apis().deleteKey(body.key);
+    jsonRes(res, 200, { ok: true });
+  });
+
+  /* ---- GET /v1/branches ---- */
+  ctx.registerTopRoute('GET', '/v1/branches', ({ res, auth }) => {
+    const r = auth();
+    if (!r.ok) return jsonRes(res, r.status || 401, { error: r.error || 'invalid key' });
+    jsonRes(res, 200, { branches: branchesOf(r.userKey) });
+  });
+
+  /* ================= Gay Core SDUI: 个人中心 (provides: user-system) =================
+   * UI = 服务端动态生成的 gcui JSON; 交互 = 签名意图 (ctx.security.guard)。客户端零业务状态。 */
+  const ukOf = (p) => {
+    const t = (p && p.token) || '';
+    if (!t || !apis().findKey) return null;
+    const uk = apis().findKey(null, t);
+    if (!uk || uk.enable === false) return null;
+    return uk;
+  };
+  const fmtTok = n => n == null ? '不限' : (n >= 1e8 ? (n / 1e8).toFixed(2) + ' 亿' : n >= 1e4 ? (n / 1e4).toFixed(1) + ' 万' : String(n));
+  const creditText = (cd) => cd.zeroLimited ? '零额度 · 请联系管理员充值' : cd.unlimited ? '不限量' : null;
+  const keyState = (k, mainKey) => {
+    const cd = apis().creditsJSON(k);
+    const isMain = k.key === mainKey;
+    const badge = cd.zeroLimited ? { text: '零额度', tone: 'error' }
+      : cd.unlimited ? { text: '不限量', tone: 'primary' }
+      : { text: '按量', tone: 'neutral' };
+    return {
+      name: k.name || '未命名卡', key: k.key, keyShort: k.key.slice(0, 8) + '…' + k.key.slice(-4),
+      isMain, quotaText: creditText(cd) || ('余 ' + fmtTok(cd.remainingTokens)),
+      canDelete: !isMain,
+      badgeText: isMain ? '主卡' : badge.text,
+      badgeTone: isMain ? 'primary' : badge.tone,
+      enabled: k.enable !== false,
+    };
+  };
+
+  ctx.registerRoute('GET', '/ui/personal', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
+    const cd = apis().creditsJSON(uk);
+    const display = (user && (user.nickname || user.username || user.name)) || uk.name || uk.uid || '匿名用户';
+    const uname = (user && (user.username || user.name)) || uk.name || uk.uid || '';
+    const keys = myKeysOf(uk.uid, uk.key);
+    const initial = String(display).trim().slice(0, 1).toUpperCase() || '?';
+    const quotaBig = cd.zeroLimited ? '0' : cd.unlimited ? '不限' : fmtTok(cd.remainingTokens);
+    const quotaTone = cd.zeroLimited ? 'error' : cd.unlimited ? 'primary' : 'success';
+    const quotaCap = cd.zeroLimited ? '零额度 · 请联系管理员充值' : cd.unlimited ? '不限量' : ('总额度 ' + fmtTok(cd.quotaTokens));
+    const children = [
+      /* 资料头: 头像 + 昵称 + 状态徽章 + 键值 */
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'row', gap: 14, children: [
+          { type: 'avatar', text: initial, size: 56 },
+          { type: 'column', weight: 1, gap: 6, children: [
+            { type: 'text', text: display, style: 'title3' },
+            { type: 'row', gap: 6, children: [
+              { type: 'badge', text: uk.uid ? '已绑定账号' : '仅卡密', tone: uk.uid ? 'success' : 'neutral' },
+              { type: 'badge', text: '主卡', tone: 'primary' },
+            ] },
+          ] },
+        ] },
+        { type: 'kv', label: '用户名', value: uname || '(未设置)' },
+        { type: 'kv', label: '卡密', value: uk.key.slice(0, 8) + '…' + uk.key.slice(-4) },
+        ...(cd.expiresAt ? [{ type: 'kv', label: '到期', value: cd.expiresAt }] : []),
+      ] },
+      /* 额度: 大数字 + 状态徽章 + 进度 */
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'row', gap: 8, children: [
+          { type: 'column', weight: 1, gap: 4, children: [
+            { type: 'text', text: '剩余额度', style: 'caption', color: '$onSurfaceVariant' },
+            { type: 'text', text: quotaBig, style: 'title', color: cd.zeroLimited ? '$error' : '$primary' },
+          ] },
+          { type: 'badge', text: cd.zeroLimited ? '不可用' : cd.unlimited ? '不限量' : '可用', tone: quotaTone },
+        ] },
+        ...((!cd.unlimited && !cd.zeroLimited) ? [{ type: 'progress', value: cd.remainingTokens, max: cd.quotaTokens }] : []),
+        { type: 'kv', label: '说明', value: quotaCap },
+        { type: 'kv', label: '已使用', value: fmtTok(cd.usedTokens) },
+      ] },
+      /* 卡密列表: chip 操作 + 状态徽章 */
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '我的卡密 (' + keys.length + ')', children: [
+        { type: 'list', items: '{{state.keys}}', template: { type: 'row', gap: 8, children: [
+          { type: 'column', weight: 1, gap: 5, children: [
+            { type: 'row', gap: 6, children: [
+              { type: 'text', text: '{{item.name}}', style: 'body' },
+              { type: 'badge', text: '{{item.badgeText}}', tone: '{{item.badgeTone}}' },
+            ] },
+            { type: 'text', text: '{{item.keyShort}} · {{item.quotaText}}', style: 'caption' },
+          ] },
+          { type: 'chip', text: '复制', icon: 'msym:copy', action: { type: 'copy', text: '{{item.key}}', toast: '卡密已复制' } },
+          { type: 'chip', text: '删除', icon: 'msym:delete', visible: '{{item.canDelete}}', action: { type: 'intent', endpoint: './intent/delete-key', confirm: '确定删除这张卡密吗?', body: { key: '{{item.key}}' } } },
+        ] } },
+        { type: 'button', text: '发子卡', style: 'filled', shape: 'pill', icon: 'msym:add', action: { type: 'open', target: 'page:create-key' } },
+      ] },
+      /* 账号 */
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '账号', children: [
+        { type: 'row', gap: 8, children: [
+          { type: 'button', text: '编辑资料', style: 'outlined', shape: 'pill', weight: 1, action: { type: 'open', target: 'page:edit-profile' } },
+          ...(uk.uid ? [{ type: 'button', text: '修改密码', style: 'outlined', shape: 'pill', weight: 1, action: { type: 'open', target: 'page:change-password' } }] : []),
+        ] },
+        ...(uk.uid ? [{ type: 'button', text: '注销账号', style: 'outlined', shape: 'pill', icon: 'msym:delete', action: { type: 'open', target: 'page:delete-account' } }] : []),
+      ] },
+    ];
+    jsonRes(res, 200, {
+      gcui: 1, title: '个人',
+      state: { keys: keys.map(k => keyState(k, uk.key)) },
+      root: { type: 'column', gap: 14, children },
+    });
+  });
+
+  ctx.registerRoute('GET', '/ui/widget-credits', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    const cd = apis().creditsJSON(uk);
+    const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
+    const display = (user && (user.nickname || user.username || user.name)) || uk.name || uk.uid || '用户';
+    const children = [
+      { type: 'row', gap: 6, children: [
+        { type: 'text', text: '额度', style: 'caption', color: '$onSurfaceVariant', weight: 1 },
+        { type: 'badge', text: cd.zeroLimited ? '零额度' : cd.unlimited ? '不限量' : '按量', tone: cd.zeroLimited ? 'error' : cd.unlimited ? 'primary' : 'neutral' },
+      ] },
+    ];
+    if (cd.zeroLimited) {
+      children.push({ type: 'text', text: '0', style: 'title', color: '$error' });
+      children.push({ type: 'text', text: '请联系管理员充值', style: 'caption' });
+    } else if (cd.unlimited) {
+      children.push({ type: 'text', text: '不限', style: 'title', color: '$primary' });
+      children.push({ type: 'text', text: display, style: 'caption' });
+    } else {
+      children.push({ type: 'text', text: fmtTok(cd.remainingTokens), style: 'title', color: '$primary' });
+      children.push({ type: 'progress', value: cd.remainingTokens, max: cd.quotaTokens > 0 ? cd.quotaTokens : 100 });
+      children.push({ type: 'text', text: '总额度 ' + fmtTok(cd.quotaTokens), style: 'caption' });
+    }
+    jsonRes(res, 200, {
+      gcui: 1, title: '额度',
+      root: { type: 'column', gap: 6, children },
+    });
+  });
+
+  ctx.registerRoute('GET', '/ui/edit-profile', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
+    jsonRes(res, 200, { gcui: 1, title: '编辑资料', root: { type: 'column', gap: 14, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '基本资料', children: [
+        ...(uk.uid ? [
+          { type: 'input', key: 'nickname', label: '昵称', value: (user && user.nickname) || '' },
+          { type: 'input', key: 'avatar', label: '头像 URL', value: (user && user.avatar) || '' },
+        ] : []),
+        { type: 'input', key: 'cardName', label: '主卡名称', value: uk.name || '' },
+      ] },
+      { type: 'button', text: '保存', style: 'filled', shape: 'pill', icon: 'msym:check', action: { type: 'intent', endpoint: './intent/profile', pop: true,
+        body: { nickname: '{{input.nickname}}', avatar: '{{input.avatar}}', cardName: '{{input.cardName}}' } } },
+    ] } });
+  });
+
+  ctx.registerRoute('GET', '/ui/change-password', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    if (!uk.uid) return jsonRes(res, 400, { error: '卡密未绑定账号' });
+    jsonRes(res, 200, { gcui: 1, title: '修改密码', root: { type: 'column', gap: 14, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'text', text: '新密码至少 ' + (reg.minPasswordLen || 8) + ' 位', style: 'caption', color: '$onSurfaceVariant' },
+        { type: 'input', key: 'oldPassword', label: '原密码', inputType: 'password' },
+        { type: 'input', key: 'newPassword', label: '新密码', inputType: 'password' },
+      ] },
+      { type: 'button', text: '修改密码', style: 'filled', shape: 'pill', icon: 'msym:check', action: { type: 'intent', endpoint: './intent/password', pop: true,
+        body: { oldPassword: '{{input.oldPassword}}', newPassword: '{{input.newPassword}}' } } },
+    ] } });
+  });
+
+  ctx.registerRoute('GET', '/ui/create-key', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    const cd = apis().creditsJSON(uk);
+    jsonRes(res, 200, { gcui: 1, title: '发子卡', root: { type: 'column', gap: 14, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'row', gap: 8, children: [
+          { type: 'text', text: '主卡额度', style: 'caption', color: '$onSurfaceVariant', weight: 1 },
+          { type: 'badge', text: cd.zeroLimited ? '零额度' : cd.unlimited ? '不限量' : fmtTok(cd.remainingTokens), tone: cd.zeroLimited ? 'error' : cd.unlimited ? 'primary' : 'success' },
+        ] },
+        { type: 'text', text: creditText(cd) || ('子卡额度将从主卡扣除，主卡剩余 ' + fmtTok(cd.remainingTokens)), style: 'caption', color: '$onSurfaceVariant' },
+      ] },
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '子卡信息', children: [
+        { type: 'input', key: 'name', label: '卡密名称', value: '' },
+        { type: 'input', key: 'quotaTokens', label: '额度 tokens (0=跟随上限)', inputType: 'number', value: '' },
+      ] },
+      { type: 'button', text: '创建子卡', style: 'filled', shape: 'pill', icon: 'msym:add', action: { type: 'intent', endpoint: './intent/create-key',
+        body: { name: '{{input.name}}', quotaTokens: '{{input.quotaTokens}}' } } },
+    ] } });
+  });
+
+  /* ---- 签名意图端点 (security.guard: 验签+防重放+防回滚+幂等) ---- */
+  ctx.registerRoute('POST', '/intent/profile', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const b = p.body || {};
+    if (uk.uid) {
+      const user = cfg.users.find(x => x.uid === uk.uid);
+      if (user) {
+        if (typeof b.nickname === 'string') user.nickname = b.nickname.slice(0, 64);
+        if (typeof b.avatar === 'string') user.avatar = b.avatar.slice(0, 300);
+        save();
+      }
+    }
+    if (typeof b.cardName === 'string' && apis().updateKey) apis().updateKey(uk.key, { name: b.cardName.slice(0, 64) });
+    return { ok: true, toast: '资料已保存' };
+  }));
+
+  ctx.registerRoute('POST', '/intent/password', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk || !uk.uid) return { ok: false, error: '卡密未绑定账号' };
+    const user = cfg.users.find(x => x.uid === uk.uid);
+    if (!user) return { ok: false, error: '账号不存在' };
+    const b = p.body || {};
+    if (!verifyPassword(String(b.oldPassword || ''), user.passwordHash)) return { ok: false, error: '原密码错误' };
+    if (String(b.newPassword || '').length < (reg.minPasswordLen || 8)) return { ok: false, error: '新密码至少 ' + (reg.minPasswordLen || 8) + ' 位' };
+    user.passwordHash = hashPassword(String(b.newPassword));
+    save();
+    return { ok: true, toast: '密码已修改' };
+  }));
+
+  ctx.registerRoute('POST', '/intent/create-key', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    if (uk.quotaTokens === 0) return { ok: false, error: '主卡额度为 0, 无法发子卡, 请联系管理员充值' };
+    const b = p.body || {};
+    const pm = uk.models || [], pb = uk.branches || [];
+    const models = Array.isArray(b.models) ? b.models.map(String).filter(x => !pm.length || pm.includes(x)) : [];
+    const branches = Array.isArray(b.branches) ? b.branches.map(String).filter(x => !pb.length || pb.includes(x)) : [];
+    let quota = Math.max(0, Math.floor(Number(b.quotaTokens) || 0));
+    if (uk.quotaTokens === -1) {
+      quota = quota > 0 ? quota : -1; /* 主卡不限(-1): 子卡默认也不限 */
+    } else if (uk.quotaTokens > 0) {
+      const remaining = uk.quotaTokens - (uk.usedTokens || 0); if (quota <= 0 || quota > remaining) quota = remaining;
+      apis().updateKey(uk.key, { quotaTokens: uk.quotaTokens - quota }); /* 从主卡扣除 */
+    }
+    const nk = { key: apis().genKey(), name: String(b.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, branches, note: 'App 自助', createdAt: new Date().toISOString() };
+    apis().addKey(nk);
+    return { ok: true, toast: '子卡已创建: ' + nk.key.slice(0, 8) + '…', ui: null };
+  }));
+
+  ctx.registerRoute('POST', '/intent/delete-key', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const target = String((p.body && p.body.key) || '');
+    if (target === uk.key) return { ok: false, error: '不能删除主卡' };
+    if (!myKeysOf(uk.uid, uk.key).some(k => k.key === target)) return { ok: false, error: '卡密不存在或不属于你' };
+    apis().deleteKey(target);
+    return { ok: true, toast: '已删除' };
+  }));
+
+  /* ---- 注销账号: 删除用户+所有卡密+用量记录 ---- */
+  ctx.registerRoute('GET', '/ui/delete-account', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    if (!uk.uid) return jsonRes(res, 400, { error: '卡密未绑定账号' });
+    jsonRes(res, 200, { gcui: 1, title: '注销账号', root: { type: 'column', gap: 14, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'row', gap: 8, children: [
+          { type: 'text', text: '注销将永久删除', style: 'title3', color: '$error', weight: 1 },
+          { type: 'badge', text: '不可恢复', tone: 'error' },
+        ] },
+        { type: 'text', text: '• 你的账号及所有卡密将被永久删除\n• 已签发的子卡也会一并失效\n• 此操作不可恢复', style: 'caption', color: '$onSurfaceVariant' },
+      ] },
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'input', key: 'password', label: '输入密码确认注销', inputType: 'password' },
+      ] },
+      { type: 'button', text: '确认注销', style: 'filled', shape: 'pill', icon: 'msym:delete', action: { type: 'intent', endpoint: './intent/delete-account', confirm: '最后确认: 确定要注销账号吗? 所有数据将永久删除!', body: { password: '{{input.password}}' } } },
+    ] } });
+  });
+
+  ctx.registerRoute('POST', '/intent/delete-account', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk || !uk.uid) return { ok: false, error: '卡密未绑定账号' };
+    const user = cfg.users.find(x => x.uid === uk.uid);
+    if (!user) return { ok: false, error: '账号不存在' };
+    if (!verifyPassword(String((p.body && p.body.password) || ''), user.passwordHash)) return { ok: false, error: '密码错误' };
+    /* 删除该用户所有卡密 (含主卡+子卡) + 全局注销 */
+    if (apis().deleteKeysOf) apis().deleteKeysOf(uk.uid);
+    const i = cfg.users.findIndex(x => x.uid === uk.uid);
+    if (i >= 0) cfg.users.splice(i, 1);
+    save();
+    return { ok: true, toast: '账号已注销', ui: { gcui: 1, title: '已注销', root: { type: 'column', gap: 14, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'text', text: '你的账号已永久删除', style: 'title3' },
+        { type: 'text', text: '感谢使用 Gay Core', style: 'caption', color: '$onSurfaceVariant' },
+      ] },
+    ] } } };
+  }));
+
+  /* ---- 管理端点 ---- */
+  ctx.registerRoute('GET', '/admin/users', (req, res, p) => {
+    const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
+    const allKeys = apis().listKeys ? apis().listKeys() : [];
+    jsonRes(res, 200, { users: cfg.users.map(u => {
+      const uks = allKeys.filter(k => k.uid === u.uid);
+      return {
+        uid: u.uid, username: u.username || u.name || '', name: u.name, nickname: u.nickname, avatar: u.avatar, note: u.note,
+        email: u.email || '', banned: !!u.banned, banReason: u.banReason || '', createdAt: u.createdAt,
+        keyCount: uks.length,
+        totalQuota: uks.reduce((s, k) => s + Math.max(0, k.quotaTokens || 0), 0),
+        totalUsed: uks.reduce((s, k) => s + (k.usedTokens || 0), 0),
+        keys: uks.map(k => ({ key: k.key, name: k.name, enable: k.enable !== false, quotaTokens: k.quotaTokens || 0, usedTokens: k.usedTokens || 0 })),
+      };
+    }) });
+  });
+  ctx.registerRoute('POST', '/admin/users', (req, res, p) => { // 建用户/重置密码/删用户
+    const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
+    const j = p.body || {};
+    if (j.action === 'delete') {
+      const i = cfg.users.findIndex(x => x.uid === j.uid);
+      if (i < 0) return jsonRes(res, 404, { error: '用户不存在' });
+      if (apis().deleteKeysOf) apis().deleteKeysOf(j.uid); /* 连带删该用户的卡 */
+      cfg.users.splice(i, 1); save();
+      return jsonRes(res, 200, { ok: true });
+    }
+    if (j.action === 'ban' || j.action === 'unban') {
+      const user = cfg.users.find(x => x.uid === j.uid);
+      if (!user) return jsonRes(res, 404, { error: '用户不存在' });
+      user.banned = j.action === 'ban';
+      user.banReason = user.banned ? String(j.reason || '').slice(0, 200) : '';
+      save();
+      return jsonRes(res, 200, { ok: true, banned: user.banned });
+    }
+    if (j.action === 'update') {
+      const user = cfg.users.find(x => x.uid === j.uid);
+      if (!user) return jsonRes(res, 404, { error: '用户不存在' });
+      if (j.name !== undefined) user.name = String(j.name).slice(0, 64);
+      if (j.nickname !== undefined) user.nickname = String(j.nickname).slice(0, 64);
+      if (j.email !== undefined) user.email = String(j.email).slice(0, 120);
+      if (j.note !== undefined) user.note = String(j.note).slice(0, 200);
+      save();
+      return jsonRes(res, 200, { ok: true });
+    }
+    if (j.action === 'resetPassword') {
+      const user = cfg.users.find(x => x.uid === j.uid);
+      if (!user) return jsonRes(res, 404, { error: '用户不存在' });
+      user.passwordHash = hashPassword(String(j.password || ''));
+      save();
+      return jsonRes(res, 200, { ok: true });
+    }
+    const uid = String(j.uid || '').trim();
+    const username = String(j.username || j.name || '').trim();
+    if (!/^[A-Za-z0-9_-]{3,32}$/.test(username)) return jsonRes(res, 400, { error: '用户名需 3-32 位' });
+    if (cfg.users.some(x => x.username === username || x.name === username)) return jsonRes(res, 409, { error: '用户名已存在' });
+    const newUid = 'u' + crypto.randomBytes(4).toString('hex');
+    cfg.users.push({ uid: newUid, username, name: username, passwordHash: hashPassword(String(j.password || 'changeme')), nickname: '', avatar: '', email: String(j.email || ''), banned: false, note: String(j.note || ''), createdAt: new Date().toISOString() });
+    save();
+    /* 默认同时发一张主卡 —— 否则用户登录不上(客户端要求账号至少有一张卡密)。
+     * 额度: 显式传 quotaTokens 优先, 否则用注册默认额度; 都没有 = 零额度(-1), 管理员再充值。 */
+    let mainKey = null;
+    if (apis().addKey && j.noCard !== true) {
+      const raw = j.quotaTokens !== undefined ? j.quotaTokens : (reg && reg.defaultQuota);
+      const dq = Math.floor(Number(raw) || 0);
+      mainKey = { key: apis().genKey(), name: username + ' 的主卡', enable: true, quotaTokens: dq > 0 ? dq : 0, uid: newUid, models: [], branches: [], isMain: true, by: 'auto', createdAt: new Date().toISOString() };
+      apis().addKey(mainKey);
+    }
+    jsonRes(res, 200, { ok: true, uid: newUid, username, key: mainKey ? mainKey.key : null });
+  });
+
+  ctx.log('用户体系已激活, 用户数:', cfg.users.length, '注册:', reg.enable ? '开' : '关');
+};

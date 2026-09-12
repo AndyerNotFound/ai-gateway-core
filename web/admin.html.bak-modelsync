@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="ai-gateway-core 管理面板 · Material Web">
+<title>ai-gateway-core</title>
+<style>
+@font-face{font-family:'Material Symbols Outlined';font-style:normal;font-weight:400;font-display:block;
+  src:url('/admin/assets/material-symbols-outlined.woff2') format('woff2')}
+.msym{font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;font-size:24px;line-height:1;
+  letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;direction:ltr;
+  -webkit-font-smoothing:antialiased;user-select:none}
+:root{
+  --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
+  --md-sys-color-primary-container:#4F378B; --md-sys-color-on-primary-container:#EADDFF;
+  --md-sys-color-secondary:#CCC2DC; --md-sys-color-on-secondary:#332D41;
+  --md-sys-color-secondary-container:#4A4458; --md-sys-color-on-secondary-container:#E8DEF8;
+  --md-sys-color-tertiary:#EFB8C8; --md-sys-color-tertiary-container:#633B48; --md-sys-color-on-tertiary-container:#FFD8E4;
+  --md-sys-color-error:#F2B8B5; --md-sys-color-on-error:#601410;
+  --md-sys-color-error-container:#8B1A1A; --md-sys-color-on-error-container:#F9DEDC;
+  --md-sys-color-background:#141218; --md-sys-color-on-background:#E6E1E5;
+  --md-sys-color-surface:#141218; --md-sys-color-on-surface:#E6E1E5;
+  --md-sys-color-surface-variant:#49454F; --md-sys-color-on-surface-variant:#CAC4D0;
+  --md-sys-color-surface-container-lowest:#0F0D13; --md-sys-color-surface-container-low:#1D1B20;
+  --md-sys-color-surface-container:#211F26; --md-sys-color-surface-container-high:#2B2930;
+  --md-sys-color-surface-container-highest:#36343B;
+  --md-sys-color-inverse-surface:#E6E0E9; --md-sys-color-inverse-on-surface:#322F35;
+  --md-sys-color-outline:#938F99; --md-sys-color-outline-variant:#49454F;
+  --md-sys-color-surface-dim:#141218; --md-sys-color-surface-bright:#3B383E;
+  --md-sys-shape-corner-medium:12px; --md-sys-shape-corner-large:16px; --md-sys-shape-corner-full:9999px;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-tap-highlight-color:transparent}
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+  background:var(--md-sys-color-surface-dim);color:var(--md-sys-color-on-surface);
+  font-size:14px;line-height:1.5;height:100dvh;display:flex;position:fixed;inset:0}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+.compat-bar{position:fixed;top:0;left:0;right:0;z-index:9999;padding:10px 16px;font-size:13px;
+  background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container);display:none}
+.compat-bar.show{display:block}
+
+/* ==== 桌面侧栏 ==== */
+.rail{display:none;width:264px;flex-shrink:0;flex-direction:column;gap:4px;padding:12px 8px;
+  background:var(--md-sys-color-surface-container);border-right:1px solid var(--md-sys-color-outline-variant);overflow-y:auto}
+.rail-brand{display:flex;align-items:center;gap:12px;padding:12px 16px 16px}
+.rail-brand .logo{width:40px;height:40px;border-radius:12px;background:var(--md-sys-color-primary-container);
+  color:var(--md-sys-color-on-primary-container);display:grid;place-items:center;font-size:20px;flex-shrink:0}
+.rail-brand .name{font-size:16px;font-weight:500}
+.rail-brand .ver{font-size:11px;color:var(--md-sys-color-on-surface-variant)}
+.rail-list{display:flex;flex-direction:column;gap:2px}
+.rail-sec{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--md-sys-color-on-surface-variant);padding:14px 18px 6px;text-transform:uppercase}
+.rail-item{display:flex;align-items:center;gap:14px;width:100%;min-height:48px;padding:6px 18px;border:none;border-radius:999px;
+  background:transparent;color:var(--md-sys-color-on-surface-variant);cursor:pointer;font-size:14px;font-family:inherit;text-align:left;flex:none}
+.rail-item:hover{background:var(--md-sys-color-surface-container-high)}
+.rail-item .msym{font-size:22px;width:24px;text-align:center;flex:none}
+.rail-item .em{font-size:20px;width:24px;text-align:center;flex:none}
+.rail-item .rl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-item[active]{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);font-weight:600}
+
+/* ==== 主区 ==== */
+.shell{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--md-sys-color-surface);border-bottom:1px solid var(--md-sys-color-outline-variant);flex-shrink:0}
+.topbar h1{font-size:20px;font-weight:500;letter-spacing:.1px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar .tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+#topInst{--md-outlined-field-top-space:8px;--md-outlined-field-bottom-space:8px;
+  --md-sys-typescale-body-large-size:14px;--md-sys-typescale-body-large-line-height:20px;
+  width:150px;min-width:150px}
+.main{flex:1;display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;padding:20px;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+.page{flex:0 0 auto}
+.page.anim-in{animation:pageIn .24s cubic-bezier(.2,0,0,1)}
+@keyframes pageIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(min-width:840px){.rail{display:flex}.main{padding:24px 28px}}
+@media(min-width:1200px){.page{max-width:1080px;width:100%;margin:0 auto}.main{padding:28px 32px}}
+
+/* ==== 展开式侧栏(移动端抽屉) ==== */
+.drawer{position:fixed;top:0;left:0;bottom:0;width:288px;max-width:84vw;z-index:200;display:flex;flex-direction:column;
+  background:var(--md-sys-color-surface-container);border-right:1px solid var(--md-sys-color-outline-variant);
+  transform:translateX(-105%);transition:transform .26s cubic-bezier(.2,0,0,1);padding:12px 8px;overflow-y:auto;
+  border-radius:0 16px 16px 0;box-shadow:none}
+.drawer.open{transform:translateX(0);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.drawer-scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:150;opacity:0;pointer-events:none;transition:opacity .22s}
+.drawer-scrim.on{opacity:1;pointer-events:auto}
+.menu-btn{display:none;border:none}
+@media(max-width:839px){.menu-btn{display:inline-flex}}
+@media(min-width:840px){.drawer,.drawer-scrim{display:none!important}}
+/* 底栏已弃用(展开式侧栏替代) */
+.navbar{display:none!important}
+@media(max-width:839px){.main{padding:16px}}
+#toast{bottom:28px}
+
+/* ==== 结构件 ==== */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:16px}
+.stat-box{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
+  padding:16px;border:1px solid var(--md-sys-color-outline-variant);min-width:0}
+.stat-box .num{font-size:26px;font-weight:600;color:var(--md-sys-color-primary);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.stat-box .lbl{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:2px}
+@media(max-width:600px){.stat-row{grid-template-columns:repeat(2,1fr)}.stat-box .num{font-size:22px}}
+md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
+  border:1px solid var(--md-sys-color-outline-variant);padding:16px;margin-bottom:16px;display:block}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;margin-bottom:12px}
+.card-title{font-size:16px;font-weight:500}
+.card-sub{font-size:13px;color:var(--md-sys-color-on-surface-variant)}
+.empty{padding:36px 16px;text-align:center;color:var(--md-sys-color-on-surface-variant);font-size:13px}
+.empty .msym{font-size:40px;display:block;margin-bottom:10px;opacity:.6}
+
+.lrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--md-sys-color-outline-variant)}
+.lrow:last-child{border-bottom:none}
+.lrow .grow{flex:1;min-width:0}
+.lrow .nm{font-weight:500;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrow .mt{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrow .lic{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;
+  background:var(--md-sys-color-surface-container-high);font-size:20px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none}
+.dot.on{background:#4caf50;box-shadow:0 0 6px #4caf50aa}
+.dot.off{background:var(--md-sys-color-outline)}
+.bdg{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.03em;flex:none}
+.bdg.auth{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
+.bdg.biz{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.bdg.ok{background:#1b5e20;color:#c8e6c9}
+.bdg.off{background:var(--md-sys-color-surface-variant);color:var(--md-sys-color-on-surface-variant)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+
+/* ==== 对话框/toast ==== */
+.dlg-overlay{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.6);padding:24px}
+.dlg-overlay[hidden]{display:none}
+.dlg-box{background:var(--md-sys-color-surface-container-high);border-radius:28px;padding:24px;max-width:420px;width:100%;animation:dlgFade .18s ease-out}
+@keyframes dlgFade{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+.dlg-box h2{font-size:19px;font-weight:500;margin-bottom:6px}
+.dlg-box .dlg-sub{font-size:13px;color:var(--md-sys-color-on-surface-variant);margin-bottom:14px}
+.dlg-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+#toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:var(--md-sys-color-inverse-surface);
+  color:var(--md-sys-color-inverse-on-surface);padding:11px 22px;border-radius:10px;font-size:13.5px;opacity:0;
+  pointer-events:none;transition:.22s;z-index:6000;max-width:86vw;text-align:center}
+#toast.on{opacity:1}
+#toast.err{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
+
+/* ==== 表单 ==== */
+.frow{margin-bottom:14px}
+.frow-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0}
+.frow-h .lb{font-size:14px}
+.frow-h .sub2{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:1px}
+md-outlined-text-field{width:100%}
+textarea.code{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--md-sys-color-on-surface);
+  background:var(--md-sys-color-surface-container-lowest);border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:12px;padding:14px;outline:none;resize:vertical;line-height:1.6}
+textarea.code:focus{border-color:var(--md-sys-color-primary)}
+
+#page-pluginview{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+#page-pluginview[hidden]{display:none}
+#pluginFrame{flex:1;border:none;border-radius:16px;background:var(--md-sys-color-surface-container-low);min-height:60vh}
+
+.setup-wrap{max-width:440px;margin:48px auto}
+@media(max-width:600px){.lrow .mt{white-space:normal}}
+
+/* ==== 自绘控件(动态生成内容用: 动态插入的 mw 组件不可靠, 静态保留) ==== */
+.sw{position:relative;width:44px;height:26px;flex:none;display:inline-block}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:2;margin:0}
+.sw .tr{position:absolute;inset:0;border-radius:999px;background:var(--md-sys-color-surface-variant);border:2px solid var(--md-sys-color-outline);transition:.18s}
+.sw .th{position:absolute;top:4px;left:4px;width:16px;height:16px;border-radius:50%;background:var(--md-sys-color-outline);transition:.18s}
+.sw input:checked~.tr{background:var(--md-sys-color-primary);border-color:var(--md-sys-color-primary)}
+.sw input:checked~.th{left:22px;width:20px;height:20px;top:3px;background:var(--md-sys-color-on-primary)}
+.icbtn{width:36px;height:36px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;
+  color:var(--md-sys-color-on-surface-variant);border:1px solid var(--md-sys-color-outline);background:transparent;transition:background .15s}
+.icbtn:hover{background:var(--md-sys-color-surface-container-highest)}
+.icbtn .msym{font-size:19px}
+.btnx{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 16px;border-radius:999px;font-size:13.5px;font-weight:600;border:none;cursor:pointer;flex:none}
+.btnx-fill{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+.btnx-tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.btnx-sm{height:30px;padding:0 12px;font-size:12.5px}
+.fld{width:100%;padding:10px 13px;font-size:14px;font-family:inherit;color:var(--md-sys-color-on-surface);
+  background:var(--md-sys-color-surface-container-highest);border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:8px;outline:none}
+.fld:focus{border-color:var(--md-sys-color-primary);box-shadow:0 0 0 1px var(--md-sys-color-primary)}
+.fld-lb{display:block;font-size:12.5px;font-weight:600;color:var(--md-sys-color-on-surface-variant);margin-bottom:5px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  border-radius:8px;padding:5px 8px 5px 12px;font-size:12px;margin:0 6px 6px 0;max-width:100%}
+.chip .u{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+.chip button{color:inherit;font-size:15px;line-height:1;padding:2px;opacity:.7}
+.chip button:hover{opacity:1}
+.mkt-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--md-sys-color-outline-variant)}
+.mkt-row:last-child{border-bottom:none}
+.mkt-row .ic{width:44px;height:44px;border-radius:12px;flex:none;display:grid;place-items:center;font-size:22px;background:var(--md-sys-color-surface-container-high)}
+.mkt-row .grow{flex:1;min-width:0}
+.mkt-row .mt{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:3px;word-break:break-all}
+</style>
+</head>
+<body>
+
+<div class="compat-bar" id="compatBar">Material Web 组件库加载失败, 页面只有无样式内容。请确认 web/assets/mw-v2.js 已部署。</div>
+
+<nav class="rail" id="rail">
+  <div class="rail-brand">
+    <div class="logo"><span class="msym">hub</span></div>
+    <div style="min-width:0"><div class="name">AI Gateway Core</div><div class="ver" id="railVer">Material Web</div></div>
+  </div>
+  <div id="railList" class="rail-list"></div>
+</nav>
+
+<div class="shell">
+  <header class="topbar">
+    <button class="icbtn menu-btn" id="menuBtn" title="菜单"><span class="msym">menu</span></button>
+    <h1 id="pageTitle">总览</h1>
+    <div class="tools">
+      <md-outlined-select id="topInst" aria-label="当前实例"></md-outlined-select>
+      <md-outlined-icon-button id="refreshBtn" title="刷新"><md-icon>refresh</md-icon></md-outlined-icon-button>
+      <md-outlined-icon-button id="keyBtn" title="管理密码"><md-icon>key</md-icon></md-outlined-icon-button>
+    </div>
+  </header>
+
+  <main class="main" id="main">
+
+    <section id="page-overview" class="page">
+      <div class="stat-row">
+        <div class="stat-box"><div class="num" id="ov-instances">-</div><div class="lbl">实例数</div></div>
+        <div class="stat-box"><div class="num" id="ov-running">-</div><div class="lbl">运行中</div></div>
+        <div class="stat-box"><div class="num" id="ov-requests">-</div><div class="lbl">总请求</div></div>
+        <div class="stat-box"><div class="num" id="ov-errors">-</div><div class="lbl">总错误</div></div>
+        <div class="stat-box"><div class="num" id="ov-uptime">-</div><div class="lbl">运行时长</div></div>
+      </div>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">实例状态</div><div class="card-sub">点击卡片管理实例</div></div>
+          <md-text-button data-goto="instances">管理实例<md-icon slot="icon">arrow_forward</md-icon></md-text-button></div>
+        <div id="ov-inst-list"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">运行中的插件</div><div class="card-sub">当前实例已启用的插件</div></div>
+          <md-text-button data-goto="plugins">管理插件<md-icon slot="icon">arrow_forward</md-icon></md-text-button></div>
+        <div id="ov-plugin-list"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+    </section>
+
+    <section id="page-channels" class="page" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">渠道 (上游提供商)</div><div class="card-sub">请求按 默认渠道→故障切换 顺序转发 · 改动保存即热生效</div></div>
+          <button class="btnx btnx-fill" id="ch_add"><span class="msym" style="font-size:18px">add</span>添加渠道</button></div>
+        <div id="chList"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">代理</div><div class="card-sub">渠道经代理访问上游 (socks5/http)</div></div>
+          <button class="btnx btnx-tonal" id="px_add"><span class="msym" style="font-size:18px">add</span>添加代理</button></div>
+        <div id="proxyList"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+    </section>
+
+    <section id="page-instances" class="page" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">新建实例</div><div class="card-sub">每个实例独立端口与配置</div></div></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <md-outlined-text-field id="ni_name" label="实例名" style="flex:1;min-width:130px"></md-outlined-text-field>
+          <md-outlined-text-field id="ni_port" label="端口" type="number" style="width:110px"></md-outlined-text-field>
+          <button class="btnx btnx-fill" id="ni_btn"><span class="msym" style="font-size:18px">add</span>创建</button>
+        </div>
+      </md-filled-card>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">实例列表</div></div></div>
+        <div id="instList"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+    </section>
+
+    <section id="page-plugins" class="page" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">插件</div><div class="card-sub">启用/禁用即时热重载 · 认证类插件先于业务类加载(fail-closed)</div></div></div>
+        <div id="pluginList"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title" style="display:flex;align-items:center;gap:8px"><span class="msym">storefront</span>插件市场</div><div class="card-sub">从索引链接获取插件列表并安装 · 安装后默认不启用, 上方手动打开</div></div></div>
+        <div class="frow"><label class="fld-lb">索引链接 (JSON)</label>
+          <div style="display:flex;gap:8px">
+            <input class="fld" id="mkt_idxUrl" placeholder="https://example.com/plugins-index.json" style="flex:1">
+            <button class="btnx btnx-tonal" id="mkt_addIdx">添加</button>
+          </div>
+        </div>
+        <div id="mkt_idxList" style="margin-bottom:12px"></div>
+        <div class="frow"><label class="fld-lb">下载代理 (可留空, 如 http://127.0.0.1:7890)</label>
+          <input class="fld" id="mkt_proxy" placeholder="留空=直连">
+        </div>
+        <button class="btnx btnx-fill" id="mkt_browse"><span class="msym" style="font-size:18px">travel_explore</span>浏览市场</button>
+        <div id="mkt_list" style="margin-top:14px"></div>
+      </md-filled-card>
+    </section>
+
+    <section id="page-settings" class="page" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">实例高级设置</div><div class="card-sub">网关密钥 / 超时 / 重试 / TLS, 保存即热生效</div></div></div>
+        <div class="frow"><label class="fld-lb">gatewayKey 网关密码 (空=免密)</label><input class="fld" id="adv_gatewayKey" type="password"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="frow"><label class="fld-lb">连接超时 (ms)</label><input class="fld" id="adv_connectTimeout" type="number"></div>
+          <div class="frow"><label class="fld-lb">响应超时 (ms)</label><input class="fld" id="adv_responseTimeout" type="number"></div>
+          <div class="frow"><label class="fld-lb">连接重试次数</label><input class="fld" id="adv_connRetry" type="number"></div>
+          <div class="frow"><label class="fld-lb">请求体上限 (字节)</label><input class="fld" id="adv_maxBodyBytes" type="number"></div>
+        </div>
+        <div class="frow-h"><div><div class="lb">CORS 跨域</div></div><label class="sw"><input type="checkbox" id="adv_cors"><span class="tr"></span><span class="th"></span></label></div>
+        <div class="frow-h"><div><div class="lb">TLS (HTTPS)</div><div class="sub2">cert/key 填服务器上的文件路径</div></div><label class="sw"><input type="checkbox" id="adv_tls"><span class="tr"></span><span class="th"></span></label></div>
+        <div id="adv_tlsBox" style="display:none">
+          <div class="frow"><label class="fld-lb">TLS 端口 (空=与HTTP同端口纯HTTPS)</label><input class="fld" id="adv_tlsPort" type="number"></div>
+          <div class="frow"><label class="fld-lb">证书路径</label><input class="fld" id="adv_tlsCert" placeholder="/path/to/cert.pem"></div>
+          <div class="frow"><label class="fld-lb">私钥路径</label><input class="fld" id="adv_tlsKey" placeholder="/path/to/key.pem"></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btnx btnx-fill" id="advSave"><span class="msym" style="font-size:18px">save</span>保存高级设置</button></div>
+      </md-filled-card>
+      <div id="pluginSettings"></div>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">实例配置</div><div class="card-sub" id="cfgInstName"></div></div></div>
+        <textarea class="code" id="cfgJson" rows="15" spellcheck="false"></textarea>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+          <button class="btnx btnx-tonal" id="cfgReload">重载</button>
+          <button class="btnx btnx-fill" id="cfgSave"><span class="msym" style="font-size:18px">save</span>保存并热生效</button>
+        </div>
+        <div class="card-sub" style="margin-top:8px">敏感字段显示为 <span class="mono">****</span>, 保持不变则不会覆盖</div>
+      </md-filled-card>
+    </section>
+
+    <section id="page-pluginview" class="page" hidden>
+      <iframe id="pluginFrame" title="插件页面"></iframe>
+    </section>
+
+    <section id="page-setup" class="page" hidden>
+      <div class="setup-wrap"><md-filled-card>
+        <div class="card-head"><div><div class="card-title" style="display:flex;align-items:center;gap:8px"><span class="msym">rocket_launch</span>首次安装 — 创建管理员</div><div class="card-sub">setup 模式仅本机可访问, 创建后自动关闭</div></div></div>
+        <div class="frow"><md-outlined-text-field id="su_ak" label="管理密码 adminKey" type="password"></md-outlined-text-field></div>
+        <div class="frow"><md-outlined-text-field id="su_gk" label="网关密码 gatewayKey (可留空)" type="password"></md-outlined-text-field></div>
+        <button class="btnx btnx-fill" id="su_btn" style="width:100%;justify-content:center">创建并进入</button>
+      </md-filled-card></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 展开式侧栏 (移动端抽屉, 桌面端用常驻 rail) -->
+<div class="drawer-scrim" id="drawerScrim"></div>
+<nav class="drawer" id="drawer" aria-label="主导航">
+  <div class="rail-brand">
+    <div class="logo"><span class="msym">hub</span></div>
+    <div style="min-width:0"><div class="name">AI Gateway Core</div><div class="ver" id="drawerVer">Material Web</div></div>
+  </div>
+  <div id="drawerList" class="rail-list"></div>
+</nav>
+
+<!-- key 对话框 -->
+<div class="dlg-overlay" id="keyDlg" hidden><div class="dlg-box">
+  <h2 id="keyDlgTitle">管理密钥</h2>
+  <div class="dlg-sub" id="keyDlgSub">输入管理密码 (adminKey) 进入面板</div>
+  <md-outlined-text-field id="keyInput" label="adminKey" type="password"></md-outlined-text-field>
+  <div class="dlg-acts"><button class="btnx btnx-fill" id="keySave">进入</button></div>
+</div></div>
+
+<!-- 确认对话框 -->
+<div class="dlg-overlay" id="cfmDlg" hidden><div class="dlg-box">
+  <h2 id="cfmTitle"></h2><div class="dlg-sub" id="cfmBody"></div>
+  <div class="dlg-acts"><md-text-button id="cfmNo">取消</md-text-button><md-filled-button id="cfmOk">确认</md-filled-button></div>
+</div></div>
+
+<!-- 渠道编辑对话框 -->
+<div class="dlg-overlay" id="chDlg" hidden><div class="dlg-box" style="max-width:520px;max-height:88vh;overflow-y:auto">
+  <h2 id="chDlgTitle">添加渠道</h2>
+  <div class="frow"><label class="fld-lb">名称 *</label><input class="fld" id="ch_name" placeholder="如 deepseek"></div>
+  <div class="frow"><label class="fld-lb">类型 *</label><select class="fld" id="ch_type"><option value="openai">openai</option><option value="claude">claude</option><option value="gemini">gemini</option></select></div>
+  <div class="frow"><label class="fld-lb">Base URL *</label><input class="fld" id="ch_baseUrl" placeholder="https://api.deepseek.com 或 .../v1"></div>
+  <div class="frow"><label class="fld-lb">API Key (打码显示=保持不变)</label><input class="fld" id="ch_apiKey" type="password" placeholder="sk-..."></div>
+  <div class="frow-h"><div><div class="lb">默认渠道</div><div class="sub2">未匹配模型时使用</div></div><label class="sw"><input type="checkbox" id="ch_default"><span class="tr"></span><span class="th"></span></label></div>
+  <div class="frow"><label class="fld-lb">模型列表 (逗号分隔, 空=不限制)</label><input class="fld" id="ch_models" placeholder="deepseek-chat, deepseek-reasoner"></div>
+  <div class="frow"><label class="fld-lb">模型改名 (每行: 客户端名=上游名)</label><textarea class="fld" id="ch_modelMap" rows="2" placeholder="gpt4=deepseek-chat"></textarea></div>
+  <div class="frow"><label class="fld-lb">代理</label><select class="fld" id="ch_proxy"><option value="">直连</option></select></div>
+  <div class="frow-h"><div><div class="lb">上游用 Responses API</div><div class="sub2">openai 渠道可用</div></div><label class="sw"><input type="checkbox" id="ch_useResponses"><span class="tr"></span><span class="th"></span></label></div>
+  <div class="frow"><label class="fld-lb">渠道延迟 (delayMs, 故障切换排序用)</label><input class="fld" id="ch_delayMs" type="number" placeholder="0"></div>
+  <div class="dlg-sub" style="margin:10px 0 4px">余额查询 (balance 插件)</div>
+  <div class="frow"><label class="fld-lb">balanceUrl</label><input class="fld" id="ch_balanceUrl" placeholder="/user/balance 或完整 URL, 空=用预设"></div>
+  <div class="frow"><label class="fld-lb">balancePath (点路径)</label><input class="fld" id="ch_balancePath" placeholder="balance_infos.0.total_balance"></div>
+  <div class="frow"><label class="fld-lb">balanceUnit</label><input class="fld" id="ch_balanceUnit" placeholder="CNY / USD"></div>
+  <div class="dlg-acts"><button class="btnx btnx-tonal" id="chCancel">取消</button><button class="btnx btnx-fill" id="chOk">保存</button></div>
+</div></div>
+
+<!-- 代理编辑对话框 -->
+<div class="dlg-overlay" id="pxDlg" hidden><div class="dlg-box">
+  <h2 id="pxDlgTitle">添加代理</h2>
+  <div class="frow"><label class="fld-lb">名称 *</label><input class="fld" id="px_name" placeholder="如 home"></div>
+  <div class="frow"><label class="fld-lb">类型</label><select class="fld" id="px_type"><option value="socks5">socks5</option><option value="http">http</option></select></div>
+  <div class="frow"><label class="fld-lb">主机 *</label><input class="fld" id="px_host" placeholder="127.0.0.1"></div>
+  <div class="frow"><label class="fld-lb">端口 *</label><input class="fld" id="px_port" type="number" placeholder="7890"></div>
+  <div class="frow"><label class="fld-lb">用户名 (可留空)</label><input class="fld" id="px_user"></div>
+  <div class="frow"><label class="fld-lb">密码 (可留空)</label><input class="fld" id="px_pass" type="password"></div>
+  <div class="dlg-acts"><button class="btnx btnx-tonal" id="pxCancel">取消</button><button class="btnx btnx-fill" id="pxOk">保存</button></div>
+</div></div>
+
+<div id="toast"></div>
+
+<script type="module">
+const MW_OK = await import('/admin/assets/mw-v2.js').then(()=>true).catch(()=>false);
+if (!MW_OK) document.getElementById('compatBar').classList.add('show');
+
+const $ = id => document.getElementById(id);
+const state = { key:'', uid:0, instances:[], plugins:[], tab:'overview', pluginPages:[], version:'' };
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg, err){ const t=$('toast'); t.textContent=msg; t.className='on'+(err?' err':''); clearTimeout(t._tm); t._tm=setTimeout(()=>t.className='',2600); }
+/* 全局错误捕获: 便于用户反馈准确的错误来源 */
+window.addEventListener('error', e=>{ if (e && e.message) toast('页面脚本错误: '+e.message+' @'+(e.filename||'').split('/').pop()+':'+(e.lineno||''), true); });
+window.addEventListener('unhandledrejection', e=>{ const m = e.reason && (e.reason.message || String(e.reason)); if (m) toast('异步错误: '+m, true); });
+function fmtNum(n){ n=n||0; if(n>=1e8)return(n/1e8).toFixed(2)+'亿'; if(n>=1e4)return(n/1e4).toFixed(1)+'万'; return String(n); }
+function fmtUp(sec){ sec=Math.floor(sec||0); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; if(h>0)return h+'时'+m+'分'; if(m>0)return m+'分'+s+'秒'; return s+'秒'; }
+
+async function api(path, opts={}){
+  opts.headers = Object.assign({'x-admin-key': state.key}, opts.headers||{});
+  if (opts.body && typeof opts.body === 'object') { opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(opts.body); }
+  const r = await fetch(path, opts);
+  let j = null; try { j = await r.json(); } catch(_){}
+  if (!r.ok) { const e = new Error((j && (j.error && j.error.message || j.error)) || ('HTTP '+r.status)); e.status=r.status; throw e; }
+  return j;
+}
+
+/* ---------- key ---------- */
+let keyFirstShow = true;
+function setKey(k){ state.key=k||''; if(k){ localStorage.setItem('agw_core_key',k); document.cookie='adminKey='+encodeURIComponent(k)+'; path=/; SameSite=Strict'; } }
+function showKeyDlg(wrong){
+  $('keyDlgTitle').textContent = wrong ? '密钥不正确' : '管理密钥';
+  $('keyDlgSub').textContent = wrong ? '管理密码错误, 请重新输入' : '输入管理密码 (adminKey) 进入面板';
+  $('keyInput').value = wrong ? '' : state.key;
+  $('keyDlg').hidden = false;
+  setTimeout(()=>$('keyInput').focus(), 80);
+}
+$('keySave').onclick = ()=>{ const k=$('keyInput').value.trim(); if(!k) return toast('请输入密钥', true); setKey(k); $('keyDlg').hidden=true; loadAll(); };
+$('keyInput').addEventListener('keydown', e=>{ if(e.key==='Enter') $('keySave').click(); });
+$('keyBtn').onclick = ()=>showKeyDlg(false);
+$('refreshBtn').onclick = ()=>loadAll();
+
+/* ---------- 确认框 ---------- */
+let cfmCb=null;
+function confirm2(title, body, cb){ $('cfmTitle').textContent=title; $('cfmBody').innerHTML=body; cfmCb=cb; $('cfmDlg').hidden=false; }
+$('cfmNo').onclick=()=>{ $('cfmDlg').hidden=true; cfmCb=null; };
+$('cfmOk').onclick=()=>{ $('cfmDlg').hidden=true; const cb=cfmCb; cfmCb=null; cb&&cb(); };
+
+/* ---------- 导航 ---------- */
+const TABS = [
+  {id:'overview', ic:'dashboard', lb:'总览'},
+  {id:'channels', ic:'cell_tower', lb:'渠道'},
+  {id:'instances', ic:'dns', lb:'实例'},
+  {id:'plugins', ic:'extension', lb:'插件'},
+  {id:'settings', ic:'settings', lb:'设置'},
+];
+const TAB_TITLES = { overview:'总览', channels:'渠道', instances:'实例', plugins:'插件', settings:'设置', pluginview:'插件', setup:'首次安装' };
+function pluginIconHtml(p, size){
+  const ic = p.icon || (p.type==='auth' ? 'msym:lock' : 'msym:extension');
+  const s = size||20;
+  if (String(ic).startsWith('msym:')) return '<span class="msym" style="font-size:'+s+'px">'+esc(ic.slice(5))+'</span>';
+  return '<span style="font-size:'+s+'px">'+esc(ic)+'</span>';
+}
+function mktIconHtml(icon){
+  if (!icon) return '<span class="msym" style="font-size:22px">extension</span>';
+  if (String(icon).startsWith('msym:')) return '<span class="msym" style="font-size:22px">'+esc(String(icon).slice(5))+'</span>';
+  return '<span style="font-size:22px">'+esc(icon)+'</span>';
+}
+function renderNav(){
+  const items = TABS.map(t=>({id:t.id, ic:t.ic, lb:t.lb, sym:true}));
+  for (const pp of state.pluginPages){
+    let ic = pp.icon || 'msym:extension', sym = true;
+    if (String(ic).startsWith('msym:')) ic = ic.slice(5);
+    else sym = false; // 插件自定义 emoji 图标
+    items.push({id:'pp:'+pp.id, ic, lb:pp.name, sym});
+  }
+  /* 桌面 rail + 移动端 drawer 共用 rail-item 结构渲染 */
+  for (const listId of ['railList', 'drawerList']){
+    const rl = $(listId); if (!rl) continue;
+    rl.innerHTML='';
+    let lastGrp = '';
+    for (const it of items){
+      const grp = it.id.startsWith('pp:') ? '插件页面' : '';
+      if (grp !== lastGrp && grp){ const s=document.createElement('div'); s.className='rail-sec'; s.textContent=grp; rl.appendChild(s); }
+      lastGrp = grp;
+      const b = document.createElement('button');
+      b.className='rail-item'; if (state.tab===it.id) b.setAttribute('active','');
+      b.innerHTML = (it.sym?'<span class="msym">'+esc(it.ic)+'</span>':'<span class="em">'+esc(it.ic)+'</span>')+'<span class="rl">'+esc(it.lb)+'</span>';
+      b.onclick=()=>switchTab(it.id);
+      rl.appendChild(b);
+    }
+  }
+}
+/* 抽屉开合 */
+function openDrawer(){ $('drawer').classList.add('open'); $('drawerScrim').classList.add('on'); }
+function closeDrawer(){ $('drawer').classList.remove('open'); $('drawerScrim').classList.remove('on'); }
+$('menuBtn').onclick = openDrawer;
+$('drawerScrim').onclick = closeDrawer;
+function switchTab(tab){
+  state.tab = tab;
+  document.querySelectorAll('.page').forEach(p=>p.hidden=true);
+  let pg = tab;
+  if (tab.startsWith('pp:')){
+    const pid = tab.slice(3);
+    const pp = state.pluginPages.find(x=>x.id===pid);
+    if (pp){ $('pluginFrame').src='/plugins/'+pid+'/'+(pp.adminPage||'pages/admin.html'); }
+    pg = 'pluginview';
+    $('pageTitle').textContent = pp ? pp.name : '插件';
+  } else {
+    $('pageTitle').textContent = TAB_TITLES[tab]||tab;
+  }
+  const el = $('page-'+pg);
+  if (el){ el.hidden=false; el.classList.remove('anim-in'); void el.offsetWidth; el.classList.add('anim-in'); }
+  if (tab==='settings') loadConfig();
+  if (tab==='channels') loadChannels();
+  closeDrawer();
+  renderNav();
+}
+
+/* ---------- boot ---------- */
+async function boot(){
+  try {
+    const s = await fetch('/setup/status').then(r=>r.json()).catch(()=>null);
+    if (s && s.setup){ document.querySelectorAll('.page').forEach(p=>p.hidden=true); $('page-setup').hidden=false; $('pageTitle').textContent='首次安装'; return; }
+  } catch(_){}
+  state.key = localStorage.getItem('agw_core_key')||'';
+  if (state.key) document.cookie='adminKey='+encodeURIComponent(state.key)+'; path=/; SameSite=Strict';
+  if (!state.key){ showKeyDlg(false); return; }
+  loadAll();
+}
+$('su_btn').onclick = async ()=>{
+  const ak = $('su_ak').value.trim(); if(!ak) return toast('请输入管理密码', true);
+  try {
+    const r = await fetch('/setup/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminKey:ak, gatewayKey:$('su_gk').value.trim()||undefined})}).then(r=>r.json());
+    if(!r.ok) throw new Error(r.error||'创建失败');
+    toast('管理员已创建'); setKey(ak); setTimeout(()=>location.reload(), 600);
+  } catch(e){ toast(e.message, true); }
+};
+
+async function loadAll(){
+  try {
+    const st = await api('/admin/api/status');
+    state.version = st.version||''; $('railVer').textContent = 'v'+state.version+' · Material Web'; $('drawerVer').textContent = 'v'+state.version;
+    state.instances = st.instances||[];
+    renderInstSel(); renderOverview(); renderInstances();
+    if (!state.instances.length){ renderNav(); switchTab('instances'); return; }
+    if (!state.instances.find(i=>i.uid===state.uid)) state.uid = state.instances[0].uid;
+    $('topInst').value = String(state.uid);
+    await loadPlugins();
+    renderNav();
+    if (!state.tab.startsWith('pp:')) switchTab(state.tab); else switchTab(state.tab);
+  } catch(e){
+    if (e.status===401){ showKeyDlg(true); return; }
+    toast(e.message, true);
+  }
+}
+
+function renderInstSel(){
+  const sel = $('topInst'); sel.innerHTML='';
+  for (const i of state.instances){
+    const o = document.createElement('md-select-option');
+    o.value=String(i.uid);
+    const d = document.createElement('div'); d.slot='headline'; d.textContent=i.name+' (:'+i.port+')';
+    o.appendChild(d); sel.appendChild(o);
+  }
+  sel.value = String(state.uid);
+}
+$('topInst').addEventListener('change', ()=>{ state.uid=Number($('topInst').value); loadPlugins(); loadConfig(); });
+
+/* ---------- 总览 ---------- */
+let upBase=0, upAt=0, upTimer=null;
+function renderOverview(){
+  const ins = state.instances;
+  $('ov-instances').textContent = ins.length;
+  $('ov-running').textContent = ins.filter(i=>i.running).length;
+  $('ov-requests').textContent = fmtNum(ins.reduce((a,i)=>a+(i.requests||0),0));
+  $('ov-errors').textContent = fmtNum(ins.reduce((a,i)=>a+(i.errors||0),0));
+  fetch('/health').then(r=>r.json()).then(h=>{ upBase=h.uptime||0; upAt=Date.now(); if(!upTimer) tickUp(); }).catch(()=>{});
+  $('ov-inst-list').innerHTML = ins.map(i=>
+    '<div class="lrow"><span class="dot '+(i.running?'on':'off')+'"></span><div class="grow"><div class="nm">'+esc(i.name)+'</div><div class="mt">uid '+i.uid+' · 端口 '+i.port+(i.enabled===false?' · 已禁用':'')+'</div></div><span class="bdg '+(i.running?'ok':'off')+'">'+fmtNum(i.requests||0)+' 请求</span></div>'
+  ).join('') || '<div class="empty"><span class="msym">dns</span>还没有实例</div>';
+}
+function tickUp(){ $('ov-uptime').textContent = fmtUp(upBase+(Date.now()-upAt)/1000); upTimer=setTimeout(tickUp,1000); }
+document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>switchTab(b.getAttribute('data-goto')));
+
+/* ---------- 渠道管理 ---------- */
+let curCfg = null; // 当前实例完整配置(打码版, 编辑回填用)
+async function loadChannels(){
+  if (!state.uid) return;
+  try {
+    const r = await api('/admin/api/config/'+state.uid);
+    curCfg = r.config;
+    renderChannels(); renderProxies();
+  } catch(e){ toast(e.message, true); }
+}
+function maskKey(k){ k=String(k||''); return k.length>8 ? k.slice(0,4)+'****'+k.slice(-4) : (k?'****':'—'); }
+function renderChannels(){
+  const chs = (curCfg && curCfg.channels) || [];
+  const hasBalance = state.plugins.some(p=>p.id==='balance'&&p.enable&&p.running);
+  $('chList').innerHTML = chs.map((c,i)=>
+    '<div class="lrow"><div class="lic"><span class="msym">cell_tower</span></div><div class="grow">'
+    +'<div class="nm">'+esc(c.name)+' <span class="bdg biz">'+esc(c.type||'openai')+'</span>'+(c.default?' <span class="bdg ok">默认</span>':'')+(c.useResponses?' <span class="bdg biz">Responses</span>':'')+'</div>'
+    +'<div class="mt">'+esc(c.baseUrl||'')+' · '+maskKey(c.apiKey)+'</div>'
+    +'<div class="mt">'+(Array.isArray(c.models)&&c.models.length?esc(c.models.length+' 个模型'):'不限模型')+(c.proxy?' · 代理 '+esc(c.proxy):'')+'</div></div>'
+    +(hasBalance?'<button class="icbtn" title="查余额" data-ch-bal="'+i+'"><span class="msym">account_balance_wallet</span></button>':'')
+    +'<button class="icbtn" title="编辑" data-ch-edit="'+i+'"><span class="msym">edit</span></button>'
+    +'<button class="icbtn" title="删除" data-ch-del="'+i+'"><span class="msym">delete</span></button></div>'
+  ).join('') || '<div class="empty"><span class="msym">cell_tower</span>还没有渠道, 点右上角添加</div>';
+}
+function renderProxies(){
+  const px = (curCfg && curCfg.proxies) || {};
+  const names = Object.keys(px);
+  $('proxyList').innerHTML = names.map(n=>
+    '<div class="lrow"><div class="lic"><span class="msym">vpn_key</span></div><div class="grow"><div class="nm">'+esc(n)+'</div><div class="mt">'+esc(px[n].type||'socks5')+'://'+esc(px[n].host||'')+':'+esc(px[n].port||'')+(px[n].username?' · '+esc(px[n].username):'')+'</div></div>'
+    +'<button class="icbtn" title="编辑" data-px-edit="'+esc(n)+'"><span class="msym">edit</span></button>'
+    +'<button class="icbtn" title="删除" data-px-del="'+esc(n)+'"><span class="msym">delete</span></button></div>'
+  ).join('') || '<div class="empty"><span class="msym">vpn_key</span>没有代理</div>';
+}
+let chEditIdx = -1;
+function openChDlg(idx){
+  chEditIdx = idx;
+  const c = idx>=0 ? curCfg.channels[idx] : {};
+  $('chDlgTitle').textContent = idx>=0 ? ('编辑渠道: '+c.name) : '添加渠道';
+  $('ch_name').value = c.name||''; $('ch_name').disabled = idx>=0; // 名称为主键, 编辑不可改
+  $('ch_type').value = c.type||'openai';
+  $('ch_baseUrl').value = c.baseUrl||''; $('ch_apiKey').value = c.apiKey||'';
+  $('ch_default').checked = !!c.default;
+  $('ch_models').value = Array.isArray(c.models)?c.models.join(', '):'';
+  $('ch_modelMap').value = c.modelMap ? Object.entries(c.modelMap).map(([k,v])=>k+'='+v).join('\n') : '';
+  const pxSel = $('ch_proxy');
+  pxSel.innerHTML = '<option value="">直连</option>' + Object.keys((curCfg&&curCfg.proxies)||{}).map(n=>'<option value="'+esc(n)+'"'+(c.proxy===n?' selected':'')+'>'+esc(n)+'</option>').join('');
+  pxSel.value = c.proxy||'';
+  $('ch_useResponses').checked = !!c.useResponses;
+  $('ch_delayMs').value = c.delayMs||'';
+  $('ch_balanceUrl').value = c.balanceUrl||''; $('ch_balancePath').value = c.balancePath||''; $('ch_balanceUnit').value = c.balanceUnit||'';
+  $('chDlg').hidden = false;
+}
+$('ch_add').onclick = ()=>{ if(!curCfg) return toast('配置未加载', true); openChDlg(-1); };
+$('chCancel').onclick = ()=>$('chDlg').hidden=true;
+$('chOk').onclick = async ()=>{
+  const name = $('ch_name').value.trim(), type = $('ch_type').value, baseUrl = $('ch_baseUrl').value.trim();
+  if (!name || !baseUrl) return toast('名称和 Base URL 必填', true);
+  const c = {
+    name, type, baseUrl,
+    apiKey: $('ch_apiKey').value,
+    default: $('ch_default').checked,
+    models: $('ch_models').value.split(',').map(s=>s.trim()).filter(Boolean),
+    proxy: $('ch_proxy').value || undefined,
+    useResponses: $('ch_useResponses').checked || undefined,
+    delayMs: Number($('ch_delayMs').value)||0,
+    balanceUrl: $('ch_balanceUrl').value.trim()||undefined,
+    balancePath: $('ch_balancePath').value.trim()||undefined,
+    balanceUnit: $('ch_balanceUnit').value.trim()||undefined,
+  };
+  const mm = {};
+  $('ch_modelMap').value.split('\n').forEach(l=>{ const i=l.indexOf('='); if(i>0){ const k=l.slice(0,i).trim(), v=l.slice(i+1).trim(); if(k&&v) mm[k]=v; } });
+  if (Object.keys(mm).length) c.modelMap = mm;
+  ['proxy','useResponses','balanceUrl','balancePath','balanceUnit','delayMs'].forEach(k=>{ if(c[k]===undefined||c[k]===''||c[k]===0&&!['delayMs'].includes(k)) delete c[k]; });
+  if (chEditIdx>=0) curCfg.channels[chEditIdx] = c; else curCfg.channels = (curCfg.channels||[]).concat([c]);
+  try {
+    await api('/admin/api/config/'+state.uid, {method:'POST', body:curCfg});
+    $('chDlg').hidden=true; toast('渠道已保存并热生效'); loadChannels();
+  } catch(e){ toast(e.message, true); }
+};
+$('chList').addEventListener('click', async e=>{
+  const eb = e.target.closest('[data-ch-edit]');
+  if (eb){ openChDlg(Number(eb.getAttribute('data-ch-edit'))); return; }
+  const db = e.target.closest('[data-ch-del]');
+  if (db){
+    const i = Number(db.getAttribute('data-ch-del')), nm = curCfg.channels[i].name;
+    confirm2('删除渠道','确定删除渠道 <b>'+esc(nm)+'</b>?', async ()=>{
+      curCfg.channels.splice(i,1);
+      try { await api('/admin/api/config/'+state.uid,{method:'POST',body:curCfg}); toast('已删除'); loadChannels(); } catch(e2){ toast(e2.message,true); }
+    });
+    return;
+  }
+  const bb = e.target.closest('[data-ch-bal]');
+  if (bb){
+    const c = curCfg.channels[Number(bb.getAttribute('data-ch-bal'))];
+    toast('查询中…');
+    try {
+      const r = await fetch('/plugins/balance/query?ch='+encodeURIComponent(c.name), {headers:{'x-admin-key':state.key}}).then(r=>r.json());
+      if (r.error) throw new Error(r.error);
+      toast(c.name+' 余额: '+r.balance+(r.unit?' '+r.unit:''));
+    } catch(e2){ toast('余额查询失败: '+e2.message, true); }
+  }
+});
+let pxEditName = '';
+$('px_add').onclick = ()=>{ if(!curCfg) return toast('配置未加载', true); pxEditName=''; $('pxDlgTitle').textContent='添加代理'; ['px_name','px_host','px_port','px_user','px_pass'].forEach(id=>$(id).value=''); $('px_type').value='socks5'; $('px_name').disabled=false; $('pxDlg').hidden=false; };
+$('pxCancel').onclick = ()=>$('pxDlg').hidden=true;
+$('pxOk').onclick = async ()=>{
+  const name=$('px_name').value.trim(), host=$('px_host').value.trim(), port=Number($('px_port').value);
+  if(!name||!host||!port) return toast('名称/主机/端口必填', true);
+  curCfg.proxies = curCfg.proxies||{};
+  if (pxEditName && pxEditName!==name) delete curCfg.proxies[pxEditName];
+  curCfg.proxies[name] = { type:$('px_type').value, host, port };
+  if ($('px_user').value) curCfg.proxies[name].username = $('px_user').value;
+  if ($('px_pass').value) curCfg.proxies[name].password = $('px_pass').value;
+  try { await api('/admin/api/config/'+state.uid,{method:'POST',body:curCfg}); $('pxDlg').hidden=true; toast('代理已保存'); loadChannels(); } catch(e){ toast(e.message,true); }
+};
+$('proxyList').addEventListener('click', e=>{
+  const eb = e.target.closest('[data-px-edit]');
+  if (eb){
+    const n = eb.getAttribute('data-px-edit'), p = curCfg.proxies[n];
+    pxEditName = n; $('pxDlgTitle').textContent='编辑代理: '+n;
+    $('px_name').value=n; $('px_name').disabled=true; $('px_type').value=p.type||'socks5'; $('px_host').value=p.host||''; $('px_port').value=p.port||''; $('px_user').value=p.username||''; $('px_pass').value='';
+    $('pxDlg').hidden=false; return;
+  }
+  const db = e.target.closest('[data-px-del]');
+  if (db){
+    const n = db.getAttribute('data-px-del');
+    confirm2('删除代理','确定删除代理 <b>'+esc(n)+'</b>? 引用它的渠道将回落直连。', async ()=>{
+      delete curCfg.proxies[n];
+      try { await api('/admin/api/config/'+state.uid,{method:'POST',body:curCfg}); toast('已删除'); loadChannels(); } catch(e2){ toast(e2.message,true); }
+    });
+  }
+});
+
+/* ---------- 实例 ---------- */
+function renderInstances(){
+  $('instList').innerHTML = state.instances.map(i=>
+    '<div class="lrow"><span class="dot '+(i.running?'on':'off')+'"></span><div class="grow"><div class="nm">'+esc(i.name)+(i.enabled===false?' <span class="bdg off">禁用</span>':'')+'</div><div class="mt">uid '+i.uid+' · :'+i.port+' · '+fmtNum(i.requests||0)+' 请求 / '+fmtNum(i.errors||0)+' 错误</div></div>'
+    +'<label class="sw"><input type="checkbox" data-act="toggle" data-uid="'+i.uid+'"'+(i.enabled!==false?' checked':'')+'><span class="tr"></span><span class="th"></span></label>'
+    +'<button class="icbtn" title="改名" data-act="rename" data-uid="'+i.uid+'" data-name="'+esc(i.name)+'"><span class="msym">edit</span></button>'
+    +'<button class="icbtn" title="热重载" data-act="reload" data-uid="'+i.uid+'"><span class="msym">restart_alt</span></button>'
+    +'<button class="icbtn" title="删除" data-act="del" data-uid="'+i.uid+'" data-name="'+esc(i.name)+'"><span class="msym">delete</span></button></div>'
+  ).join('') || '<div class="empty"><span class="msym">dns</span>还没有实例, 先建一个</div>';
+}
+$('instList').addEventListener('click', e=>{
+  const b = e.target.closest('[data-act]'); if(!b) return;
+  const uid = Number(b.getAttribute('data-uid')), act = b.getAttribute('data-act'), name = b.getAttribute('data-name')||'';
+  if (act==='rename'){
+    const nn = prompt('新实例名', name); if(!nn||nn===name) return;
+    api('/admin/api/instance/'+uid+'/rename',{method:'POST',body:{name:nn}}).then(()=>{toast('已改名');loadAll();}).catch(e=>toast(e.message,true));
+  } else if (act==='reload'){
+    api('/admin/api/instance/'+uid+'/reload',{method:'POST'}).then(()=>toast('已热重载')).catch(e=>toast(e.message,true));
+  } else if (act==='del'){
+    confirm2('删除实例','确定删除实例 <b>'+esc(name)+'</b> (uid '+uid+')?<br>配置与插件数据将一并删除, 不可恢复。',()=>{
+      api('/admin/api/instance/'+uid,{method:'DELETE'}).then(()=>{toast('已删除');loadAll();}).catch(e=>toast(e.message,true));
+    });
+  }
+});
+$('instList').addEventListener('change', e=>{
+  const b = e.target.closest('input[data-act="toggle"]'); if(!b) return;
+  api('/admin/api/instance/'+b.getAttribute('data-uid')+'/enable',{method:'POST',body:{enable:!!b.checked}})
+    .then(()=>{toast(b.checked?'已启用':'已禁用');loadAll();}).catch(e=>toast(e.message,true));
+});
+$('ni_btn').onclick = ()=>{
+  const name=$('ni_name').value.trim(), port=Number($('ni_port').value);
+  if(!name) return toast('请输入实例名', true);
+  api('/admin/api/instance',{method:'POST',body:{name, listen: port?{port}:undefined}})
+    .then(()=>{ $('ni_name').value=''; $('ni_port').value=''; toast('已创建'); loadAll(); }).catch(e=>toast(e.message,true));
+};
+
+/* ---------- 插件 ---------- */
+async function loadPlugins(){
+  if (!state.uid) return;
+  const r = await api('/admin/api/plugins/'+state.uid);
+  state.plugins = r.plugins||[];
+  state.pluginPages = state.plugins.filter(p=>p.enable && p.running && p.hasAdminPage);
+  if (state.tab.startsWith('pp:') && !state.pluginPages.find(x=>x.id===state.tab.slice(3))) state.tab='overview';
+  renderPlugins(); renderPluginSettings(); renderOvPlugins(); renderNav();
+  loadMarketIndexes();
+}
+function renderOvPlugins(){
+  const act = state.plugins.filter(p=>p.enable&&p.running);
+  $('ov-plugin-list').innerHTML = act.map(p=>
+    '<div class="lrow"><div class="lic">'+pluginIconHtml(p)+'</div><div class="grow"><div class="nm">'+esc(p.name)+'</div><div class="mt">'+esc(p.id)+' v'+esc(p.version)+'</div></div><span class="bdg '+(p.type==='auth'?'auth':'biz')+'">'+(p.type==='auth'?'认证':'业务')+'</span></div>'
+  ).join('') || '<div class="empty"><span class="msym">extension_off</span>当前实例没有运行中的插件</div>';
+}
+function renderPlugins(){
+  $('pluginList').innerHTML = state.plugins.map(p=>
+    '<div class="lrow"><div class="lic">'+pluginIconHtml(p)+'</div><div class="grow"><div class="nm">'+esc(p.name)+' <span class="bdg '+(p.type==='auth'?'auth':'biz')+'">'+(p.type==='auth'?'认证':'业务')+'</span>'+(p.hasAdminPage&&p.enable&&p.running?' <span class="bdg ok">有管理页</span>':'')+'</div><div class="mt">'+esc(p.id)+' v'+esc(p.version)+' · '+esc(p.description||'')+'</div></div>'
+    +(p.hasAdminPage&&p.enable&&p.running?'<button class="btnx btnx-tonal btnx-sm" data-open-pp="'+p.id+'">打开</button>':'')
+    +'<label class="sw"><input type="checkbox" data-pid="'+p.id+'"'+(p.enable?' checked':'')+'><span class="tr"></span><span class="th"></span></label></div>'
+  ).join('') || '<div class="empty"><span class="msym">extension_off</span>没有可用插件</div>';
+}
+$('pluginList').addEventListener('click', e=>{
+  const b = e.target.closest('[data-open-pp]'); if(!b) return;
+  switchTab('pp:'+b.getAttribute('data-open-pp'));
+});
+$('pluginList').addEventListener('change', async e=>{
+  const sw = e.target.closest('input[data-pid]'); if(!sw) return;
+  const pid = sw.getAttribute('data-pid'), enable = !!sw.checked;
+  try {
+    const c = await api('/admin/api/config/'+state.uid);
+    const cfg = c.config; cfg.plugins = Array.isArray(cfg.plugins)?cfg.plugins:[];
+    const ex = cfg.plugins.find(x=>x&&x.id===pid);
+    if (ex) ex.enable = enable; else cfg.plugins.push({id:pid, enable});
+    await api('/admin/api/config/'+state.uid,{method:'POST',body:cfg});
+    toast((enable?'已启用 ':'已禁用 ')+pid);
+    await loadPlugins();
+  } catch(e2){ toast(e2.message, true); sw.checked = !enable; }
+});
+
+/* ---------- 设置: 实例配置 ---------- */
+async function loadConfig(){
+  if (!state.uid) return;
+  try {
+    const r = await api('/admin/api/config/'+state.uid);
+    $('cfgInstName').textContent = '当前实例: '+r.name+' (uid '+r.uid+')';
+    $('cfgJson').value = JSON.stringify(r.config, null, 2);
+    /* 高级设置回填 */
+    const c = r.config;
+    $('adv_gatewayKey').value = c.gatewayKey||'';
+    $('adv_connectTimeout').value = c.connectTimeout??'';
+    $('adv_responseTimeout').value = c.responseTimeout??'';
+    $('adv_connRetry').value = c.connRetry??'';
+    $('adv_maxBodyBytes').value = c.maxBodyBytes??'';
+    $('adv_cors').checked = c.cors !== false;
+    const tls = c.tls||{};
+    $('adv_tls').checked = !!tls.enable;
+    $('adv_tlsBox').style.display = tls.enable ? '' : 'none';
+    $('adv_tlsPort').value = tls.port??''; $('adv_tlsCert').value = tls.cert||''; $('adv_tlsKey').value = tls.key||'';
+  } catch(e){ toast(e.message, true); }
+}
+$('adv_tls').addEventListener('change', ()=>{ $('adv_tlsBox').style.display = $('adv_tls').checked ? '' : 'none'; });
+$('advSave').onclick = async ()=>{
+  try {
+    const r = await api('/admin/api/config/'+state.uid);
+    const c = r.config;
+    if ($('adv_gatewayKey').value !== '') c.gatewayKey = $('adv_gatewayKey').value; else if ('gatewayKey' in c) c.gatewayKey = '';
+    if ($('adv_connectTimeout').value!=='') c.connectTimeout = Number($('adv_connectTimeout').value);
+    if ($('adv_responseTimeout').value!=='') c.responseTimeout = Number($('adv_responseTimeout').value);
+    if ($('adv_connRetry').value!=='') c.connRetry = Number($('adv_connRetry').value);
+    if ($('adv_maxBodyBytes').value!=='') c.maxBodyBytes = Number($('adv_maxBodyBytes').value);
+    c.cors = $('adv_cors').checked;
+    if ($('adv_tls').checked){
+      c.tls = { enable:true };
+      if ($('adv_tlsPort').value!=='') c.tls.port = Number($('adv_tlsPort').value);
+      if ($('adv_tlsCert').value) c.tls.cert = $('adv_tlsCert').value.trim();
+      if ($('adv_tlsKey').value) c.tls.key = $('adv_tlsKey').value.trim();
+    } else c.tls = { enable:false };
+    await api('/admin/api/config/'+state.uid, {method:'POST', body:c});
+    toast('高级设置已保存并热生效'); loadConfig();
+  } catch(e){ toast(e.message, true); }
+};
+$('cfgReload').onclick = loadConfig;
+$('cfgSave').onclick = async ()=>{
+  let j; try { j=JSON.parse($('cfgJson').value); } catch(e){ return toast('JSON 格式错误: '+e.message, true); }
+  try { await api('/admin/api/config/'+state.uid,{method:'POST',body:j}); toast('已保存并热生效'); await loadPlugins(); } catch(e){ toast(e.message, true); }
+};
+
+/* ---------- 设置: 插件配置(configSchema 自动表单) ---------- */
+/* 点路径 key 读写 (registration.emailVerify.enable ↔ 嵌套对象) */
+function getDeep(o, k){ return String(k).split('.').reduce((x, kk)=> (x==null? undefined : x[kk]), o); }
+function setDeep(o, k, v){ const ks=String(k).split('.'); let cur=o; for(let i=0;i<ks.length-1;i++){ const kk=ks[i]; cur[kk]=(cur[kk]&&typeof cur[kk]==='object'&&!Array.isArray(cur[kk]))?cur[kk]:{}; cur=cur[kk]; } cur[ks[ks.length-1]]=v; }
+function renderPluginSettings(){
+  const list = state.plugins.filter(p=>p.enable && p.schema && p.schema.length);
+  const box = $('pluginSettings');
+  box.innerHTML = list.map(p=>
+    '<md-filled-card><div class="card-head"><div><div class="card-title" style="display:flex;align-items:center;gap:8px">'+pluginIconHtml(p)+' '+esc(p.name)+'</div><div class="card-sub">'+esc(p.description||'')+'</div></div><span class="bdg biz">插件设置</span></div>'
+    +'<div class="pcfg-body" data-pid="'+p.id+'"><div class="empty" style="padding:12px">加载中…</div></div></md-filled-card>'
+  ).join('');
+  for (const p of list) loadPluginCfgForm(p.id);
+}
+async function loadPluginCfgForm(pid){
+  const body = document.querySelector('.pcfg-body[data-pid="'+pid+'"]'); if(!body) return;
+  try {
+    const r = await api('/admin/api/plugin-config/'+state.uid+'/'+pid);
+    if (!r.schema || !r.schema.length){ body.innerHTML='<div class="empty" style="padding:12px">此插件无可配置项</div>'; return; }
+    body.innerHTML = r.schema.map(f=>{
+      const v = getDeep(r.config||{}, f.key) !== undefined ? getDeep(r.config||{}, f.key) : f.default;
+      const fid = 'pc_'+pid+'_'+f.key;
+      if (f.type==='boolean') return '<div class="frow-h"><div><div class="lb">'+esc(f.label||f.key)+'</div>'+(f.description?'<div class="sub2">'+esc(f.description)+'</div>':'')+'</div><label class="sw"><input type="checkbox" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="boolean"'+(v?' checked':'')+'><span class="tr"></span><span class="th"></span></label></div>';
+      if (f.type==='number') return '<div class="frow"><label class="fld-lb">'+esc(f.label||f.key)+'</label><input class="fld" type="number" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="number" value="'+esc(v==null?'':v)+'"></div>';
+      if (Array.isArray(f.options)) return '<div class="frow"><label class="fld-lb">'+esc(f.label||f.key)+'</label><select class="fld" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="string">'+f.options.map(o=>'<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>').join('')+'</select></div>';
+      if (f.type==='textarea'||f.type==='text') return '<div class="frow"><label class="fld-lb">'+esc(f.label||f.key)+'</label><textarea class="fld" rows="3" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="string">'+esc(v==null?'':v)+'</textarea></div>';
+      if (f.secret) return '<div class="frow"><label class="fld-lb">'+esc(f.label||f.key)+'</label><input class="fld" type="password" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="string" value="'+esc(v==null?'':v)+'"></div>';
+      return '<div class="frow"><label class="fld-lb">'+esc(f.label||f.key)+'</label><input class="fld" id="'+fid+'" data-k="'+esc(f.key)+'" data-t="string" value="'+esc(v==null?'':v)+'"></div>';
+    }).join('') + '<div style="display:flex;justify-content:flex-end"><button class="btnx btnx-fill" data-save-pid="'+pid+'"><span class="msym" style="font-size:17px">save</span>保存</button></div>';
+  } catch(e){ body.innerHTML='<div class="empty" style="padding:12px">加载失败: '+esc(e.message)+'</div>'; }
+}
+$('pluginSettings').addEventListener('click', async e=>{
+  const b = e.target.closest('[data-save-pid]'); if(!b) return;
+  const pid = b.getAttribute('data-save-pid');
+  const body = document.querySelector('.pcfg-body[data-pid="'+pid+'"]');
+  const cfg = {};
+  body.querySelectorAll('[data-k]').forEach(el=>{
+    const k=el.getAttribute('data-k'), t=el.getAttribute('data-t');
+    let val;
+    if (t==='boolean') val=!!el.checked;
+    else if (t==='number'){ if(el.value==='') return; val=Number(el.value); }
+    else val=el.value;
+    setDeep(cfg, k, val);
+  });
+  try {
+    const r = await api('/admin/api/plugin-config/'+state.uid+'/'+pid,{method:'POST',body:cfg});
+    toast(r.reloaded?'已保存, 插件已热重载':'已保存');
+  } catch(e2){ toast(e2.message, true); }
+});
+
+/* ---------- 插件市场 ---------- */
+function fmtSize(n){ n=Number(n)||0; if(n>=1048576)return(n/1048576).toFixed(1)+'MB'; if(n>=1024)return(n/1024).toFixed(1)+'KB'; return n?n+'B':''; }
+async function loadMarketIndexes(){
+  try {
+    const r = await api('/admin/api/market/indexes');
+    const list = r.indexes||[];
+    $('mkt_idxList').innerHTML = list.map(u=>
+      '<span class="chip"><span class="u" title="'+esc(u)+'">'+esc(u)+'</span><button data-del-idx="'+esc(u)+'" title="删除"><span class="msym" style="font-size:14px">close</span></button></span>'
+    ).join('') || '<div class="card-sub">还没有索引, 添加一个试试</div>';
+  } catch(e){ toast(e.message, true); }
+}
+$('mkt_addIdx').onclick = async ()=>{
+  const url = $('mkt_idxUrl').value.trim(); if(!url) return toast('请输入索引链接', true);
+  try { await api('/admin/api/market/indexes',{method:'POST',body:{url}}); $('mkt_idxUrl').value=''; toast('已添加'); loadMarketIndexes(); }
+  catch(e){ toast(e.message, true); }
+};
+$('mkt_idxList').addEventListener('click', async e=>{
+  const b = e.target.closest('[data-del-idx]'); if(!b) return;
+  try { await api('/admin/api/market/indexes-delete',{method:'POST',body:{url:b.getAttribute('data-del-idx')}}); toast('已删除'); loadMarketIndexes(); }
+  catch(e2){ toast(e2.message, true); }
+});
+$('mkt_browse').onclick = async ()=>{
+  const proxy = $('mkt_proxy').value.trim();
+  $('mkt_list').innerHTML = '<div class="empty">拉取索引中…</div>';
+  try {
+    const r = await api('/admin/api/market/plugins'+(proxy?'?proxy='+encodeURIComponent(proxy):''));
+    const list = r.plugins||[];
+    /* 分组: 内置 / 外部安装 / 市场可安装 */
+    if (!state.plugins || !state.plugins.length) { try { await loadPlugins(); } catch(_){} }
+    const installedMap = {}; for (const p of (state.plugins||[])) installedMap[p.id] = p;
+    const errs = list.filter(p=>p._error);
+    const mkt = list.filter(p=>!p._error);
+    const builtIns = mkt.filter(p=>installedMap[p.id] && installedMap[p.id].builtin);
+    const externals = (state.plugins||[]).filter(p=>!p.builtin); /* 外部安装 = 已安装的非内置 */
+    const avail = mkt.filter(p=>!installedMap[p.id]);
+    const rowHtml = (p, act, extraMeta)=> '<div class="mkt-row"><div class="ic">'+mktIconHtml(p.icon)+'</div><div class="grow">'
+      +'<div class="nm">'+esc(p.name)+' <span class="bdg '+(p.type==='auth'?'auth':'biz')+'">'+esc(p.type==='auth'?'认证':'业务')+'</span></div>'
+      +'<div class="mt">'+esc(p.description||'')+'</div>'
+      +'<div class="mt">'+esc(p.id)+' v'+esc(p.version)+(p.author?' · '+esc(p.author):'')+(extraMeta||'')+'</div>'
+      +'</div><div style="flex:none">'+act+'</div></div>';
+    let html = '';
+    html += '<div class="card-sub" style="margin:10px 0 6px;font-weight:700">内置插件 (随内核分发, 不可卸载)</div>';
+    html += builtIns.length ? builtIns.map(p=>rowHtml(p, '<span class="bdg biz">内置</span>')).join('') : '<div class="empty" style="padding:10px">无</div>';
+    html += '<div class="card-sub" style="margin:14px 0 6px;font-weight:700">外部安装 (可卸载, 卸载将清除全部配置与数据)</div>';
+    html += externals.length ? externals.map(p=>rowHtml(p, '<span class="bdg ok">已安装 v'+esc(p.version)+'</span> <button class="btnx btnx-tonal btnx-sm" data-uninst="'+esc(p.id)+'">卸载</button>')).join('') : '<div class="empty" style="padding:10px">还没有外部安装的插件</div>';
+    html += '<div class="card-sub" style="margin:14px 0 6px;font-weight:700">市场可安装</div>';
+    if (errs.length) html += errs.map(p=>'<div class="mkt-row"><div class="ic"><span class="msym">warning</span></div><div class="grow"><div class="nm">'+esc(p.index)+'</div><div class="mt">'+esc(p.error)+'</div></div></div>').join('');
+    html += avail.length ? avail.map(p=>rowHtml(p, '<button class="btnx btnx-fill btnx-sm" data-inst="'+esc(p.id)+'"><span class="msym" style="font-size:16px">download</span>安装</button>', (p.size?' · '+fmtSize(p.size):'')+' · '+esc(p.indexName))).join('') : '<div class="empty" style="padding:10px">索引里没有更多插件</div>';
+    $('mkt_list').innerHTML = html;
+  } catch(e){ $('mkt_list').innerHTML='<div class="empty">拉取失败: '+esc(e.message)+'</div>'; }
+};
+$('mkt_list').addEventListener('click', async e=>{
+  const ib = e.target.closest('[data-inst]');
+  if (ib){
+    const id = ib.getAttribute('data-inst');
+    const row = ib.closest('.mkt-row');
+    const meta = [...document.querySelectorAll('#mkt_list .mkt-row')].indexOf(row);
+    ib.disabled = true; ib.textContent = '安装中…';
+    try {
+      // 从当前市场列表找到该插件的 url/sha256
+      const r = await api('/admin/api/market/plugins'+($('mkt_proxy').value.trim()?'?proxy='+encodeURIComponent($('mkt_proxy').value.trim()):''));
+      const p = (r.plugins||[]).find(x=>x.id===id);
+      if (!p || !p.url) throw new Error('找不到下载地址');
+      const res = await api('/admin/api/market/install',{method:'POST',body:{url:p.url, sha256:p.sha256||undefined, proxy:$('mkt_proxy').value.trim()||undefined}});
+      toast('已安装 '+res.name+', 到上方启用');
+      await loadPlugins(); $('mkt_browse').click();
+    } catch(e2){ toast(e2.message, true); ib.disabled=false; ib.innerHTML='<span class="msym" style="font-size:16px">download</span>安装'; }
+    return;
+  }
+  const ub = e.target.closest('[data-uninst]');
+  if (ub){
+    const id = ub.getAttribute('data-uninst');
+    confirm2('卸载插件', '确定卸载 <b>'+esc(id)+'</b>?<br><span style="color:#F2B8B5">插件文件、全部实例的启用状态、配置与数据都将被清除, 且不可恢复。</span>', async ()=>{
+      try { await api('/admin/api/market/uninstall',{method:'POST',body:{id}}); toast('已卸载'); await loadPlugins(); $('mkt_browse').click(); }
+      catch(e2){ toast(e2.message, true); }
+    });
+  }
+});
+
+boot();
+</script>
+</body>
+</html>

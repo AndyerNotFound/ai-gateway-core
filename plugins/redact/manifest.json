@@ -1,0 +1,37 @@
+{
+  "id": "redact",
+  "name": "隐私过滤与内容替换",
+  "version": "1.0.0",
+  "description": "请求体密钥脱敏(redact) + 出入站正则替换(replace)",
+  "hasServer": true,
+  "permissions": [
+    "storage"
+  ],
+  "configSchema": [
+    {
+      "key": "enable",
+      "label": "启用隐私过滤",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "extra",
+      "label": "自定义脱敏正则(逗号分隔)",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "replace.out",
+      "label": "出站替换 [{re,to,ci}]",
+      "type": "json",
+      "default": "[]"
+    },
+    {
+      "key": "replace.inc",
+      "label": "入站替换 [{re,to,ci}]",
+      "type": "json",
+      "default": "[]"
+    }
+  ],
+  "icon": "msym:visibility_off"
+}

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公网隧道</title>
+<style>
+@font-face{font-family:'Material Symbols Outlined';font-style:normal;font-weight:400;font-display:block;src:url('/admin/assets/material-symbols-outlined.woff2') format('woff2')}
+.msym{font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;font-size:20px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;direction:ltr;-webkit-font-smoothing:antialiased;user-select:none;vertical-align:middle}
+
+:root{
+  --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
+  --md-sys-color-primary-container:#4F378B; --md-sys-color-on-primary-container:#EADDFF;
+  --md-sys-color-secondary-container:#4A4458; --md-sys-color-on-secondary-container:#E8DEF8;
+  --md-sys-color-error-container:#8B1A1A; --md-sys-color-on-error-container:#F9DEDC;
+  --md-sys-color-surface:#141218; --md-sys-color-on-surface:#E6E1E5;
+  --md-sys-color-surface-container:#211F26; --md-sys-color-surface-container-high:#2B2930; --md-sys-color-surface-container-highest:#36343B;
+  --md-sys-color-on-surface-variant:#CAC4D0; --md-sys-color-outline-variant:#49454F;
+  --font:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+  --mono:ui-monospace,'SF Mono',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface);font-family:var(--font);font-size:14px;line-height:1.5;padding:16px}
+.card{background:var(--md-sys-color-surface-container);border:1px solid var(--md-sys-color-outline-variant);border-radius:16px;padding:16px;margin-bottom:14px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 16px;border-radius:999px;font-size:13.5px;font-weight:600;border:none;cursor:pointer}
+.btn-fill{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+.btn-tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.btn-danger{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
+.btn:disabled{opacity:.5;pointer-events:none}
+.badge{display:inline-flex;align-items:center;height:22px;padding:0 10px;border-radius:999px;font-size:11.5px;font-weight:600}
+.badge.on{background:#1b5e20;color:#c8e6c9}
+.badge.off{background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant)}
+.urlbox{font-family:var(--mono);font-size:13px;background:var(--md-sys-color-surface-container-highest);border-radius:10px;padding:12px;word-break:break-all;margin:10px 0;display:none}
+.logbox{font-family:var(--mono);font-size:11px;color:var(--md-sys-color-on-surface-variant);background:#0F0D13;border-radius:10px;padding:10px;max-height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.hint{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:8px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#E6E0E9;color:#322F35;padding:9px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.2s}
+#toast.on{opacity:1}
+#toast.err{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h3><span class="msym" style="font-size:18px">public</span> cloudflared 公网隧道</h3>
+  <div class="row">
+    <span class="badge off" id="stBadge">未运行</span>
+    <button class="btn btn-fill" id="btnStart">▶ 启动隧道</button>
+    <button class="btn btn-danger" id="btnStop" disabled>■ 停止</button>
+    <button class="btn btn-tonal" id="btnRefresh"><span class="msym" style="font-size:16px">refresh</span> 刷新</button>
+  </div>
+  <div class="urlbox" id="urlBox"></div>
+  <div class="hint">免费临时域名, 重启隧道会变。隧道指向本网关主端口, 所有实例经 /<b>实例名</b>/ 路径访问。依赖 cloudflared 已安装且在 PATH。</div>
+</div>
+
+<div class="card">
+  <h3><span class="msym" style="font-size:18px">terminal</span> 运行日志</h3>
+  <div class="logbox" id="logBox">(空)</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const BASE = location.pathname.replace(/\/pages\/.*$/, '');
+function toast(m,e){const t=$('toast');t.textContent=m;t.className='on'+(e?' err':'');clearTimeout(t._tm);t._tm=setTimeout(()=>t.className='',2400)}
+async function api(p, method){
+  const r = await fetch(BASE+p, {method: method||'GET'});
+  const j = await r.json().catch(()=>null);
+  if (!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status));
+  return j;
+}
+async function load(){
+  try {
+    const r = await api('/status');
+    $('stBadge').textContent = r.running ? '运行中' : '未运行';
+    $('stBadge').className = 'badge ' + (r.running?'on':'off');
+    $('btnStart').disabled = !!r.running;
+    $('btnStop').disabled = !r.running;
+    if (r.url){ $('urlBox').style.display='block'; $('urlBox').innerHTML = '<span class="msym" style="font-size:16px">public</span> <b>'+r.url+'</b> <button class="btn btn-tonal" style="height:26px;padding:0 10px;font-size:12px;margin-left:8px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+r.url+'\').then(()=>toast(\'已复制\'))">复制</button>'; }
+    else $('urlBox').style.display='none';
+    $('logBox').textContent = (r.log && r.log.length) ? r.log.join('\n') : '(空)';
+  } catch(e){ toast(e.message, true); }
+}
+$('btnStart').onclick = async ()=>{ try { await api('/start','POST'); toast('启动中, 域名出现需要几秒'); setTimeout(load, 3000); setTimeout(load, 8000); } catch(e){ toast(e.message, true); } };
+$('btnStop').onclick = async ()=>{ try { await api('/stop','POST'); toast('已停止'); load(); } catch(e){ toast(e.message, true); } };
+$('btnRefresh').onclick = load;
+load(); setInterval(load, 10000);
+</script>
+</body>
+</html>

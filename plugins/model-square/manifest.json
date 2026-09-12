@@ -1,0 +1,20 @@
+{
+  "id": "model-square",
+  "name": "模型广场",
+  "version": "1.0.0",
+  "description": "带筛选的模型广场：按分组 / 提供商 / 用户分组筛选。整页由服务端渲染成 gcui，App 不用重编即可更新。",
+  "hasServer": true,
+  "permissions": [
+    "storage",
+    "gateway:authApis"
+  ],
+  "configSchema": [],
+  "icon": "msym:apps",
+  "appUi": {
+    "bottomBar": {
+      "title": "模型广场",
+      "icon": "apps",
+      "ui": "/ui/square"
+    }
+  }
+}

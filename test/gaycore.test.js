@@ -1,0 +1,437 @@
+'use strict';
+                                            
+                                                        
+                                                                           
+   
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const http = require('http');
+const crypto = require('crypto');
+const assert = require('assert');
+const CORE = require('../src/index');
+const { hashPassword } = require('../src/auth');
+
+let passed = 0, failed = 0;
+function T(name, fn) {
+  try { const r = fn(); if (r && r.then) return r.then(() => { passed++; console.log('  ✅ ' + name); }).catch(e => { failed++; console.log('  ❌ ' + name + ' — ' + e.message); }); passed++; console.log('  ✅ ' + name); }
+  catch (e) { failed++; console.log('  ❌ ' + name + ' — ' + e.message); }
+}
+function tmpdir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'agwcore-gc-')); }
+function req(port, method, p, { headers = {}, body, timeout = 8000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port, path: p, method, headers, timeout }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    r.on('error', reject);
+    r.on('timeout', () => { r.destroy(); reject(new Error('timeout')); });
+    if (body != null) r.write(typeof body === 'string' ? body : JSON.stringify(body));
+    r.end();
+  });
+}
+const J = r => JSON.parse(r.body);
+
+                                                           
+function findNode(node, pred) {
+  if (!node || typeof node !== 'object') return null;
+  if (pred(node)) return node;
+  const kids = node.children;
+  if (Array.isArray(kids)) for (const c of kids) { const r = findNode(c, pred); if (r) return r; }
+  if (node.template) { const r = findNode(node.template, pred); if (r) return r; }
+  return null;
+}
+const findInput = (root, key) => findNode(root, n => n.key === key);
+
+                                 
+let seqCounter = 0;
+function signedReq(token, method, pathname, bodyObj) {
+  const bodyStr = bodyObj == null ? '' : JSON.stringify(bodyObj);
+  const ts = Date.now(), nonce = crypto.randomBytes(16).toString('hex');
+  const seq = ++seqCounter, intentId = crypto.randomUUID();
+  const bodyHash = crypto.createHash('sha256').update(bodyStr).digest('hex');
+  const sign = crypto.createHmac('sha256', token).update([ts, nonce, seq, intentId, method.toUpperCase(), pathname, bodyHash].join('\n')).digest('hex');
+  return {
+    body: bodyStr,
+    headers: {
+      'authorization': 'Bearer ' + token, 'content-type': 'application/json',
+      'x-gc-timestamp': String(ts), 'x-gc-nonce': nonce, 'x-gc-seq': String(seq),
+      'x-gc-intent-id': intentId, 'x-gc-sign': sign,
+    },
+  };
+}
+
+async function main() {
+  console.log('=== Gay Core 服务端支撑测试 ===');
+  const dir = tmpdir();
+  process.env.AGW_DIR = dir;
+
+                            
+  const pd = path.join(dir, 'plugins', 'intent-test');
+  fs.mkdirSync(pd, { recursive: true });
+  fs.writeFileSync(path.join(pd, 'manifest.json'), JSON.stringify({
+    id: 'intent-test', name: '意图测试', version: '1.0.0', hasServer: true,
+    permissions: [], appUi: { home: { title: '测试组件', icon: 'check', ui: '/ui/home' } },
+  }));
+  fs.writeFileSync(path.join(pd, 'server.js'), `module.exports.activate = (ctx) => {
+    ctx.data.set('runs', 0);
+    ctx.registerRoute('POST', '/intent/ping', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+      const runs = (ctx.data.get('runs') || 0) + 1;
+      ctx.data.set('runs', runs);
+      return { ok: true, toast: 'pong#' + runs, echo: (p.body && p.body.msg) || '' };
+    }));
+    ctx.registerRoute('GET', '/runs', (req, res, p) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ runs: ctx.data.get('runs') || 0 }));
+    });
+  };`);
+
+                                
+  const badTheme = path.join(dir, 'plugins', 'theme-evil');
+  fs.mkdirSync(badTheme, { recursive: true });
+  fs.writeFileSync(path.join(badTheme, 'manifest.json'), JSON.stringify({ id: 'theme-evil', name: '恶意主题', type: 'theme', hasServer: true, theme: { dark: {} } }));
+  fs.writeFileSync(path.join(badTheme, 'server.js'), 'module.exports.activate=()=>{};');
+
+  const mainPort = await new Promise(r => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const gw = new CORE.Gateway(dir, { port: mainPort });
+  await gw.start();
+
+  const admin = { authorization: 'Bearer admin-gc' };
+  await T('setup: 创建管理员', async () => {
+    const r = await req(mainPort, 'POST', '/setup/admin', { body: { adminKey: 'admin-gc' } });
+    assert.strictEqual(r.status, 200, r.body);
+  });
+
+  await T('启用卡密/用户体系/意图测试插件 + 发卡', async () => {
+    const uid = gw.store.metaByName('default').uid;
+    const cfg = gw.store.loadInstance(uid);
+    cfg.plugins = [
+      { id: 'auth-cardkey', enable: true },
+      { id: 'auth-user', enable: true },
+      { id: 'intent-test', enable: true },
+    ];
+    gw.store.saveInstance(uid, cfg);
+    gw.store.setPluginConfig('auth-cardkey', uid, { apiKeys: [
+      { key: 'sk-gc-main', name: '主卡', enable: true, quotaTokens: 100000, usedTokens: 5000, uid: 'u1', models: [], branches: [], isMain: true },
+    ] });
+    gw.store.setPluginConfig('auth-user', uid, { users: [
+      { uid: 'u1', name: 'u1', passwordHash: hashPassword('password123'), nickname: '小明', avatar: '', createdAt: '2026-09-10' },
+    ], registration: { enable: true, minPasswordLen: 8 } });
+    gw.loadInstance(uid);
+    assert.strictEqual(gw.store.isSetupMode(), false);
+  });
+
+  console.log('\n[1] bootstrap 聚合 API');
+  await T('bootstrap: 字段齐全', async () => {
+    const r = await req(mainPort, 'GET', '/api/app/bootstrap');
+    assert.strictEqual(r.status, 200, r.body);
+    const j = J(r);
+    assert.strictEqual(j.ok, true);
+    assert.strictEqual(j.branch, 'default');
+    assert.strictEqual(j.auth.cardkey, true);
+    assert.strictEqual(j.auth.user, true);
+    assert.strictEqual(j.auth.registration.enable, true);
+    assert.strictEqual(j.auth.registration.captchaSecret, undefined, 'secret 不得外泄');
+    assert(Array.isArray(j.themes) && j.themes.length >= 1);
+    assert(Array.isArray(j.plugins) && j.plugins.length >= 3);
+  });
+
+  await T('bootstrap: md3 主题兜底且锁定', async () => {
+    const j = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    const md3 = j.themes.find(t => t.id === 'theme-md3');
+    assert(md3, 'theme-md3 必须在 themes 里');
+    assert.strictEqual(md3.locked, true);
+    assert.strictEqual(md3.builtin, true);
+    assert(md3.dark.primary && md3.light.primary, '主题要有深浅配色');
+  });
+
+  await T('bootstrap: 插件公示含 sha256/permissions/appUi/provides', async () => {
+    const j = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    const p = j.plugins.find(x => x.id === 'intent-test');
+    assert(p, 'intent-test 应在公示列表');
+    assert(/^[0-9a-f]{64}$/.test(p.sha256), 'sha256 格式: ' + p.sha256);
+    assert(Array.isArray(p.permissions));
+    assert(p.appUi && p.appUi.home && p.appUi.home.ui === '/ui/home');
+    const au = j.plugins.find(x => x.id === 'auth-user');
+    assert(au.provides.includes('user-system'), 'auth-user 应声明 user-system');
+    assert(au.appUi && au.appUi.personal && au.appUi.personal.ui === '/ui/personal');
+  });
+
+  await T('bootstrap: 主题插件带 server.js 被拒载', async () => {
+    const j = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    assert(!j.themes.some(t => t.id === 'theme-evil'), 'theme-evil 不得出现');
+    assert(!j.plugins.some(p => p.id === 'theme-evil'), 'theme-evil 不得出现在插件列表');
+  });
+
+  await T('bootstrap: 带分支前缀也可访问', async () => {
+    const r = await req(mainPort, 'GET', '/default/api/app/bootstrap');
+    assert.strictEqual(r.status, 200, r.body);
+    assert.strictEqual(J(r).branch, 'default');
+  });
+
+  console.log('\n[2] 服务点资料 + 客户端配置');
+  await T('server-info: 保存与读取(字段白名单)', async () => {
+    const uid = gw.store.metaByName('default').uid;
+    const r = await req(mainPort, 'POST', '/admin/api/server-info', { headers: admin, body: { name: '小明中转站', description: '测试站点', evil: '<script>', icon: 'https://x/icon.png' } });
+    assert.strictEqual(r.status, 200, r.body);
+    const j = J(await req(mainPort, 'GET', '/admin/api/server-info', { headers: admin }));
+    assert.strictEqual(j.serverInfo.name, '小明中转站');
+    assert.strictEqual(j.serverInfo.evil, undefined, '非白名单字段不得保存');
+    const b = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    assert.strictEqual(b.serverInfo.name, '小明中转站', 'bootstrap 应带服务点资料');
+    void uid;
+  });
+
+  await T('client-config: 布局保存 + bootstrap 返回', async () => {
+    const uid = gw.store.metaByName('default').uid;
+    const layout = { version: 1, bottomBar: ['home', 'personal', 'plugin:intent-test', 'settings'], hidden: [], homeOrder: ['plugin:intent-test'], theme: 'theme-md3' };
+    const r = await req(mainPort, 'POST', '/admin/api/client-config/' + uid, { headers: admin, body: { layout } });
+    assert.strictEqual(r.status, 200, r.body);
+    const b = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    assert.deepStrictEqual(b.layout.bottomBar, layout.bottomBar);
+    assert.strictEqual(b.layout.theme, 'theme-md3');
+  });
+
+  await T('client-config: 布局非法字段被清洗', async () => {
+    const uid = gw.store.metaByName('default').uid;
+    const r = await req(mainPort, 'POST', '/admin/api/client-config/' + uid, { headers: admin, body: { layout: { bottomBar: ['home', 123, {}, 'settings'], theme: 42, hack: 'yes' } } });
+    assert.strictEqual(r.status, 200);
+    const j = J(r);
+    assert.deepStrictEqual(j.layout.bottomBar, ['home', 'settings'], '非字符串项被剔除');
+    assert.strictEqual(j.layout.theme, undefined);
+    assert.strictEqual(j.layout.hack, undefined);
+  });
+
+  await T('client-config: 用户调试模式(限单用户+限时)', async () => {
+    const uid = gw.store.metaByName('default').uid;
+    const r = await req(mainPort, 'POST', '/admin/api/client-config/' + uid, { headers: admin, body: { userDebug: { uid: 'u1', minutes: 30 } } });
+    assert.strictEqual(r.status, 200, r.body);
+    const j = J(r);
+    assert.strictEqual(j.userDebug.uid, 'u1');
+    assert(j.userDebug.until > Date.now(), 'until 应是未来');
+    const b = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    assert.strictEqual(b.userDebug.forUid, 'u1');
+            
+    await req(mainPort, 'POST', '/admin/api/client-config/' + uid, { headers: admin, body: { userDebug: null } });
+    const b2 = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
+    assert.strictEqual(b2.userDebug, null, '关闭后 bootstrap 不再下发');
+  });
+
+  console.log('\n[3] 市场测试模式门 + 审计');
+  await T('市场: 默认禁止自定义来源(install/indexes 403)', async () => {
+    const r1 = await req(mainPort, 'POST', '/admin/api/market/install', { headers: admin, body: { url: 'https://example.com/x.tar.gz' } });
+    assert.strictEqual(r1.status, 403, r1.body);
+    assert(J(r1).error.includes('测试模式'));
+    const r2 = await req(mainPort, 'POST', '/admin/api/market/indexes', { headers: admin, body: { url: 'https://example.com/idx.json' } });
+    assert.strictEqual(r2.status, 403);
+  });
+
+  await T('市场: 开启测试模式后放行 + 审计写入', async () => {
+    const r = await req(mainPort, 'POST', '/admin/api/market/test-mode', { headers: admin, body: { enable: true } });
+    assert.strictEqual(r.status, 200, r.body);
+    assert.strictEqual(J(r).testMode, true);
+    const r2 = await req(mainPort, 'POST', '/admin/api/market/indexes', { headers: admin, body: { url: 'https://example.com/idx.json' } });
+    assert.strictEqual(r2.status, 200, r2.body);
+                
+    const auditFile = path.join(dir, 'log', 'audit-0.jsonl');
+    assert(fs.existsSync(auditFile), '审计文件应存在');
+    const lines = fs.readFileSync(auditFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert(lines.some(l => l.action === 'market.testMode.on'), '缺 testMode.on 审计');
+    assert(lines.some(l => l.action === 'market.index.add'), '缺 index.add 审计');
+    assert(lines.some(l => l.action === 'serverInfo.save'), '缺 serverInfo 审计');
+    const uid = gw.store.metaByName('default').uid;
+    const auditInst = fs.readFileSync(path.join(dir, 'log', 'audit-' + uid + '.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert(auditInst.some(l => l.action === 'layout.save'), '缺 layout.save 审计');
+    assert(auditInst.some(l => l.action === 'userDebug.on'), '缺 userDebug.on 审计');
+  });
+
+  console.log('\n[4] 意图安全协议 (ctx.security.guard)');
+  await T('意图: 正确签名通过', async () => {
+    const { headers, body } = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', { msg: 'hi' });
+    const r = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers, body });
+    assert.strictEqual(r.status, 200, r.body);
+    const j = J(r);
+    assert.strictEqual(j.ok, true);
+    assert.strictEqual(j.toast, 'pong#1');
+    assert.strictEqual(j.echo, 'hi');
+  });
+
+  await T('意图: 错误签名拒绝', async () => {
+    const { headers, body } = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
+    headers['x-gc-sign'] = '0'.repeat(64);
+    const r = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers, body });
+    assert.strictEqual(r.status, 401);
+    assert(J(r).error.includes('验签'));
+  });
+
+  await T('意图: 缺签名头拒绝', async () => {
+    const r = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: { authorization: 'Bearer sk-gc-main' }, body: '{}' });
+    assert.strictEqual(r.status, 400);
+  });
+
+  await T('意图: 幂等键重放 → 返回上次响应, 业务不重复执行', async () => {
+    const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', { msg: 'again' });
+    const r1 = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s.headers, body: s.body });
+    assert.strictEqual(J(r1).ok, true);
+                                                                                                                                                                         
+    const s2 = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', { msg: 'again' });
+    s2.headers['x-gc-intent-id'] = s.headers['x-gc-intent-id'];                     
+    const bodyHash = require('crypto').createHash('sha256').update(s2.body).digest('hex');
+    s2.headers['x-gc-sign'] = require('crypto').createHmac('sha256', 'sk-gc-main')
+      .update([s2.headers['x-gc-timestamp'], s2.headers['x-gc-nonce'], s2.headers['x-gc-seq'], s2.headers['x-gc-intent-id'], 'POST', '/plugins/intent-test/intent/ping', bodyHash].join('\n')).digest('hex');
+    const r2 = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s2.headers, body: s2.body });
+    assert.strictEqual(J(r2).ok, true);
+    assert.strictEqual(J(r2).toast, J(r1).toast, '应返回缓存的上次响应');
+    const runs = J(await req(mainPort, 'GET', '/plugins/intent-test/runs'));
+    assert.strictEqual(runs.runs, 2, '业务只执行 2 次(重放不执行), 实际 ' + runs.runs);
+  });
+
+  await T('意图: 序列号回滚拒绝 + currentSeq 提示', async () => {
+    const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
+    s.headers['x-gc-seq'] = '1';                    
+    const bodyHash = crypto.createHash('sha256').update(s.body).digest('hex');
+    s.headers['x-gc-sign'] = crypto.createHmac('sha256', 'sk-gc-main')
+      .update([s.headers['x-gc-timestamp'], s.headers['x-gc-nonce'], '1', s.headers['x-gc-intent-id'], 'POST', '/plugins/intent-test/intent/ping', bodyHash].join('\n')).digest('hex');
+    const r = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s.headers, body: s.body });
+    assert.strictEqual(r.status, 401);
+    const j = J(r);
+    assert(j.error.includes('回滚'), j.error);
+    assert(j.currentSeq > 1, '应带 currentSeq');
+  });
+
+  await T('意图: nonce 重放拒绝', async () => {
+    const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
+    await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s.headers, body: s.body });
+                                    
+    const s2 = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
+    s2.headers['x-gc-nonce'] = s.headers['x-gc-nonce'];
+    const bodyHash = crypto.createHash('sha256').update(s2.body).digest('hex');
+    s2.headers['x-gc-sign'] = crypto.createHmac('sha256', 'sk-gc-main')
+      .update([s2.headers['x-gc-timestamp'], s2.headers['x-gc-nonce'], s2.headers['x-gc-seq'], s2.headers['x-gc-intent-id'], 'POST', '/plugins/intent-test/intent/ping', bodyHash].join('\n')).digest('hex');
+    const r = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s2.headers, body: s2.body });
+    assert.strictEqual(r.status, 401);
+    assert(J(r).error.includes('nonce'), J(r).error);
+  });
+
+  await T('意图: 归属校验(路径必须含本插件 id)', async () => {
+                                                     
+    const pm = gw.plugins;
+    const st = { uid: 1, pluginId: 'intent-test', _instCfg: null };
+    const v = pm.verifyIntent(st, { method: 'POST', url: '/plugins/other-plugin/intent/x', headers: {} }, { token: 'sk-gc-main', rawBody: '' });
+    assert.strictEqual(v.ok, false);
+                                       
+  });
+
+  await T('意图: 安全记录落盘', async () => {
+    gw.plugins._flushSecAll();
+    const uid = gw.store.metaByName('default').uid;
+    const f = path.join(dir, 'plugins-data', String(uid), '.gc-security.json');
+    assert(fs.existsSync(f), f + ' 应存在');
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const th = crypto.createHash('sha256').update('sk-gc-main').digest('hex');
+    assert(j.keys[th] && j.keys[th].lastSeq >= 1, 'lastSeq 应已记录');
+    assert(!JSON.stringify(j).includes('sk-gc-main'), '卡密明文不得落盘');
+  });
+
+  console.log('\n[5] auth-user SDUI 个人中心');
+  await T('SDUI: GET ui/personal 返回 gcui 树', async () => {
+    const r = await req(mainPort, 'GET', '/plugins/auth-user/ui/personal', { headers: { authorization: 'Bearer sk-gc-main' } });
+    assert.strictEqual(r.status, 200, r.body);
+    const j = J(r);
+    assert.strictEqual(j.gcui, 1);
+    assert.strictEqual(j.title, '个人');
+    assert.strictEqual(j.root.type, 'column');
+    assert(Array.isArray(j.state.keys) && j.state.keys.length === 1);
+    assert.strictEqual(j.state.keys[0].name, '主卡');
+                 
+    const r2 = await req(mainPort, 'GET', '/plugins/auth-user/ui/personal');
+    assert.strictEqual(r2.status, 401);
+  });
+
+  await T('SDUI: 编辑资料页带预填值', async () => {
+    const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/edit-profile', { headers: { authorization: 'Bearer sk-gc-main' } }));
+    const nick = findInput(j.root, 'nickname');
+    assert.strictEqual(nick.value, '小明');
+  });
+
+  await T('SDUI: 签名意图改资料生效', async () => {
+    const { headers, body } = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/profile', { nickname: '小红', cardName: '主力卡' });
+    const r = await req(mainPort, 'POST', '/plugins/auth-user/intent/profile', { headers, body });
+    assert.strictEqual(r.status, 200, r.body);
+    assert.strictEqual(J(r).ok, true);
+              
+    const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/edit-profile', { headers: { authorization: 'Bearer sk-gc-main' } }));
+    assert.strictEqual(findInput(j.root, 'nickname').value, '小红');
+    assert.strictEqual(findInput(j.root, 'cardName').value, '主力卡');
+  });
+
+  await T('SDUI: 签名意图发子卡+删子卡', async () => {
+    const s1 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/create-key', { name: '测试子卡', quotaTokens: 1000 });
+    const r1 = await req(mainPort, 'POST', '/plugins/auth-user/intent/create-key', { headers: s1.headers, body: s1.body });
+    assert.strictEqual(J(r1).ok, true, r1.body);
+                 
+    const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/personal', { headers: { authorization: 'Bearer sk-gc-main' } }));
+    assert.strictEqual(j.state.keys.length, 2);
+    const sub = j.state.keys.find(k => k.name === '测试子卡');
+    assert(sub && sub.canDelete === true);
+                 
+    const main = j.state.keys.find(k => k.isMain);
+    const s2 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/delete-key', { key: main.key });
+    const r2 = await req(mainPort, 'POST', '/plugins/auth-user/intent/delete-key', { headers: s2.headers, body: s2.body });
+    assert.strictEqual(J(r2).ok, false, '删主卡必须失败');
+               
+    const s3 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/delete-key', { key: sub.key });
+    const r3 = await req(mainPort, 'POST', '/plugins/auth-user/intent/delete-key', { headers: s3.headers, body: s3.body });
+    assert.strictEqual(J(r3).ok, true, r3.body);
+  });
+
+  await T('SDUI: 修改密码意图(原密码校验)', async () => {
+    const s1 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/password', { oldPassword: 'wrong', newPassword: 'newpassword456' });
+    const r1 = await req(mainPort, 'POST', '/plugins/auth-user/intent/password', { headers: s1.headers, body: s1.body });
+    assert.strictEqual(J(r1).ok, false, '错误原密码必须失败');
+    const s2 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/password', { oldPassword: 'password123', newPassword: 'newpassword456' });
+    const r2 = await req(mainPort, 'POST', '/plugins/auth-user/intent/password', { headers: s2.headers, body: s2.body });
+    assert.strictEqual(J(r2).ok, true, r2.body);
+                
+    const lr = await req(mainPort, 'POST', '/auth/login', { body: { uid: 'u1', password: 'newpassword456' } });
+    assert.strictEqual(J(lr).ok, true, '新密码登录失败: ' + lr.body);
+  });
+
+  console.log('\n[6] SDUI v2 设计契约 (描边卡片 / 徽章 / 药丸)');
+  await T('SDUI: 个人中心使用 v2 设计组件', async () => {
+    const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/personal', { headers: { authorization: 'Bearer sk-gc-main' } }));
+    const cards = [];
+    (function walk(n) { if (!n || typeof n !== 'object') return; if (n.type === 'card') cards.push(n); (n.children || []).forEach(walk); })(j.root);
+    assert(cards.length >= 4, '应有 资料头/额度/卡密/账号 4 张卡, 实际 ' + cards.length);
+    assert(cards.every(c => c.variant === 'outlined' && c.shape === 'extraLarge'), '卡片应为描边 + extraLarge 圆角');
+    assert(findNode(j.root, n => n.type === 'avatar'), '应含 avatar 组件');
+    assert(findNode(j.root, n => n.type === 'badge'), '应含 badge 组件');
+    assert(findNode(j.root, n => n.type === 'chip'), '应含 chip 组件');
+    assert(findNode(j.root, n => n.type === 'button' && n.shape === 'pill'), '按钮应为药丸形');
+  });
+
+  await T('SDUI: 卡密状态徽章由服务端决定(模板绑定)', async () => {
+    const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/personal', { headers: { authorization: 'Bearer sk-gc-main' } }));
+    const main = j.state.keys.find(k => k.isMain);
+    assert(main.badgeText === '主卡', '主卡徽章文案');
+    assert(main.badgeTone === 'primary', '主卡徽章色调');
+    const badgeNode = findNode(j.root, n => n.type === 'badge' && typeof n.tone === 'string' && n.tone.startsWith('{{'));
+    assert(badgeNode, '卡密列表徽章应使用 {{item.badgeTone}} 模板绑定');
+  });
+
+  await T('SDUI: 子页面全部走 v2 卡片', async () => {
+    for (const path of ['/ui/create-key', '/ui/change-password', '/ui/delete-account']) {
+      const j = J(await req(mainPort, 'GET', '/plugins/auth-user' + path, { headers: { authorization: 'Bearer sk-gc-main' } }));
+      assert.strictEqual(j.gcui, 1, path);
+      const card = findNode(j.root, n => n.type === 'card');
+      assert(card && card.variant === 'outlined', path + ' 应含描边卡片');
+    }
+  });
+
+  console.log('\n=== 结果: ' + passed + ' 通过, ' + failed + ' 失败 ===');
+  try { await gw.stop(); } catch (_) {}
+  process.exit(failed ? 1 : 0);
+}
+
+main().catch(e => { console.error('测试崩溃:', e); process.exit(1); });

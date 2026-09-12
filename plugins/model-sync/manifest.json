@@ -1,0 +1,27 @@
+{
+  "id": "model-sync",
+  "name": "模型列表自动同步",
+  "version": "1.1.0",
+  "description": "定期拉上游 /models 合并进渠道 models 列表；支持单渠道手动同步与查询已同步结果",
+  "hasServer": true,
+  "permissions": [
+    "network",
+    "cron",
+    "gateway:saveConfig"
+  ],
+  "configSchema": [
+    {
+      "key": "enable",
+      "label": "启用",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "intervalHours",
+      "label": "间隔(小时)",
+      "type": "number",
+      "default": 24
+    }
+  ],
+  "icon": "msym:sync"
+}

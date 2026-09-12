@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>用户管理</title>
+<style>
+@font-face{font-family:'Material Symbols Outlined';font-style:normal;font-weight:400;font-display:block;src:url('/admin/assets/material-symbols-outlined.woff2') format('woff2')}
+.msym{font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;font-size:20px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;direction:ltr;-webkit-font-smoothing:antialiased;user-select:none;vertical-align:middle}
+
+:root{
+  --p:#D0BCFF; --onp:#381E72; --pc:#4F378B; --opc:#EADDFF;
+  --sc:#4A4458; --osc:#E8DEF8; --ec:#8B1A1A; --oec:#F9DEDC;
+  --sf:#141218; --ons:#E6E1E5; --sfc:#211F26; --sfh:#2B2930; --sfhh:#36343B;
+  --osv:#CAC4D0; --olv:#49454F;
+  --font:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+  --mono:ui-monospace,'SF Mono',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--sf);color:var(--ons);font-family:var(--font);font-size:14px;line-height:1.5;padding:16px}
+input,select{font-family:var(--font);font-size:14px;color:var(--ons);background:var(--sfhh);border:1px solid var(--olv);border-radius:8px;padding:8px 12px;outline:none;width:100%}
+input:focus{border-color:var(--p)}
+button{font-family:var(--font);cursor:pointer;border:none;background:none;color:inherit}
+.card{background:var(--sfc);border:1px solid var(--olv);border-radius:16px;padding:16px;margin-bottom:14px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:10px}
+.btn{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 13px;border-radius:999px;font-size:12.5px;font-weight:600}
+.btn-fill{background:var(--p);color:var(--onp)}
+.btn-tonal{background:var(--sc);color:var(--osc)}
+.btn-danger{background:var(--ec);color:var(--oec)}
+.btn:disabled{opacity:.5;pointer-events:none}
+.frow{margin-bottom:10px}
+.frow label{display:block;font-size:12px;font-weight:600;color:var(--osv);margin-bottom:4px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.ok{background:#1b5e20;color:#c8e6c9}
+.badge.ban{background:var(--ec);color:var(--oec)}
+.urow{border:1px solid var(--olv);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--sfh)}
+.urow .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.urow .ava{width:36px;height:36px;border-radius:50%;background:var(--pc);color:var(--opc);display:grid;place-items:center;font-weight:700;flex:none}
+.urow .nm{font-weight:600;font-size:14.5px}
+.urow .mt{font-size:12px;color:var(--osv);margin-top:2px}
+.urow .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.ukeys{margin-top:10px;border-top:1px dashed var(--olv);padding-top:8px}
+.krow{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;flex-wrap:wrap}
+.mono{font-family:var(--mono);font-size:11.5px}
+.empty{color:var(--osv);text-align:center;padding:24px;font-size:13px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#E6E0E9;color:#322F35;padding:9px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:60}
+#toast.on{opacity:1}
+#toast.err{background:var(--ec);color:var(--oec)}
+.dlg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}
+.dlg.on{display:flex}
+.dlg-box{background:var(--sfh);border-radius:18px;padding:20px;max-width:380px;width:100%}
+.dlg-box h3{margin-bottom:12px}
+.dlg-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h3><span class="msym" style="font-size:18px">add</span> 新建用户</h3>
+  <div class="g2">
+    <div class="frow"><label>用户名 *</label><input id="nu_uid" placeholder="3-32 位字母/数字/_/-"></div>
+    <div class="frow"><label>初始密码 *</label><input id="nu_pw" placeholder="至少8位"></div>
+    <div class="frow"><label>昵称</label><input id="nu_name" placeholder="可留空"></div>
+    <div class="frow"><label>初始额度 (tokens, 留空=零额度)</label><input id="nu_quota" type="number" placeholder="留空 = 0, 需再充值"></div>
+    <div class="frow"><label>邮箱</label><input id="nu_email" placeholder="可留空"></div>
+  </div>
+  <button class="btn btn-fill" id="btnCreate">创建</button>
+  <div style="font-size:11.5px;color:var(--md-sys-color-on-surface-variant);margin-top:8px">创建后会**自动发一张主卡**（否则用户登录不上）。留空额度 = 零额度，需再充值。</div>
+</div>
+
+<div class="card">
+  <h3><span class="msym" style="font-size:18px">group</span> 用户列表 <button class="btn btn-tonal" style="margin-left:8px;height:26px" id="btnReload"><span class="msym" style="font-size:16px">refresh</span></button></h3>
+  <div id="list"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="dlg" id="pwDlg"><div class="dlg-box">
+  <h3>重置密码 — <span id="pwUid"></span></h3>
+  <div class="frow"><label>新密码</label><input id="pw_new" placeholder="至少8位"></div>
+  <div class="dlg-acts"><button class="btn btn-tonal" id="pwCancel">取消</button><button class="btn btn-fill" id="pwOk">重置</button></div>
+</div></div>
+
+<div class="dlg" id="editDlg"><div class="dlg-box">
+  <h3>编辑资料 — <span id="edUid"></span></h3>
+  <div class="frow"><label>昵称</label><input id="ed_name"></div>
+  <div class="frow"><label>邮箱</label><input id="ed_email"></div>
+  <div class="frow"><label>备注</label><input id="ed_note"></div>
+  <div class="dlg-acts"><button class="btn btn-tonal" id="edCancel">取消</button><button class="btn btn-fill" id="edOk">保存</button></div>
+</div></div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(m,e){const t=$('toast');t.textContent=m;t.className='on'+(e?' err':'');clearTimeout(t._tm);t._tm=setTimeout(()=>t.className='',2400)}
+function fmtTok(n){n=Number(n)||0;if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(1)+'万';return String(n)}
+const BASE=location.pathname.replace(/\/pages\/.*$/,'');
+async function api(p,opts={}){
+  if(opts.body&&typeof opts.body==='object'){opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});opts.body=JSON.stringify(opts.body);}
+  const r=await fetch(BASE+p,opts); const j=await r.json().catch(()=>null);
+  if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j;
+}
+/* auth-cardkey 的卡密操作 (同网关, 跨插件) */
+const CK = '/plugins/auth-cardkey';
+async function ckApi(p,opts={}){
+  if(opts.body&&typeof opts.body==='object'){opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});opts.body=JSON.stringify(opts.body);}
+  const r=await fetch(CK+p,opts); const j=await r.json().catch(()=>null);
+  if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j;
+}
+
+async function load(){
+  try{
+    const r=await api('/admin/users');
+    const us=r.users||[];
+    if(!us.length){ $('list').innerHTML='<div class="empty">还没有用户</div>'; return; }
+    $('list').innerHTML=us.map(u=>{
+      const st=u.banned?'<span class="badge ban">已封禁</span>':'<span class="badge ok">正常</span>';
+      return '<div class="urow" data-uid="'+esc(u.uid)+'">'
+        +'<div class="head"><div class="ava">'+esc((u.nickname||u.uid||'?')[0].toUpperCase())+'</div>'
+        +'<div style="flex:1;min-width:0"><div class="nm">'+esc(u.nickname||u.name||u.uid)+' '+st+'</div>'
+        +'<div class="mt mono">'+esc(u.uid)+(u.email?' · '+esc(u.email):'')+'</div>'
+        +'<div class="mt">'+(u.createdAt||'').slice(0,10)+' 注册 · '+u.keyCount+' 卡 · 用量 '+fmtTok(u.totalUsed)+' / 额度 '+(u.totalQuota?fmtTok(u.totalQuota):'∞')+'</div></div></div>'
+        +'<div class="acts">'
+        +'<button class="btn btn-tonal" data-act="keys">卡密('+u.keyCount+')</button>'
+        +'<button class="btn btn-tonal" data-act="edit">编辑</button>'
+        +'<button class="btn btn-tonal" data-act="pw">重置密码</button>'
+        +'<button class="btn btn-tonal" data-act="notify">推送通知</button>'
+        +(u.banned?'<button class="btn btn-fill" data-act="unban">解封</button>':'<button class="btn btn-danger" data-act="ban">封禁</button>')
+        +'<button class="btn btn-danger" data-act="del">删除</button></div>'
+        +'<div class="ukeys" hidden></div></div>';
+    }).join('');
+  }catch(e){ $('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
+}
+
+async function toggleKeys(row, u){
+  const box=row.querySelector('.ukeys');
+  if(!box.hidden){ box.hidden=true; return; }
+  box.hidden=false; box.innerHTML='<div class="empty" style="padding:8px">加载中…</div>';
+  const ks=u.keys||[];
+  box.innerHTML = ks.length ? ks.map(k=>
+    '<div class="krow"><span class="mono">'+esc(k.key.slice(0,12))+'…</span><span>'+esc(k.name)+'</span>'
+    +'<span class="badge '+(k.enable?'ok':'ban')+'">'+(k.enable?'启用':'禁用')+'</span>'
+    +'<span class="mt">'+fmtTok(k.usedTokens)+'/'+(k.quotaTokens===-1?'∞':(k.quotaTokens?fmtTok(k.quotaTokens):'0'))+'</span>'
+    +'<button class="btn btn-tonal" style="height:24px;padding:0 9px" data-quota="'+esc(k.key)+'">改额度</button>'
+    +'<button class="btn btn-tonal" style="height:24px;padding:0 9px" data-ktoggle="'+esc(k.key)+'" data-en="'+k.enable+'">'+(k.enable?'禁用':'启用')+'</button></div>'
+  ).join('') + '<div style="margin-top:6px"><button class="btn btn-fill" style="height:26px" data-newkey="'+esc(u.uid)+'">+ 给TA发卡</button></div>'
+    : '<div class="empty" style="padding:8px">无卡 <button class="btn btn-fill" style="height:26px" data-newkey="'+esc(u.uid)+'">+ 给TA发卡</button></div>';
+}
+
+$('list').addEventListener('click', async e=>{
+  const btn=e.target.closest('button'); if(!btn) return;
+  const row=e.target.closest('.urow');
+  /* 卡操作 */
+  if(btn.dataset.quota){ const v=prompt('新的额度 (tokens, 0=零额度, -1=不限):'); if(v===null) return;
+    try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.quota,quotaTokens:Number(v)||0}}); toast('已改额度'); load(); }catch(e2){ toast(e2.message,true);} return; }
+  if(btn.dataset.ktoggle){ try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.ktoggle,enable:btn.dataset.en!=='true'}}); toast('已切换'); load(); }catch(e2){ toast(e2.message,true);} return; }
+  if(btn.dataset.newkey){ const nm=prompt('卡名称:', btn.dataset.newkey+' 的卡'); if(nm===null) return;
+    try{ const r=await ckApi('/admin/keys',{method:'POST',body:{name:nm,uid:btn.dataset.newkey}}); toast('已发卡'); load(); }catch(e2){ toast(e2.message,true);} return; }
+  if(!row) return;
+  const uid=row.dataset.uid, act=btn.dataset.act;
+  if(act==='keys'){ const u=(await api('/admin/users')).users.find(x=>x.uid===uid); toggleKeys(row, u); }
+  else if(act==='edit'){ const u=(await api('/admin/users')).users.find(x=>x.uid===uid);
+    $('edUid').textContent=uid; $('ed_name').value=u.nickname||''; $('ed_email').value=u.email||''; $('ed_note').value=u.note||'';
+    $('editDlg').classList.add('on'); }
+  else if(act==='pw'){ $('pwUid').textContent=uid; $('pw_new').value=''; $('pwDlg').classList.add('on'); }
+  else if(act==='notify'){
+    const msg=prompt('推送给 '+uid+' 的通知内容（只对该用户显示）:\n\n⚠️ 定向通知写在公告串里，能读 bootstrap 的人可见，别发敏感内容。');
+    if(msg===null||!msg.trim()) return;
+    try{
+      /* 同源 cookie 里就带着 adminKey（web 面板进入时设置的），不需要额外头 */
+      const si=await fetch('/admin/api/server-info').then(r=>r.json());
+      const info=(si&&si.serverInfo)||{};
+      /* 行约定: 一行一条; "[时间] 内容"=时间线; "@uid 内容"=定向 —— 见 App 端 Notices.js */
+      const stamp=new Date().toISOString().slice(0,16).replace('T',' ');
+      const line='['+stamp+'] @'+uid+' '+msg.trim().split('\n').join(' ');
+      const next=(info.announcement?info.announcement.trim()+String.fromCharCode(10):'')+line;
+      if(next.length>2000) return toast('公告总长超过 2000 字，请先在「设置」里清理',true);
+      const r=await fetch('/admin/api/server-info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},info,{announcement:next}))});
+      if(!r.ok){ const j=await r.json().catch(()=>null); throw new Error((j&&j.error)||('HTTP '+r.status)); }
+      toast('已推送');
+    }catch(e2){ toast('推送失败: '+e2.message,true); }
+  }
+  else if(act==='ban'){ const reason=prompt('封禁原因 (可留空):'); if(reason===null) return;
+    try{ await api('/admin/users',{method:'POST',body:{action:'ban',uid,reason}}); toast('已封禁'); load(); }catch(e2){ toast(e2.message,true);} }
+  else if(act==='unban'){ try{ await api('/admin/users',{method:'POST',body:{action:'unban',uid}}); toast('已解封'); load(); }catch(e2){ toast(e2.message,true);} }
+  else if(act==='del'){ if(!confirm('确定删除用户 '+uid+'?\n该用户的所有卡密将一并删除且立即失效!')) return;
+    try{ await api('/admin/users',{method:'POST',body:{action:'delete',uid}}); toast('已删除'); load(); }catch(e2){ toast(e2.message,true);} }
+});
+$('pwCancel').onclick=()=>$('pwDlg').classList.remove('on');
+$('pwOk').onclick=async()=>{ const pw=$('pw_new').value; if(pw.length<1) return toast('请输入新密码',true);
+  try{ await api('/admin/users',{method:'POST',body:{action:'resetPassword',uid:$('pwUid').textContent,password:pw}}); $('pwDlg').classList.remove('on'); toast('已重置'); }catch(e){ toast(e.message,true);} };
+$('edCancel').onclick=()=>$('editDlg').classList.remove('on');
+$('edOk').onclick=async()=>{ try{ await api('/admin/users',{method:'POST',body:{action:'update',uid:$('edUid').textContent,nickname:$('ed_name').value,email:$('ed_email').value,note:$('ed_note').value}}); $('editDlg').classList.remove('on'); toast('已保存'); load(); }catch(e){ toast(e.message,true);} };
+$('btnCreate').onclick=async()=>{
+  const username=$('nu_uid').value.trim(), pw=$('nu_pw').value;
+  if(!username||!pw) return toast('用户名和密码必填',true);
+  if(pw.length<8) return toast('密码至少 8 位',true);
+  const qt=$('nu_quota').value.trim();
+  const body={action:'create',username,password:pw,nickname:$('nu_name').value.trim(),email:$('nu_email').value.trim()};
+  if(qt!=='') body.quotaTokens=Number(qt)||0;
+  try{
+    const r=await api('/admin/users',{method:'POST',body});
+    $('nu_uid').value='';$('nu_pw').value='';$('nu_name').value='';$('nu_email').value='';$('nu_quota').value='';
+    if(r && r.key){
+      if(navigator.clipboard) navigator.clipboard.writeText(r.key).catch(()=>{});
+      alert('用户 '+username+' 已创建\n\n自动发放的主卡（已复制到剪贴板）:\n'+r.key+'\n\n额度为 0 时用户无法调用，去用户的「卡密」里充值即可。');
+    } else toast('已创建');
+    load();
+  }catch(e){ toast(e.message,true);} };
+$('btnReload').onclick=load;
+load();
+</script>
+</body>
+</html>

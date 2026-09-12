@@ -1,0 +1,62 @@
+{
+  "id": "thinking-summary",
+  "name": "思考链精简",
+  "version": "1.0.0",
+  "description": "拦截推理模型 reasoning 精简后发给客户端: truncate 截断(零延迟) / summarize 模型总结",
+  "hasServer": true,
+  "permissions": [
+    "network",
+    "storage"
+  ],
+  "configSchema": [
+    {
+      "key": "enable",
+      "label": "启用",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "mode",
+      "label": "模式 truncate|summarize",
+      "type": "string",
+      "default": "truncate"
+    },
+    {
+      "key": "maxCharsPerSegment",
+      "label": "每段保留字数",
+      "type": "number",
+      "default": 80
+    },
+    {
+      "key": "summarizeBaseUrl",
+      "label": "总结端点(OpenAI兼容)",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "summarizeApiKey",
+      "label": "总结端点Key",
+      "type": "password",
+      "default": ""
+    },
+    {
+      "key": "summarizeModel",
+      "label": "总结模型",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "summarizePrompt",
+      "label": "总结提示词",
+      "type": "string",
+      "default": "用一句话中文概括以下思考片段:"
+    },
+    {
+      "key": "maxSegments",
+      "label": "最大段数",
+      "type": "number",
+      "default": 12
+    }
+  ],
+  "icon": "msym:psychology"
+}

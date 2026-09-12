@@ -1,0 +1,14 @@
+{
+  "id": "tunnel",
+  "name": "cloudflared 公网隧道",
+  "version": "1.1.0",
+  "description": "cloudflared tunnel 免费临时公网域名",
+  "hasServer": true,
+  "permissions": [
+    "process",
+    "network"
+  ],
+  "configSchema": [],
+  "icon": "msym:public",
+  "adminPage": "pages/admin.html"
+}

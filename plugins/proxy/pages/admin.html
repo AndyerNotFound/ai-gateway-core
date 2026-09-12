@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>代理设置</title>
+<style>body{font:14px system-ui;background:#12121a;color:#e6e6ef;padding:16px}
+.card{background:#1c1c26;border-radius:12px;padding:14px;margin:10px 0}
+input,select{background:#26263a;border:1px solid #3a3a52;color:#e6e6ef;border-radius:8px;padding:8px;width:100%;box-sizing:border-box;margin:4px 0}
+button{background:#4a4ae0;color:#fff;border:0;border-radius:20px;padding:8px 18px;margin:4px}button.gh{background:transparent;border:1px solid #4a4a66}</style>
+<div id="app">加载中…</div>
+<script>
+const API=(p,o)=>fetch(p,{headers:{'content-type':'application/json'},...o}).then(r=>r.json());
+let list=[],usedBy={};
+function draw(){
+  document.getElementById('app').innerHTML =
+   '<h2>代理设置</h2><div style="opacity:.7">当前实例的出站代理。渠道的「代理」字段填这里的<strong>名字</strong>即可引用。</div>'
+   + '<div class="card"><b>新建 / 覆盖</b><input id="n" placeholder="名字(字母数字._-)"><select id="t"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select><input id="h" placeholder="主机 例如 127.0.0.1"><input id="p" placeholder="端口 例如 7890"><input id="u" placeholder="用户名(可空)"><input id="w" type="password" placeholder="密码(可空; 编辑时留空=不改)"><button onclick="save()">保存</button></div>'
+   + list.map(x=>'<div class="card"><div style="display:flex;justify-content:space-between"><b>'+x.name+'</b><span style="opacity:.6">'+(usedBy[x.name]||[]).join(', ')||'未被引用'+'</span></div>'
+     +'<div style="opacity:.8;margin:6px 0">'+x.type+' · '+x.host+':'+x.port+(x.username?' · '+x.username:'')+'</div>'
+     +'<button class="gh" onclick="test(\''+x.name+'\')">测试</button><button class="gh" onclick="fav(\''+x.name+'\')">编辑</button><button class="gh" onclick="del(\''+x.name+'\')">删除</button></div>').join('');
+}
+function save(){API('save',{method:'POST',body:JSON.stringify({name:n.value,type:t.value,host:h.value,port:+p.value,username:u.value,password:w.value})}).then(r=>{if(r.error)return alert(r.error);list=r.proxies;draw()})}
+function test(nm){API('test',{method:'POST',body:JSON.stringify({name:nm})}).then(r=>alert(nm+': '+(r.reachable?'✓ ':'✗ ')+r.message+' ('+r.ms+'ms)'))}
+function del(nm){if(confirm('删除代理 '+nm+' ?'))API('save',{method:'POST',body:JSON.stringify({action:'delete',name:nm})}).then(r=>{list=r.proxies;draw()})}
+function fav(nm){const x=list.find(y=>y.name===nm);n.value=x.name;t.value=x.type;h.value=x.host;p.value=x.port;u.value=x.username||'';w.value='';}
+API('list').then(r=>{list=r.proxies||[];usedBy=r.usedBy||{};draw()});
+</script>

@@ -1,0 +1,162 @@
+'use strict';
+/* auth.js - 认证 hook 链 + 默认 gatewayKey + TOTP + setup 模式 (文档 §3)
+ *
+ * 架构 (类比 Linux PAM / Spring Security AuthenticationProvider):
+ *   请求 → 内核 checkAuth(req, query, cfg) 调用注册的认证策略链
+ *     ├─ gatewayKey 默认实现(内核内置, 最低优先级)
+ *     ├─ 卡密认证插件(若装了) → 查 apiKeys
+ *     ├─ TOTP 第二验证插件(若装了) → 验证 adminAuth
+ *     └─ ...其他认证策略
+ *   链上第一个返回非 null 的策略生效; 全 null → 401
+ *
+ * 加载顺序: 认证插件(type:'auth') 先于业务插件加载, 失败 fail-closed (由 PluginManager 保证)。
+ * setup 模式: 首次安装白名单——只开放 POST /setup/admin, localhost only, 10 分钟超时。
+ */
+const crypto = require('crypto');
+
+/* ---- TOTP (RFC 6238, SHA1, 30s窗口, 6位) ---- */
+function base32Decode(s) {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  s = String(s || '').toUpperCase().replace(/=+$/, '').replace(/[^A-Z2-7]/g, '');
+  let bits = 0, val = 0; const out = [];
+  for (const ch of s) {
+    val = (val << 5) | A.indexOf(ch); bits += 5;
+    if (bits >= 8) { out.push((val >> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+function base32Encode(buf) {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, val = 0, out = '';
+  for (const b of buf) {
+    val = (val << 8) | b; bits += 8;
+    while (bits >= 5) { out += A[(val >> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += A[(val << (5 - bits)) & 31];
+  return out;
+}
+function totpCode(secretB32, offsetStep = 0) {
+  try {
+    const key = base32Decode(secretB32);
+    if (!key.length) return null;
+    const counter = Math.floor(Date.now() / 1000 / 30) + offsetStep;
+    const buf = Buffer.alloc(8);
+    buf.writeBigUInt64BE(BigInt(counter));
+    const h = crypto.createHmac('sha1', key).update(buf).digest();
+    const o = h[h.length - 1] & 0xf;
+    const code = ((h[o] & 0x7f) << 24 | (h[o + 1] & 0xff) << 16 | (h[o + 2] & 0xff) << 8 | (h[o + 3] & 0xff)) % 1000000;
+    return String(code).padStart(6, '0');
+  } catch (_) { return null; }
+}
+function totpVerify(secretB32, code) {
+  const c = String(code || '').trim();
+  if (!/^\d{6}$/.test(c)) return false;
+  for (const off of [-1, 0, 1]) if (totpCode(secretB32, off) === c) return true;
+  return false;
+}
+
+/* ---- 密码哈希 (scrypt; 用户体系插件用) ---- */
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const h = crypto.scryptSync(String(pw), salt, 32);
+  return 'scrypt:' + salt + ':' + h.toString('base64url');
+}
+function verifyPassword(pw, stored) {
+  try {
+    if (!stored || !stored.startsWith('scrypt:')) return false;
+    const [, salt, h] = stored.split(':');
+    const calc = crypto.scryptSync(String(pw), salt, 32);
+    return crypto.timingSafeEqual(calc, Buffer.from(h, 'base64url'));
+  } catch (_) { return false; }
+}
+
+function genApiKey(len) {
+  const n = Math.min(128, Math.max(8, Number(len) || 24));
+  const bytes = Math.ceil(n * 3 / 4) + 2;
+  return 'sk-' + crypto.randomBytes(bytes).toString('base64url').slice(0, n);
+}
+
+/* 提取请求出示的凭证: Bearer / x-api-key / x-goog-api-key / ?key= */
+function presentedToken(req, query) {
+  const h = req.headers;
+  const auth = h.authorization || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  return bearer || h['x-api-key'] || h['x-goog-api-key'] || (query && query.get('key')) || '';
+}
+
+/* ---- checkAuth 策略链 ----
+ * strategy = {
+ *   name: 'cardkey',                  // 策略名(日志用)
+ *   admin: false,                     // 是否参与管理端鉴权链 (admin 链 / 用户链分开)
+ *   check({token, req, query, cfg}) → null | {ok:true, admin?, userKey?} | {ok:false, status, error}
+ * }
+ * 返回 null = 本策略不认识这个凭证, 继续下一个; 非 null = 定论(通过或拒绝)。
+ */
+class AuthChain {
+  constructor() {
+    this.strategies = [];      // 用户请求链
+    this.adminStrategies = []; // 管理端链 (含第二验证)
+  }
+
+  /* 注册策略。opts.admin=true 表示同时参与管理端链。auth 插件经此挂入。 */
+  registerAuth(strategy, opts = {}) {
+    if (!strategy || typeof strategy.check !== 'function') throw new Error('认证策略必须提供 check()');
+    if (!strategy.name) strategy.name = 'strategy-' + this.strategies.length;
+    if (opts.admin) this.adminStrategies.push(strategy); // admin 策略只在管理链, 不拦用户请求
+    else this.strategies.push(strategy);
+    return strategy.name;
+  }
+  unregisterAuth(name) {
+    this.strategies = this.strategies.filter(s => s.name !== name);
+    this.adminStrategies = this.adminStrategies.filter(s => s.name !== name);
+  }
+
+  /* 用户请求鉴权: gatewayKey 内置(最高优先) → 注册策略链 → 免密兜底 → 401 */
+  check(cfg, req, query) {
+    const token = presentedToken(req, query);
+    // 内核默认实现: gatewayKey
+    if (cfg.gatewayKey && token && token === cfg.gatewayKey) return { ok: true, admin: true, strategy: 'gatewayKey' };
+    // 注册策略链
+    const ctx = { token, req, query, cfg };
+    for (const s of this.strategies) {
+      let r;
+      try { r = s.check(ctx); } catch (e) { r = { ok: false, status: 500, error: '认证策略 ' + s.name + ' 异常: ' + e.message }; }
+      if (r) { r.strategy = s.name; return r; }
+    }
+    // 免密兼容: 无 gatewayKey 且没有任何策略"认领" → 放行
+    if (!cfg.gatewayKey && !this.strategies.length) return { ok: true, admin: true, strategy: 'none' };
+    return { ok: false, status: 401, error: 'invalid key' };
+  }
+
+  /* 管理端鉴权: adminKey 主验证 (Bearer / x-admin-key / ?adminKey= / cookie) → admin 策略链(第二验证等)
+   * 无 adminKey = 免密管理(局域网自用, 兼容旧版; setup 模式创建的实例必有 adminKey) */
+  checkAdmin(cfg, req, query) {
+    const h = req.headers;
+    const auth = h.authorization || '';
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const cookie = h.cookie || '';
+    const cookieKey = (cookie.match(/(?:^|;\s*)adminKey=([^;]+)/) || [])[1] || '';
+    const adminToken = bearer || h['x-admin-key'] || (query && query.get('adminKey')) || cookieKey || '';
+    if (cfg.adminKey && adminToken !== cfg.adminKey) return { ok: false, status: 401, error: '需要管理密码(adminKey)' };
+    const ctx = { token: adminToken, req, query, cfg, admin: true };
+    for (const s of this.adminStrategies) {
+      let r;
+      try { r = s.check(ctx); } catch (e) { r = { ok: false, status: 500, error: '管理端策略 ' + s.name + ' 异常: ' + e.message }; }
+      if (r) { r.strategy = s.name; return r; }
+    }
+    return { ok: true, admin: true, strategy: cfg.adminKey ? 'adminKey' : 'none' };
+  }
+}
+
+/* ---- setup 模式 (文档 §3.3, 白名单) ----
+ * 启动时无管理员 → setup 模式: 只开放 POST /setup/admin, localhost only, 限时窗口。 */
+function isLocalhost(req) {
+  const ip = (req.socket && req.socket.remoteAddress) || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+module.exports = {
+  base32Decode, base32Encode, totpCode, totpVerify,
+  hashPassword, verifyPassword, genApiKey, presentedToken,
+  AuthChain, isLocalhost,
+};

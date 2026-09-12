@@ -1,0 +1,32 @@
+{
+  "name": "ai-gateway-core",
+  "version": "0.1.0",
+  "description": "精简内核 + 插件生态的 AI 网关 (OpenAI/Claude/Gemini/Responses 互转, 多实例, UID 存储)",
+  "license": "AGPL-3.0-only",
+  "main": "src/index.js",
+  "bin": {
+    "agw-core": "bin/agw-core.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/run.js",
+    "start": "node bin/agw-core.js start"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "docs/",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "ai-gateway",
+    "openai",
+    "claude",
+    "gemini",
+    "proxy",
+    "llm"
+  ]
+}

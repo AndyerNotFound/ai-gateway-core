@@ -1,0 +1,57 @@
+{
+  "id": "theme-md3",
+  "name": "Material Design 3 主题",
+  "version": "1.0.0",
+  "type": "theme",
+  "author": "ai-gateway-core",
+  "description": "Gay Core 默认主题：Material Design 3 深色/浅色标准配色。内置主题插件，不可删除或卸载。",
+  "icon": "msym:palette",
+  "hasServer": false,
+  "theme": {
+    "id": "md3",
+    "name": "Material Design 3",
+    "dark": {
+      "primary": "#D0BCFF",
+      "onPrimary": "#381E72",
+      "primaryContainer": "#4F378B",
+      "onPrimaryContainer": "#EADDFF",
+      "secondary": "#CCC2DC",
+      "onSecondary": "#332D41",
+      "secondaryContainer": "#4A4458",
+      "tertiary": "#EFB8C8",
+      "surface": "#141218",
+      "surfaceContainer": "#1D1B20",
+      "surfaceContainerHigh": "#2B2930",
+      "background": "#141218",
+      "onSurface": "#E6E0E9",
+      "onSurfaceVariant": "#CAC4D0",
+      "outline": "#938F99",
+      "error": "#F2B8B5",
+      "onError": "#601410"
+    },
+    "light": {
+      "primary": "#6750A4",
+      "onPrimary": "#FFFFFF",
+      "primaryContainer": "#EADDFF",
+      "onPrimaryContainer": "#21005D",
+      "secondary": "#625B71",
+      "onSecondary": "#FFFFFF",
+      "secondaryContainer": "#E8DEF8",
+      "tertiary": "#7D5260",
+      "surface": "#FEF7FF",
+      "surfaceContainer": "#F3EDF7",
+      "surfaceContainerHigh": "#ECE6F0",
+      "background": "#FEF7FF",
+      "onSurface": "#1D1B20",
+      "onSurfaceVariant": "#49454F",
+      "outline": "#79747E",
+      "error": "#B3261E",
+      "onError": "#FFFFFF"
+    },
+    "cssVars": {
+      "gc-radius-card": "20px",
+      "gc-radius-btn": "12px",
+      "gc-font": "system-ui, sans-serif"
+    }
+  }
+}
