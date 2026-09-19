@@ -1,11 +1,17 @@
 'use strict';
-                                  
-                                                 
-                                    
-      
-                                                           
-                                                                                
-   
+
+
+
+
+
+
+
+
+
+
+
+
+
 const { joinUrl, upstreamRequest } = require('../../src/router.js');
 
 function jsonRes(res, code, o) { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(o)); }
@@ -14,7 +20,7 @@ module.exports.activate = (ctx) => {
   const cfg = ctx.config;
   let lastRun = ctx.data.get('lastRun') || null;
 
-                 
+  
   const fetchModels = (ch) => new Promise((resolve, reject) => {
     const base = String(ch.baseUrl || '').replace(/\/+$/, '');
     if (!base) return reject(new Error('渠道未配置 Base URL'));
@@ -45,15 +51,17 @@ module.exports.activate = (ctx) => {
     }, 'GET');
   });
 
-                                                        
+  
   const syncAll = async (only) => {
     const results = {};
     let changed = false;
-    for (const pick of ctx.pickChannels()) {
-      const ch = pick.ch;
+    const allCh = (ctx.gateway && ctx.gateway.instanceChannels) ? ctx.gateway.instanceChannels() : [];
+    const seen = new Set();
+    for (const ch of allCh) {
       if (!ch) continue;
       if (only && ch.name !== only) continue;
-      if (results[ch.name] !== undefined) continue;
+      if (seen.has(ch.name)) continue;
+      seen.add(ch.name);
       try {
         const ids = await fetchModels(ch);
         const cur = Array.isArray(ch.models) ? ch.models : [];
@@ -66,8 +74,7 @@ module.exports.activate = (ctx) => {
     }
     if (changed) {
       ctx.gateway.saveInstanceConfig((c) => {
-        for (const pick of ctx.pickChannels()) {
-          const ch = pick.ch;
+        for (const ch of allCh) {
           const target = (c.channels || []).find(x => x.name === ch.name);
           if (target && Array.isArray(ch.models)) target.models = ch.models.slice();
         }
@@ -83,26 +90,53 @@ module.exports.activate = (ctx) => {
     ctx.cron('model-sync', iv, () => { syncAll().catch(e => ctx.log('[model-sync]', e.message)); });
   }
 
-                                                
-  ctx.registerRoute('GET', '/models', (req, res, p) => {
+  
+  const hGetModels = (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
-    const channels = ctx.pickChannels().map(x => ({
-      name: x.ch.name,
-      type: x.ch.type,
-      baseUrl: x.ch.baseUrl || '',
-      models: Array.isArray(x.ch.models) ? x.ch.models : [],
-      modelMap: x.ch.modelMap || {},
-      default: !!x.ch.default,
+    const list = (ctx.gateway && ctx.gateway.instanceChannels) ? ctx.gateway.instanceChannels() : ctx.pickChannels().map(x => x.ch);
+    const channels = list.map(ch => ({
+      name: ch.name,
+      type: ch.type,
+      baseUrl: ch.baseUrl || '',
+      models: Array.isArray(ch.models) ? ch.models : [],
+      modelMap: ch.modelMap || {},
+      default: !!ch.default,
     }));
     jsonRes(res, 200, { ok: true, channels, lastRun });
-  });
+  };
+  ctx.registerRoute('GET', '/models', hGetModels);
+  ctx.registerRoute('GET', '/admin/models', hGetModels);
 
-  ctx.registerRoute('POST', '/run', async (req, res, p) => {
+  
+  const summarize = (only, results) => {
+    const names = Object.keys(results || {});
+    let okN = 0, addN = 0; const bad = [];
+    for (const n of names) {
+      const r = results[n] || {};
+      if (r.ok) { okN++; addN += Number(r.added) || 0; } else bad.push(n + ': ' + (r.error || '失败'));
+    }
+    let msg = (only ? ('渠道「' + only + '」') : (okN + ' 个渠道')) + ' 同步完成，共新增 ' + addN + ' 个模型';
+    if (bad.length) msg += '；失败 ' + bad.length + ' 个 → ' + bad.join(' | ');
+    return msg.slice(0, 300);
+  };
+
+  const hRun = async (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const only = p.body && p.body.channel ? String(p.body.channel) : null;
-    try { jsonRes(res, 200, { ok: true, channel: only, results: await syncAll(only) }); }
-    catch (e) { jsonRes(res, 500, { error: e.message }); }
-  });
+    try {
+      const job = syncAll(only);
+      
+
+      const pending = await Promise.race([job.then(r => ({ results: r })), new Promise(r => setTimeout(() => r(null), 8000))]);
+      if (!pending) {
+        job.catch(e => ctx.log('[model-sync]', '后台同步失败: ' + e.message));
+        return jsonRes(res, 200, { ok: true, channel: only, pending: true, toast: '同步已在后台进行（超过 8 秒），稍后重进本页看新增模型' });
+      }
+      jsonRes(res, 200, { ok: true, channel: only, results: pending.results, toast: summarize(only, pending.results) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+  };
+  ctx.registerRoute('POST', '/run', hRun);
+  ctx.registerRoute('POST', '/admin/run', hRun);
 
   ctx.log('模型同步已激活:', cfg.enable ? ('间隔 ' + (cfg.intervalHours || 24) + 'h') : '关(仅手动)');
 };

@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动态计费 · 管理页</title>
+<style>
+  /* ★配色全部走 CSS 变量：App 管理端 WebView 会注入 :root 覆盖实现跟随主题换肤。
+     不要硬编码深色/浅色（硬编码会导致"App 里是浅色、页面还是暗色"的割裂感）。 */
+  :root{
+    --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
+    --md-sys-color-primary-container:#4F378B; --md-sys-color-on-primary-container:#EADDFF;
+    --md-sys-color-secondary-container:#4A4458; --md-sys-color-on-secondary-container:#E8DEF8;
+    --md-sys-color-error:#FFB4AB; --md-sys-color-error-container:#8B1A1A; --md-sys-color-on-error-container:#F9DEDC;
+    --md-sys-color-surface:#141218; --md-sys-color-on-surface:#E6E1E5;
+    --md-sys-color-surface-container:#211F26; --md-sys-color-surface-container-high:#2B2930;
+    --md-sys-color-surface-container-highest:#36343B;
+    --md-sys-color-on-surface-variant:#CAC4D0; --md-sys-color-outline:#938F99; --md-sys-color-outline-variant:#49454F;
+    --md-sys-color-success:#7BD88F; --md-sys-color-warning:#F5C77E;
+    --p:var(--md-sys-color-primary); --sf:var(--md-sys-color-surface);
+    --sfc:var(--md-sys-color-surface-container); --sfh:var(--md-sys-color-surface-container-high);
+    --on:var(--md-sys-color-on-surface); --onv:var(--md-sys-color-on-surface-variant);
+    --ov:var(--md-sys-color-outline-variant); --err:var(--md-sys-color-error);
+    --ok:var(--md-sys-color-success); --warn:var(--md-sys-color-warning);
+    --font:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+    --mono:ui-monospace,'SF Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:14px 12px 40px;background:var(--sf);color:var(--on);font-family:var(--font);font-size:14px}
+  ::-webkit-scrollbar{width:0;height:0}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:var(--onv);font-size:12.5px;line-height:1.6;margin-bottom:14px}
+  .card{background:var(--sfc);border-radius:18px;padding:14px;margin-bottom:12px;border:1px solid var(--ov)}
+  .card h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-bottom:10px}
+  .metric{background:var(--sfh);border-radius:14px;padding:10px;text-align:center}
+  .metric .v{font-size:19px;font-weight:600}
+  .metric .l{font-size:11px;color:var(--onv);margin-top:2px}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--ov);font-size:13px}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--onv)}
+  .kv .v{text-align:right;word-break:break-all}
+  .rule{background:var(--sfh);border-radius:14px;padding:12px;margin-bottom:10px;border:1px solid var(--ov)}
+  .rule.off{opacity:.5}
+  .rule .head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .rule .name{font-weight:600;flex:1}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}
+  .tag.g{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+  .tag.r{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
+  .exp{font-size:12.5px;color:var(--onv);line-height:1.7;margin:4px 0}
+  .exp b{color:var(--on);font-weight:500}
+  button{background:var(--p);color:var(--md-sys-color-on-primary);border:0;border-radius:999px;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit}
+  button.t{background:transparent;color:var(--p);border:1px solid var(--ov)}
+  button.d{background:transparent;color:var(--err);border:1px solid var(--ov)}
+  button:active{opacity:.75}
+  button[disabled]{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .row.mt{margin-top:10px}
+  input,select{background:var(--sfh);color:var(--on);border:1px solid var(--ov);border-radius:12px;padding:8px 10px;font-size:13px;font-family:inherit;min-width:0}
+  input:focus,select:focus{outline:2px solid var(--p);outline-offset:-1px}
+  .field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+  .field label{font-size:12px;color:var(--onv)}
+  .when,.then{background:var(--sfc);border:1px solid var(--ov);border-radius:12px;padding:10px;margin-bottom:8px}
+  .when .row,.then .row{margin-bottom:6px}
+  .when .row:last-child,.then .row:last-child{margin-bottom:0}
+  .msg{font-size:12.5px;margin-top:8px;min-height:16px}
+  .msg.e{color:var(--err)}
+  .msg.o{color:var(--ok)}
+  .hint{font-size:12px;color:var(--onv);line-height:1.65}
+  code{font-family:var(--mono);font-size:12px;background:var(--sfh);padding:1px 5px;border-radius:6px}
+  .toggle{cursor:pointer;user-select:none}
+  .empty{color:var(--onv);font-size:13px;text-align:center;padding:16px 0}
+  .del-x{background:transparent;border:0;color:var(--err);font-size:18px;cursor:pointer;padding:0 4px;line-height:1}
+  .grow{flex:1}
+</style>
+</head>
+<body>
+<h1>动态计费</h1>
+<div class="sub">
+  额度仍由「卡密认证」扣除；这里决定<b>该扣多少</b>。没配价格的模型按原口径 1:1 扣费，
+  所以可以放心逐模型慢慢配。
+</div>
+
+<div class="card" id="overviewCard">
+  <h2>总览</h2>
+  <div id="overview">加载中…</div>
+</div>
+
+<div class="card">
+  <h2>计费设置</h2>
+  <div class="field">
+    <label>计费口径（决定模型价格数字代表什么）</label>
+    <select id="setMode">
+      <option value="weight">权重模式（推荐）：价格 = 每 100 万 tokens 扣的额度。填 2 → 每 1M tokens 扣 2 额度</option>
+      <option value="money">金额模式：价格 = 元 / 100 万 tokens（照官方 API 牌价填），再按下面的汇率折算成扣的额度</option>
+    </select>
+  </div>
+  <div class="field" id="rateWrap" style="display:none">
+    <label>1 额度 = 多少元（金额模式必填。例 0.000002 → 牌价 2.5 元/1M 的模型，每 1M tokens 扣 125 万额度）</label>
+    <input id="setRate" type="number" step="0.0000001" min="0" placeholder="0.000002">
+  </div>
+  <div class="field">
+    <label>用户组折扣（一行一个「分组名=倍率」，如 <code>VIP=0.8</code>）</label>
+    <textarea id="setDiscount" rows="2" style="background:var(--sfh);color:var(--on);border:1px solid var(--ov);border-radius:12px;padding:8px 10px;font-family:var(--mono);font-size:12px"></textarea>
+  </div>
+  <div class="field">
+    <label>明细账保留天数（<code>0 = 永久保留</code>，推荐。填 30 就只留最近 30 天）</label>
+    <input id="setKeep" type="number" min="0" step="1" placeholder="0">
+  </div>
+  <div class="row">
+    <button onclick="saveSettings()">保存设置</button>
+    <span class="msg" id="setMsg"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>全局规则 <span class="tag" id="ruleCount">0</span></h2>
+  <div class="hint" style="margin-bottom:10px">
+    <b>触发条件全部满足</b>才生效；效果的数值按顺序叠加。价格填 <code>0</code> 表示免费，
+    填 <code>0.5</code> 表示半价权重（也可用「整体倍率」表达）。模型自己的规则会在这之后叠加，可以覆盖全局。
+  </div>
+  <div id="rules"></div>
+  <div class="row mt">
+    <button onclick="addRule()">＋ 新建规则</button>
+    <button class="t" onclick="clearRules()">清空全部</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>试算</h2>
+  <div class="hint" style="margin-bottom:8px">预览"这样一次请求会扣多少"，不产生任何扣费。</div>
+  <div class="row">
+    <input id="simModel" placeholder="模型名" style="flex:1;min-width:120px">
+    <input id="simIn" type="number" placeholder="输入 tokens" style="width:110px">
+    <input id="simOut" type="number" placeholder="输出 tokens" style="width:110px">
+  </div>
+  <div class="row mt">
+    <input id="simCR" type="number" placeholder="缓存命中" style="width:110px">
+    <input id="simCW" type="number" placeholder="缓存写入" style="width:110px">
+    <input id="simGrp" placeholder="用户组(可选)" style="width:120px">
+    <button class="t" onclick="simulate()">试算</button>
+  </div>
+  <div id="simResult" class="msg"></div>
+</div>
+
+<script>
+/* 与本插件 server.js 通信：同源，直接 fetch('admin/xxx')（相对路径 → /plugins/billing/admin/xxx）。
+ * 管理端点鉴权由网关的 p.authAdmin() 负责（同源 cookie / App 注入的 adminKey cookie）。
+ * ★BASE 用路径推导，兼容"带实例名前缀"的部署（/实例名/plugins/billing/pages/admin.html）。 */
+const BASE = location.pathname.replace(/\/pages\/.*$/, '');
+
+async function api(path, method, body) {
+  const r = await fetch(BASE + '/' + path, {
+    method: method || 'GET',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch (_) { throw new Error('响应不是 JSON（可能被登录页拦截）: ' + t.slice(0, 120)); }
+  if (!j.ok && j.error) throw new Error(j.error);
+  return j;
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const $ = id => document.getElementById(id);
+
+let TRIGGERS = [], EFFECTS = [], RULES = [], SETTINGS = {};
+
+/* ==================== 总览 ==================== */
+async function loadOverview() {
+  try {
+    const j = await api('admin/status');
+    SETTINGS = j;
+    const t = j.today || {};
+    $('overview').innerHTML =
+      '<div class="metrics">' +
+        metric(j.globalRules, '全局规则') + metric(j.modelsPriced, '已定价模型') +
+        metric(j.modelsWithRules, '带规则模型') + metric(t.requests || 0, '今日请求') +
+      '</div>' +
+      kv('计费口径', j.weightMode ? '权重模式（价格 = 额度 / 1M tokens）' : '金额模式（价格 = 元 / 1M tokens，按汇率折算额度）') +
+      kv('每 token 额度单价', j.moneyPerToken > 0 ? j.moneyPerToken : '未设置') +
+      kv('今日扣费额度', (t.chargedTokens || 0) + ' 额度') +
+      kv('今日上游成本', (t.costMoney != null ? t.costMoney + ' 元' : '—（未配成本表）')) +
+      kv('已配成本模型', (j.costModels || 0) + ' 个') +
+      kv('明细账保留', (j.ledgerKeepDays > 0 ? j.ledgerKeepDays + ' 天' : '永久保留（不会自动删）'));
+    TRIGGERS = j.triggers || []; EFFECTS = j.effects || [];
+    $('setMode').value = j.weightMode ? 'weight' : 'money';
+    $('setRate').value = j.moneyPerToken > 0 ? j.moneyPerToken : '';
+    $('setDiscount').value = Object.entries(j.ugroupDiscount || {}).map(([k, v]) => k + '=' + v).join('\n');
+    $('setKeep').value = j.ledgerKeepDays || 0;
+    syncModeUi();
+  } catch (e) {
+    $('overview').innerHTML = '<div class="msg e">读取失败：' + esc(e.message) + '</div>';
+  }
+}
+function metric(v, l) { return '<div class="metric"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+function kv(k, v) { return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>'; }
+
+function syncModeUi() { $('rateWrap').style.display = $('setMode').value === 'money' ? '' : 'none'; }
+$('setMode').addEventListener('change', syncModeUi);
+
+/* ==================== 设置 ==================== */
+async function saveSettings() {
+  $('setMsg').textContent = '';
+  const disc = {};
+  for (const line of $('setDiscount').value.split('\n')) {
+    const s = line.trim(); if (!s) continue;
+    const i = s.lastIndexOf('=');
+    if (i <= 0) { $('setMsg').className = 'msg e'; $('setMsg').textContent = '折扣格式应为 分组名=倍率：' + s; return; }
+    const k = s.slice(0, i).trim(), v = Number(s.slice(i + 1));
+    if (!(v > 0 && v <= 10)) { $('setMsg').className = 'msg e'; $('setMsg').textContent = '倍率需在 0~10 之间：' + s; return; }
+    disc[k] = v;
+  }
+  try {
+    await api('admin/rules', 'POST', {
+      action: 'settings',
+      weightMode: $('setMode').value === 'weight',
+      moneyPerToken: Number($('setRate').value) || 0,
+      ugroupDiscount: disc,
+      ledgerKeepDays: Number($('setKeep').value) || 0,
+    });
+    $('setMsg').className = 'msg o'; $('setMsg').textContent = '已保存';
+    loadOverview();
+  } catch (e) { $('setMsg').className = 'msg e'; $('setMsg').textContent = '保存失败：' + e.message; }
+}
+
+/* ==================== 规则列表 ==================== */
+async function loadRules() {
+  try {
+    const j = await api('admin/rules');
+    RULES = j.rules || [];
+    if (!TRIGGERS.length) { TRIGGERS = j.triggers || []; EFFECTS = j.effects || []; }
+    renderRules();
+  } catch (e) { $('rules').innerHTML = '<div class="msg e">读取失败：' + esc(e.message) + '</div>'; }
+}
+
+function whenText(r) {
+  const w = r.when || [];
+  if (!w.length) return '无条件（对所有请求生效）';
+  return w.map(c => {
+    const t = TRIGGERS.find(x => x.k === c.k) || { label: c.k };
+    if (c.k === 'expr') return '<b>' + esc(c.v) + '</b>';
+    const v = Array.isArray(c.v) ? c.v.join(' ~ ') : c.v;
+    return esc(t.label) + ' ' + esc(opLabel(c.op)) + ' <b>' + esc(v) + '</b>';
+  }).join(' 且 ');
+}
+function thenText(r) {
+  return (r.then || []).map(e => {
+    const t = EFFECTS.find(x => x.k === e.k) || { label: e.k };
+    if (e.k === 'price') {
+      const fl = { all: '全部', input: '输入', output: '输出', cacheRead: '缓存命中', cacheWrite: '缓存写入' }[e.field] || e.field;
+      const ml = { set: '设为', mult: '乘以', add: '加上' }[e.mode] || e.mode;
+      return esc(t.label) + '：' + esc(fl) + ' ' + esc(ml) + ' <b>' + esc(e.v) + '</b>';
+    }
+    if (e.k === 'free') return '<b>本次免费</b>';
+    return esc(t.label) + ' <b>' + esc(e.v) + '</b>';
+  }).join('，');
+}
+function opLabel(op) {
+  return ({ eq: '=', ne: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤', in: '属于', nin: '不属于', between: '介于' })[op] || op;
+}
+
+function renderRules() {
+  $('ruleCount').textContent = RULES.length;
+  if (!RULES.length) { $('rules').innerHTML = '<div class="empty">还没有全局规则</div>'; return; }
+  $('rules').innerHTML = RULES.map((r, i) =>
+    '<div class="rule' + (r.on === false ? ' off' : '') + '">' +
+      '<div class="head">' +
+        '<span class="name">' + esc(r.note || ('规则 ' + (i + 1))) + '</span>' +
+        '<span class="tag' + (r.on === false ? ' g' : '') + '">' + (r.on === false ? '已停用' : '生效中') + '</span>' +
+      '</div>' +
+      '<div class="exp">触发：' + whenText(r) + '</div>' +
+      '<div class="exp">效果：' + thenText(r) + '</div>' +
+      '<div class="row mt">' +
+        '<button class="t" onclick="toggleRule(' + i + ')">' + (r.on === false ? '启用' : '停用') + '</button>' +
+        '<button class="t" onclick="moveRule(' + i + ',-1)"' + (i === 0 ? ' disabled' : '') + '>上移</button>' +
+        '<button class="t" onclick="moveRule(' + i + ',1)"' + (i === RULES.length - 1 ? ' disabled' : '') + '>下移</button>' +
+        '<button class="d" onclick="editRule(' + i + ')">编辑</button>' +
+        '<button class="d" onclick="delRule(' + i + ')">删除</button>' +
+      '</div>' +
+    '</div>').join('');
+}
+
+async function postRule(body) {
+  try {
+    const j = await api('admin/rules', 'POST', body);
+    RULES = j.rules || RULES;
+    renderRules(); loadOverview();
+    return true;
+  } catch (e) { alert('操作失败：' + e.message); return false; }
+}
+const toggleRule = i => postRule({ action: 'toggle', index: i });
+const moveRule = (i, d) => postRule({ action: 'move', index: i, to: i + d });
+function delRule(i) { if (confirm('删除规则「' + (RULES[i].note || i + 1) + '」？')) postRule({ action: 'delete', index: i }); }
+function clearRules() { if (confirm('清空全部全局规则？模型自带的规则不受影响。')) postRule({ action: 'clear' }); }
+
+/* ==================== 规则编辑（「触发 → 效果」标签式） ==================== */
+function triggerOptions(sel) {
+  return TRIGGERS.map(t => '<option value="' + t.k + '"' + (t.k === sel ? ' selected' : '') + '>' + esc(t.label) + '</option>').join('');
+}
+function triggerOps(k, sel) {
+  const t = TRIGGERS.find(x => x.k === k) || { ops: ['eq'] };
+  return t.ops.map(o => '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + esc(opLabel(o)) + '</option>').join('');
+}
+function effectOptions(sel) {
+  return EFFECTS.map(t => '<option value="' + t.k + '"' + (t.k === sel ? ' selected' : '') + '>' + esc(t.label) + '</option>').join('');
+}
+
+function editRule(i) {
+  const r = i >= 0 ? JSON.parse(JSON.stringify(RULES[i])) : { note: '', on: true, when: [], then: [] };
+  const body = document.createElement('div');
+  body.innerHTML =
+    '<div class="field"><label>规则名称（给自己看的）</label><input id="rfNote" value="' + esc(r.note || '') + '" placeholder="如 夜间长上下文特惠"></div>' +
+    '<div class="field"><label>触发条件（全部满足才生效）</label></div>' +
+    '<div id="rfWhen"></div>' +
+    '<div class="row"><button class="t" type="button" onclick="addWhen()">＋ 添加条件</button></div>' +
+    '<div class="field" style="margin-top:12px"><label>触发效果</label></div>' +
+    '<div id="rfThen"></div>' +
+    '<div class="row"><button class="t" type="button" onclick="addThen()">＋ 添加效果</button></div>' +
+    '<div class="hint" style="margin-top:10px">表达式可用变量：' + esc('ctxLen, input, output, cacheRead, cacheWrite, total, hour, minute, day, weekday, perCall, priceIn, priceOut') + '；支持 <code>+ - * / % &gt; &lt; &gt;= &lt;= == != &amp;&amp; || ! ( )</code>。出于安全考虑不支持函数调用/属性访问。</div>';
+
+  const dlg = mkDialog(i >= 0 ? '编辑规则' : '新建规则', body, '保存');
+  const W = body.querySelector('#rfWhen'), T = body.querySelector('#rfThen');
+  const state = { when: (r.when || []).map(c => Object.assign({}, c)), then: (r.then || []).map(e => Object.assign({}, e)) };
+
+  function drawWhen() {
+    W.innerHTML = state.when.map((c, k) =>
+      '<div class="when"><div class="row">' +
+        '<select onchange="__wK(' + k + ',this.value)">' + triggerOptions(c.k) + '</select>' +
+        '<select onchange="__wO(' + k + ',this.value)">' + triggerOps(c.k, c.op) + '</select>' +
+        '<input class="grow" value="' + esc(Array.isArray(c.v) ? c.v.join(',') : c.v) + '" oninput="__wV(' + k + ',this.value)" placeholder="值">' +
+        '<button class="del-x" type="button" onclick="__wDel(' + k + ')">✕</button>' +
+      '</div>' +
+      (c.k === 'expr' || (TRIGGERS.find(x => x.k === c.k) || {}).hint ? '<div class="hint">' + esc((TRIGGERS.find(x => x.k === c.k) || {}).hint || '') + '</div>' : '') +
+      '</div>').join('') || '<div class="hint">没有条件 = 对所有请求生效</div>';
+  }
+  function drawThen() {
+    T.innerHTML = state.then.map((e, k) => {
+      const t = EFFECTS.find(x => x.k === e.k) || {};
+      let fields = '';
+      if (e.k === 'price') {
+        fields =
+          '<select onchange="__tF(' + k + ',this.value)">' +
+            ['all', 'input', 'output', 'cacheRead', 'cacheWrite'].map(f => '<option value="' + f + '"' + (f === (e.field || 'all') ? ' selected' : '') + '>' +
+              ({ all: '全部字段', input: '输入', output: '输出', cacheRead: '缓存命中', cacheWrite: '缓存写入' })[f] + '</option>').join('') +
+          '</select>' +
+          '<select onchange="__tM(' + k + ',this.value)">' +
+            ['set', 'mult', 'add'].map(m => '<option value="' + m + '"' + (m === (e.mode || 'set') ? ' selected' : '') + '>' +
+              ({ set: '设为', mult: '乘以', add: '加上' })[m] + '</option>').join('') +
+          '</select>';
+      }
+      return '<div class="then"><div class="row">' +
+        '<select onchange="__tK(' + k + ',this.value)">' + effectOptions(e.k) + '</select>' +
+        fields +
+        (e.k === 'free' ? '' : '<input type="number" step="any" class="grow" value="' + esc(e.v) + '" oninput="__tV(' + k + ',this.value)" placeholder="数值">') +
+        '<button class="del-x" type="button" onclick="__tDel(' + k + ')">✕</button>' +
+      '</div>' + (t.hint ? '<div class="hint">' + esc(t.hint) + '</div>' : '') + '</div>';
+    }).join('') || '<div class="hint">至少要有一条效果</div>';
+  }
+
+  window.__wK = (k, v) => { state.when[k].k = v; const t = TRIGGERS.find(x => x.k === v) || {}; state.when[k].op = (t.ops || ['eq'])[0]; if (v === 'expr') state.when[k].v = ''; drawWhen(); };
+  window.__wO = (k, v) => { state.when[k].op = v; drawWhen(); };
+  window.__wV = (k, v) => {
+    const c = state.when[k];
+    if (c.op === 'in' || c.op === 'nin') c.v = v.split(',').map(s => s.trim()).filter(Boolean);
+    else if (c.op === 'between') c.v = v.split(',').map(s => Number(s.trim()));
+    else c.v = v;
+  };
+  window.__wDel = k => { state.when.splice(k, 1); drawWhen(); };
+  window.addWhen = () => { state.when.push({ k: 'model', op: 'eq', v: '' }); drawWhen(); };
+  window.__tK = (k, v) => { state.then[k].k = v; if (v === 'price') { if (!state.then[k].field) state.then[k].field = 'all'; if (!state.then[k].mode) state.then[k].mode = 'set'; } drawThen(); };
+  window.__tF = (k, v) => { state.then[k].field = v; };
+  window.__tM = (k, v) => { state.then[k].mode = v; };
+  window.__tV = (k, v) => { state.then[k].v = Number(v) || 0; };
+  window.__tDel = k => { state.then.splice(k, 1); drawThen(); };
+  window.addThen = () => { state.then.push({ k: 'mult', field: 'all', mode: 'set', v: 1 }); drawThen(); };
+
+  drawWhen(); drawThen();
+
+  dlg.onOk = async () => {
+    const payload = {
+      note: body.querySelector('#rfNote').value.trim(),
+      on: r.on !== false,
+      when: state.when,
+      then: state.then,
+    };
+    if (!payload.then.length) { alert('至少要有一条"触发效果"'); return false; }
+    const ok = await postRule(i >= 0 ? { action: 'update', index: i, rule: payload } : { action: 'add', rule: payload });
+    return ok;
+  };
+}
+
+/* 轻量弹窗（不依赖任何库；配色跟随 CSS 变量） */
+function mkDialog(title, content, okText) {
+  const mask = document.createElement('div');
+  mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;z-index:99';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--sfc);border-radius:22px 22px 0 0;padding:16px 14px 20px;width:100%;max-height:88vh;overflow:auto;border-top:1px solid var(--ov)';
+  box.innerHTML = '<h2 style="font-size:16px;margin:0 0 12px">' + esc(title) + '</h2>';
+  box.appendChild(content);
+  const row = document.createElement('div');
+  row.className = 'row mt';
+  row.style.marginTop = '14px';
+  const cancel = document.createElement('button');
+  cancel.className = 't'; cancel.textContent = '取消';
+  const ok = document.createElement('button');
+  ok.textContent = okText || '确定';
+  row.appendChild(ok); row.appendChild(cancel);
+  box.appendChild(row);
+  mask.appendChild(box);
+  document.body.appendChild(mask);
+  const close = () => { mask.remove(); cleanup(); };
+  const onOk = async () => { const r = await (dlg.onOk ? dlg.onOk() : true); if (r !== false) close(); };
+  ok.onclick = onOk;
+  cancel.onclick = close;
+  mask.onclick = e => { if (e.target === mask) close(); };
+  function cleanup() { for (const k of ['__wK','__wO','__wV','__wDel','__tK','__tF','__tM','__tV','__tDel','addWhen','addThen']) { try { delete window[k]; } catch (_) { window[k] = undefined; } } }
+  const dlg = { onOk: null, close };
+  return dlg;
+}
+function addRule() { editRule(-1); }
+
+/* ==================== 试算 ==================== */
+async function simulate() {
+  $('simResult').className = 'msg';
+  $('simResult').textContent = '计算中…';
+  try {
+    const j = await api('admin/simulate', 'POST', {
+      model: $('simModel').value.trim(), input: Number($('simIn').value) || 0,
+      output: Number($('simOut').value) || 0, cacheRead: Number($('simCR').value) || 0,
+      cacheWrite: Number($('simCW').value) || 0, ugroup: $('simGrp').value.trim(),
+    });
+    const d = j.detail || {};
+    let extra = '';
+    if (d.price) extra = '（输入×' + d.price['in'] + ' 输出×' + d.price.out + ' 命中×' + d.price.cacheRead + ' 写入×' + d.price.cacheWrite + (d.mult !== 1 ? '，倍率×' + d.mult : '') + (d.discount !== 1 ? '，折扣×' + d.discount : '') + '）';
+    $('simResult').className = 'msg o';
+    $('simResult').innerHTML = '应扣 <b>' + esc(j.charged) + '</b> 额度 ' + esc(extra) +
+      (d.hits && d.hits.length ? '<br>命中规则：' + esc(d.hits.join('、')) : '<br><span class="hint">没有规则命中</span>') +
+      (d.mode && d.mode.indexOf('legacy') === 0 ? '<br><span class="hint">该模型未配价格/规则 → 走原口径</span>' : '');
+  } catch (e) { $('simResult').className = 'msg e'; $('simResult').textContent = '试算失败：' + e.message; }
+}
+
+/* ==================== 启动 ==================== */
+loadOverview().then(loadRules);
+</script>
+</body>
+</html>

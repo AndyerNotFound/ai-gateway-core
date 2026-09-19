@@ -1,7 +1,7 @@
 'use strict';
-                                                                        
-                                 
-   
+
+
+
 const http = require('http');
 const https = require('https');
 const net = require('net');
@@ -18,7 +18,7 @@ function normalizeProxy(p) {
     if (!o.host || !o.port) return null;
     return o;
   }
-                                                         
+  
   const m = /^(socks5h?|socks|http|https):\/\/(?:([^:@\/]+)(?::([^@\/]*))?@)?([^:\/@]+):(\d+)\/?$/i.exec(String(p).trim());
   if (!m) return null;
   const scheme = m[1].toLowerCase();
@@ -40,7 +40,7 @@ function dialTcp(host, port, timeout) {
   });
 }
 
-                                              
+
 function makeReader(sock) {
   const st = { buf: Buffer.alloc(0), waiters: [] };
   function pump() {
@@ -134,7 +134,7 @@ async function dialViaProxy(proxy, targetHost, targetPort, timeout) {
   }
 }
 
-                                                  
+
 let directAgents = null;
 function getDirectAgents() {
   if (!directAgents) {
@@ -195,14 +195,14 @@ function getAgents(cfg, ch) {
   return a;
 }
 
-                                                      
+
 function isConnErr(e) {
   const m = String((e && e.message) || e || '');
   return /socket hang up|ECONNRESET|EPIPE|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENOTFOUND/i.test(m);
 }
 
-                                                 
-                                                             
+
+
 function makeFreshAgents(cfg, ch) {
   const raw = ch.proxy ? cfg.proxies[ch.proxy] : null;
   const proxy = (raw && typeof raw === 'object' && raw.type) ? raw : (ch.proxy ? normalizeProxy(ch.proxy) : null);

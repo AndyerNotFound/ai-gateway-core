@@ -31,6 +31,19 @@ button{font-family:var(--font);cursor:pointer;border:none;background:none;color:
 .btn-tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
 .btn-danger{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
 .btn-sm{height:28px;padding:0 10px;font-size:12px}
+.chip2{display:inline-flex;align-items:center;height:28px;padding:0 12px;border-radius:999px;font-size:12px;font-weight:600;
+  border:1px solid var(--md-sys-color-outline);color:var(--md-sys-color-on-surface-variant);background:transparent;margin:0 6px 6px 0}
+.chip2.on{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);border-color:transparent}
+.sheet-scrim{position:fixed;inset:0;background:#0009;z-index:40}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:41;background:var(--md-sys-color-surface-container-high);
+  border-radius:22px 22px 0 0;padding:16px;max-height:86vh;overflow:auto;box-shadow:0 -10px 40px #0009;animation:sheetIn .18s ease-out}
+@keyframes sheetIn{from{transform:translateY(40px);opacity:.4}to{transform:translateY(0);opacity:1}}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sheet-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding-top:12px;
+  border-top:1px solid var(--md-sys-color-outline-variant)}
+.tabs{display:flex;gap:6px;margin:12px 0 8px;background:var(--md-sys-color-surface-container);border-radius:999px;padding:4px}
+.tabs button{flex:1;height:34px;border-radius:999px;font-size:13px;font-weight:600;color:var(--md-sys-color-on-surface-variant)}
+.tabs button.on{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:left;color:var(--md-sys-color-on-surface-variant);font-weight:600;padding:8px 6px;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap}
 td{padding:8px 6px;border-bottom:1px solid var(--md-sys-color-outline-variant);vertical-align:middle}
@@ -68,9 +81,15 @@ tr:last-child td{border-bottom:none}
   <h3><span class="msym" style="font-size:18px">confirmation_number</span> 发卡</h3>
   <div class="g2">
     <div class="frow"><label>名称</label><input id="k_name" placeholder="例如: 用户A"></div>
-    <div class="frow"><label>额度 (tokens, 0/留空=零额度, -1=不限)</label><input id="k_quota" type="number" placeholder="0"></div>
+    <div class="frow"><label>额度 (0/留空=零额度, -1=不限 · 单位=额度)</label><input id="k_quota" type="number" placeholder="0"></div>
     <div class="frow"><label>到期时间 (可留空)</label><input id="k_exp" placeholder="2026-12-31 或 ISO"></div>
     <div class="frow"><label>备注</label><input id="k_note" placeholder="可留空"></div>
+    <div class="frow"><label>访问权限</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="kPermText" style="flex:1;font-size:12.5px;color:var(--md-sys-color-on-surface-variant)">不限（全部模型 · 全部实例）</span>
+        <button class="btn btn-tonal btn-sm" onclick="openPerm(null)">选择…</button>
+      </div>
+    </div>
   </div>
   <button class="btn btn-filled" onclick="createKey()"><span class="msym" style="font-size:16px">auto_awesome</span> 生成卡密</button>
 </div>
@@ -82,9 +101,26 @@ tr:last-child td{border-bottom:none}
   </h3>
   <div style="font-size:11.5px;color:var(--md-sys-color-on-surface-variant);margin:-4px 0 10px" id="keyHint">默认只列管理员分发的卡密</div>
   <div class="tblwrap"><table>
-    <thead><tr><th>名称</th><th>卡密</th><th>用量</th><th>状态</th><th>到期</th><th>操作</th></tr></thead>
-    <tbody id="tbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+    <thead><tr><th>名称</th><th>权限</th><th>卡密</th><th>用量</th><th>状态</th><th>到期</th><th>操作</th></tr></thead>
+    <tbody id="tbody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
   </table></div>
+</div>
+
+<div id="sheetScrim" class="sheet-scrim" hidden onclick="closePerm()"></div>
+<div id="permSheet" class="sheet" hidden>
+  <div class="sheet-head">
+    <b style="font-size:15px">访问权限</b>
+    <button class="btn btn-tonal btn-sm" onclick="closePerm()">关闭</button>
+  </div>
+  <div class="tabs" id="psTabs">
+    <button data-f="all" class="on">不限</button><button data-f="group">按分组</button><button data-f="model">按模型</button>
+  </div>
+  <input id="psSearch" placeholder="搜索分组 / 模型名…" oninput="renderPerm()">
+  <div id="psChips" style="margin-top:10px"></div>
+  <div class="sheet-foot">
+    <span id="psCount" style="font-size:11.5px;color:var(--md-sys-color-on-surface-variant)"></span>
+    <button class="btn btn-filled btn-sm" onclick="savePerm()">保存权限</button>
+  </div>
 </div>
 
 <div id="toast"></div>
@@ -133,7 +169,7 @@ async function load(){
     if (hint) hint.textContent = showUserKeys
       ? ('显示全部 '+all.length+' 张（含 '+hidden+' 张属于用户的）')
       : ('默认只列管理员分发的卡密 · 本页 '+ks.length+' 张，另有 '+hidden+' 张属于用户');
-    if (!ks.length){ $('tbody').innerHTML='<tr><td colspan="6" class="empty">'+(hidden?('没有管理员分发的卡密（有 '+hidden+' 张属于用户，点右上角切换查看）'):'还没有卡密, 先签一个')+'</td></tr>'; return; }
+    if (!ks.length){ $('tbody').innerHTML='<tr><td colspan="7" class="empty">'+(hidden?('没有管理员分发的卡密（有 '+hidden+' 张属于用户，点右上角切换查看）'):'还没有卡密, 先签一个')+'</td></tr>'; return; }
     $('tbody').innerHTML = ks.map(k=>{
       const exp = isExpired(k);
       const pct = k.quotaTokens>0 ? Math.min(100, (k.usedTokens||0)/k.quotaTokens*100) : 0;
@@ -142,29 +178,113 @@ async function load(){
       const owner = k.uid?('<div style="font-size:11px;color:var(--md-sys-color-on-surface-variant)">绑定 '+esc(k.uid)+'</div>'):'';
       return '<tr>'
         +'<td data-l=""><b>'+esc(k.name)+'</b> '+src+owner+(k.note?'<div style="font-size:11px;color:var(--md-sys-color-on-surface-variant)">'+esc(k.note)+'</div>':'')+'</td>'
+        +'<td data-l="权限" style="min-width:130px;font-size:11.5px">'+esc(permText(k))+' <button class="btn btn-tonal btn-sm" onclick="openPerm(\''+esc(k.key)+'\')">改</button></td>'
         +'<td data-l="卡密" class="mono">'+esc(k.key.slice(0,10))+'… <button class="btn btn-tonal btn-sm" onclick="cp(\''+esc(k.key)+'\')">复制</button></td>'
         +'<td data-l="用量" style="min-width:90px">'+fmtTok(k.usedTokens)+' / '+(k.quotaTokens===-1?'∞':(k.quotaTokens>0?fmtTok(k.quotaTokens):'0'))+'<div class="pbar"><i style="width:'+pct+'%"></i></div></td>'
         +'<td data-l="状态">'+st+'</td>'
         +'<td data-l="到期" style="font-size:11.5px">'+(k.expiresAt?esc(k.expiresAt.slice(0,10)):'—')+'</td>'
         +'<td data-l="" style="white-space:nowrap">'
-        +'<button class="btn btn-tonal btn-sm" onclick="recharge(\''+esc(k.key)+'\')">充值</button> '
+        +'<button class="btn btn-tonal btn-sm" data-key="'+esc(k.key)+'" data-name="'+esc(k.name)+'" onclick="rename(this)">改名</button> '+'<button class="btn btn-tonal btn-sm" onclick="recharge(\''+esc(k.key)+'\')">充值</button> '
         +'<button class="btn btn-tonal btn-sm" onclick="toggle(\''+esc(k.key)+'\','+(!k.enable)+')">'+(k.enable?'禁用':'启用')+'</button> '
         +'<button class="btn btn-danger btn-sm" onclick="del(\''+esc(k.key)+'\',\''+esc(k.name)+'\')">删</button></td></tr>';
     }).join('');
-  } catch(e){ $('tbody').innerHTML='<tr><td colspan="6" class="empty">'+esc(e.message)+'</td></tr>'; }
+  } catch(e){ $('tbody').innerHTML='<tr><td colspan="7" class="empty">'+esc(e.message)+'</td></tr>'; }
 }
 function cp(k){ (navigator.clipboard?navigator.clipboard.writeText(k):Promise.reject()).then(()=>toast('已复制')).catch(()=>{prompt('手动复制:',k)}); }
+/* ===================== 访问权限（分组 / 模型 / 实例 多选） =====================
+ * 分组由「模型分组 / 快速分组」定义；实例决定能访问哪些 /<实例名>/ 路径。
+ * 选项来自 GET /admin/options（服务端按当前实例与可用范围给出）。 */
+let pOpts = null;
+let pTarget = null;                     // null = 正在编辑「发卡」表单
+let pDraft = { mode:'all', groups:[], models:[], branches:[] };
+function permText(k){
+  const g = k.groups||[], m = k.models||[], b = k.branches||[];
+  const a = g.length ? ('分组 '+g.join('/')) : (m.length ? (m.length+' 个模型') : '不限');
+  return a + ' · ' + (b.length ? ('实例 '+b.join('/')) : '全部实例');
+}
+function draftText(d){
+  const a = d.mode==='group' ? (d.groups.length?('分组 '+d.groups.join('/')):'按分组(未选)')
+          : d.mode==='model' ? (d.models.length?(d.models.length+' 个模型'):'按模型(未选)') : '不限';
+  return a + ' · ' + (d.branches.length?('实例 '+d.branches.join('/')):'全部实例');
+}
+function paintPermText(){ const e=$('kPermText'); if(e) e.textContent = draftText(pDraft); }
+async function openPerm(key){
+  pTarget = key;
+  if (!pOpts){
+    try { pOpts = await api('/admin/options'); } catch(e){ toast('读取可勾选清单失败: '+e.message, true); return; }
+  }
+  if (key){
+    /* 拉当前卡的权限作为初始值 */
+    try {
+      const r = await api('/admin/keys');
+      const k = (r.keys||[]).find(x=>x.key===key);
+      if (k){
+        const g=k.groups||[], m=k.models||[], b=k.branches||[];
+        pDraft = { mode: g.length?'group':(m.length?'model':'all'), groups:g.slice(), models:m.slice(), branches:b.slice() };
+      }
+    } catch(_){}
+  } else { paintPermText(); }
+  $('sheetScrim').hidden=false; $('permSheet').hidden=false; $('psSearch').value='';
+  renderPerm();
+}
+function closePerm(){ $('sheetScrim').hidden=true; $('permSheet').hidden=true; }
+function togglePerm(facet, v){
+  const arr = facet==='group'?pDraft.groups:(facet==='model'?pDraft.models:pDraft.branches);
+  const i = arr.indexOf(v); if (i>=0) arr.splice(i,1); else arr.push(v);
+  renderPerm();
+}
+function renderPerm(){
+  document.querySelectorAll('#psTabs button').forEach(b=>b.classList.toggle('on', b.dataset.f===pDraft.mode));
+  const q = ($('psSearch').value||'').toLowerCase();
+  const host = $('psChips'); let html = '';
+  const hit = x => !q || String(x).toLowerCase().includes(q);
+  const inst = (pOpts.instances||[]).filter(hit);
+  if (inst.length){
+    html += '<div style="font-size:12px;font-weight:600;margin:6px 0">可访问实例（不选 = 全部）</div>';
+    html += inst.map(x=>'<button class="chip2'+(pDraft.branches.indexOf(x)>=0?' on':'')+'" onclick="togglePerm(\'branch\',\''+esc(x)+'\')">'+esc(x)+'</button>').join('');
+  }
+  if (pDraft.mode==='all'){
+    html += '<div style="font-size:12.5px;color:var(--md-sys-color-on-surface-variant);margin-top:8px">模型范围：不限 —— 可以使用站点全部模型。想限制就切到「按分组」或「按模型」。</div>';
+    $('psCount').textContent='';
+  } else {
+    const isG = pDraft.mode==='group';
+    const all = isG ? (pOpts.groups||[]) : (pOpts.models||[]).map(m=>m.name);
+    const sel = isG ? pDraft.groups : pDraft.models;
+    html += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px">'+(isG?'可访问分组':'可访问模型')+'（不选 = 不限）</div>';
+    html += all.filter(hit).slice(0,400).map(x=>'<button class="chip2'+(sel.indexOf(x)>=0?' on':'')+'" onclick="togglePerm(\''+(isG?'group':'model')+'\',\''+esc(x)+'\')">'+esc(x)+'</button>').join('') || '<span style="font-size:12px">没有匹配项</span>';
+    $('psCount').textContent = '已选 '+sel.length+' 个 · 共 '+all.length+' 个可选';
+  }
+  host.innerHTML = html;
+}
+document.querySelectorAll('#psTabs button').forEach(b=>b.onclick=()=>{ pDraft.mode=b.dataset.f; renderPerm(); });
+async function savePerm(){
+  const body = { groups: pDraft.mode==='group'?pDraft.groups:[], models: pDraft.mode==='model'?pDraft.models:[], branches: pDraft.branches };
+  if (pTarget === null){ paintPermText(); toast('已设置：'+draftText(pDraft)); closePerm(); return; }
+  try { await api('/admin/keys-update', {method:'POST', body:Object.assign({key:pTarget}, body)}); toast('访问权限已保存'); closePerm(); load(); }
+  catch(e){ toast(e.message, true); }
+}
+
 async function createKey(){
   try {
-    const r = await api('/admin/keys', {method:'POST', body:{name:$('k_name').value.trim()||'卡密', quotaTokens:Number($('k_quota').value)||0, expiresAt:$('k_exp').value.trim(), note:$('k_note').value.trim()}});
+    const r = await api('/admin/keys', {method:'POST', body:{
+      name:$('k_name').value.trim()||'卡密', quotaTokens:Number($('k_quota').value)||0,
+      expiresAt:$('k_exp').value.trim(), note:$('k_note').value.trim(),
+      groups: pDraft.mode==='group'?pDraft.groups:[], models: pDraft.mode==='model'?pDraft.models:[], branches: pDraft.branches,
+    }});
     toast('已签发: '+r.key.key);
     $('k_name').value=''; $('k_quota').value=''; $('k_exp').value=''; $('k_note').value='';
+    pDraft = { mode:'all', groups:[], models:[], branches:[] }; paintPermText();
     load();
   } catch(e){ toast(e.message, true); }
 }
 async function recharge(key){
-  const v = prompt('充值额度 (tokens, 加到现有额度上):', '100000'); if(!v) return;
+  const v = prompt('充值额度 (加到现有额度上):', '100000'); if(!v) return;
   try { await api('/admin/keys-update', {method:'POST', body:{key, addQuota:Number(v)}}); toast('已充值'); load(); } catch(e){ toast(e.message, true); }
+}
+async function rename(el){
+  const key = el.dataset.key, cur = el.dataset.name || '';
+  const nn = prompt('新的卡名:', cur); if(nn == null) return;
+  try { await api('/admin/keys-update', {method:'POST', body:{key, name:nn.trim()}}); toast('已改名'); load(); } catch(e){ toast(e.message, true); }
 }
 async function toggle(key, enable){
   try { await api('/admin/keys-update', {method:'POST', body:{key, enable}}); toast(enable?'已启用':'已禁用'); load(); } catch(e){ toast(e.message, true); }

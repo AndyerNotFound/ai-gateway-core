@@ -1,9 +1,9 @@
 'use strict';
-                                         
-                                   
-                                                                 
-                     
-   
+
+
+
+
+
 module.exports.activate = (ctx) => {
   ctx.registerAuth({
     name: 'adminkey',
@@ -17,8 +17,8 @@ module.exports.activate = (ctx) => {
         userKey: {
           key: token,
           name: '管理员',
-          uid: '',
-          quotaTokens: -1,                  
+          uid: 'uadmin',   
+          quotaTokens: -1,   
           usedTokens: 0,
           models: [],
           branches: [],

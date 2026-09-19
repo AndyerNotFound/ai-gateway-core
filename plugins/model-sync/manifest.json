@@ -1,8 +1,8 @@
 {
   "id": "model-sync",
   "name": "模型列表自动同步",
-  "version": "1.1.0",
-  "description": "定期拉上游 /models 合并进渠道 models 列表；支持单渠道手动同步与查询已同步结果",
+  "version": "1.1.1",
+  "description": "定期拉上游 /models 合并进渠道 models 列表；支持单渠道手动同步与查询已同步结果 新增 /admin/run、/admin/models 管理端别名（供管理端 SDUI 页经内核 plugin-call 调用）。",
   "hasServer": true,
   "permissions": [
     "network",

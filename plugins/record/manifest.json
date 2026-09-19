@@ -1,8 +1,8 @@
 {
   "id": "record",
   "name": "请求记录",
-  "version": "1.0.0",
-  "description": "记录每条请求的模型/渠道/token/耗时到 JSONL",
+  "version": "1.0.2",
+  "description": "请求流水账（只记元数据）：每条请求记一行 时间/模型/渠道/输入输出 token/耗时/状态码/格式/卡密名 —— **不记录请求正文、不记录响应正文，也不记录提示词与回答内容**。默认**永久保留**（keepDays=0），可设天数滚动删除。默认关闭；打开后才写入 data/plugins-data/<实例>/record/records/<实例>-<日期>.jsonl。",
   "hasServer": true,
   "permissions": [
     "storage"
@@ -10,15 +10,15 @@
   "configSchema": [
     {
       "key": "enable",
-      "label": "启用",
+      "label": "启用（打开后才开始记录）",
       "type": "boolean",
       "default": false
     },
     {
-      "key": "maxChars",
-      "label": "正文记录上限",
+      "key": "keepDays",
+      "label": "保留天数（0 = 永久保留）",
       "type": "number",
-      "default": 2000
+      "default": 0
     }
   ],
   "icon": "msym:receipt_long"

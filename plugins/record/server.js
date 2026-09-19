@@ -1,9 +1,12 @@
 'use strict';
-                          
-                                 
-                                                                   
-                                                                
-   
+
+
+
+
+
+
+
+
 const fs = require('fs');
 const path = require('path');
 
@@ -22,21 +25,31 @@ module.exports.activate = (ctx) => {
           t: new Date().toISOString(), model: rec.model, ch: rec.channel,
           pt: rec.inputTokens || 0, ct: rec.outputTokens || 0,
           ms: rec.duration || 0, status: rec.status, format: rec.format,
-          keyName: (rec.userKey && (rec.userKey.name || rec.userKey.key || '').toString().slice(0, 24)) || '',
+          keyName: (rec.userKey && (rec.userKey.name || (rec.userKey.key || '').slice(0, 24)) || '').toString().slice(0, 24),
+          
+          keyId: rec.keyId || '',
         };
         fs.appendFile(fileOf(), JSON.stringify(row) + '\n', () => {});
       } catch (_) {}
     });
-                   
-    try {
-      const cutoff = Date.now() - 7 * 86400000;
-      for (const f of fs.readdirSync(dir)) {
-        const m = f.match(/-(\d{8})\.jsonl$/);
-        if (m && new Date(m[1].slice(0, 4) + '-' + m[1].slice(4, 6) + '-' + m[1].slice(6, 8)).getTime() < cutoff) {
-          try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+    
+    const prune = () => {
+      try {
+        const keep = Number(cfg.keepDays) || 0;
+        if (!(keep > 0)) return;
+        const cutoff = Date.now() - keep * 86400000;
+        for (const f of fs.readdirSync(dir)) {
+          const m = f.match(/-(\d{8})\.jsonl$/);
+          if (m && new Date(m[1].slice(0, 4) + '-' + m[1].slice(4, 6) + '-' + m[1].slice(6, 8)).getTime() < cutoff) {
+            try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    };
+    
+
+    ctx.cron(6 * 3600 * 1000, prune);
+    prune();
   }
 
   const readToday = () => {

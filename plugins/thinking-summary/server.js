@@ -1,8 +1,8 @@
 'use strict';
-                                                  
-                                                                                                                  
-                                                                                        
-   
+
+
+
+
 module.exports.activate = (ctx) => {
   const tsCfg = ctx.config;
   tsCfg.enable = !!tsCfg.enable;
@@ -11,7 +11,7 @@ module.exports.activate = (ctx) => {
   tsCfg.maxSegments = Math.max(1, Number(tsCfg.maxSegments) || 12);
   if (!tsCfg.summarizePrompt) tsCfg.summarizePrompt = '用一句话中文概括以下思考片段:';
 
-                             
+  
   function truncateReasoning(text, maxChars) {
     if (!text) return '';
     const out = [];
@@ -33,7 +33,7 @@ module.exports.activate = (ctx) => {
     if (/\/v1$/.test(u)) return u + '/chat/completions';
     return u + '/v1/chat/completions';
   }
-                                       
+  
   function callUpstreamText(baseUrl, apiKey, model, prompt) {
     return new Promise((resolve) => {
       const url = normalizeSummarizeUrl(baseUrl);
@@ -100,7 +100,7 @@ module.exports.activate = (ctx) => {
     }
   }
 
-                              
+  
   function wrapTS(writer) {
     if (!tsCfg.enable) return writer;
     const mode = tsCfg.mode;
@@ -135,7 +135,7 @@ module.exports.activate = (ctx) => {
       };
     }
 
-                                                             
+    
     let buf = '', saw = false, closed = false, reasoningClosed = false, textFlushed = false;
     let pending = 0, pendingEnd = null, textQ = null;
     const flushEnd = () => { if (pendingEnd && pending === 0) { const e = pendingEnd; pendingEnd = null; closed = true; writer.onEvent(e); } };
@@ -167,7 +167,7 @@ module.exports.activate = (ctx) => {
     };
   }
 
-                         
+  
   ctx.hook('needConvert', () => tsCfg.enable);
   ctx.hook('wrapWriter', (writer) => wrapTS(writer));
   ctx.hook('processCanonicalResp', (cresp, c) => {

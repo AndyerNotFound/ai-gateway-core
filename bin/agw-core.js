@@ -1,16 +1,19 @@
-#!/usr/bin/env node
+
 'use strict';
-                
-                                                  
-                                     
-                                                                
-                                         
-                                                   
-                                      
-                                         
-                                                                                        
-                                                
-   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');
@@ -23,10 +26,13 @@ function opt(name, dflt) {
   const i = args.indexOf('--' + name);
   return (i >= 0 && args[i + 1] && !args[i + 1].startsWith('--')) ? args[i + 1] : dflt;
 }
-const DIR = path.resolve(opt('dir', process.env.AGW_DIR || path.join(process.cwd(), 'data')));
+
+
+const DIR = path.resolve(opt('dir', process.env.AGW_DIR || path.join(__dirname, '..', 'data')));
 
 async function main() {
   if (cmd === 'start') {
+    log('[init] 数据目录: ' + DIR);   
     const gw = new Gateway(DIR, { port: opt('port') });
     process.on('unhandledRejection', e => logErr('unhandledRejection:', (e && e.message) || e));
     process.on('uncaughtException', e => logErr('uncaughtException:', (e && e.message) || e));
@@ -125,7 +131,7 @@ async function main() {
       return;
     }
     if (args.includes('--rollback')) {
-                                      
+      
       const files = fs.readdirSync(from).filter(f => f.endsWith('.json.bak-migrate'));
       for (const f of files) fs.renameSync(path.join(from, f), path.join(from, f.replace(/\.bak-migrate$/, '')));
       console.log('已恢复 ' + files.length + ' 个旧配置文件。新存储(instances.json/instances/)请手动确认后删除。');
@@ -154,7 +160,7 @@ async function main() {
     meta.uid = store.index.nextUid || 1;
     store.index.nextUid = meta.uid + 1;
     meta.file = 'instances/' + meta.uid + '.json';
-                 
+    
     const oldFile = path.join(DIR, 'instances', uid + '.json');
     const newFile = path.join(DIR, 'instances', meta.uid + '.json');
     if (fs.existsSync(oldFile)) fs.renameSync(oldFile, newFile);

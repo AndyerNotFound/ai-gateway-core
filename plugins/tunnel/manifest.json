@@ -1,14 +1,49 @@
 {
   "id": "tunnel",
   "name": "cloudflared 公网隧道",
-  "version": "1.1.0",
-  "description": "cloudflared tunnel 免费临时公网域名",
+  "version": "1.4.0",
+  "description": "cloudflared tunnel 免费临时公网域名（v1.4.0: App 用户端 SDUI 页面 + 可配置 watchdog/协议策略 + /status 诚实化；v1.3.0: 默认 http2 + 注册判定的 watchdog）",
   "hasServer": true,
   "permissions": [
     "process",
     "network"
   ],
-  "configSchema": [],
+  "configSchema": [
+    {
+      "key": "watchdogSec",
+      "label": "连接超时(秒)：超时未注册就换策略重建",
+      "type": "number",
+      "default": 20
+    },
+    {
+      "key": "protocolOrder",
+      "label": "协议优先级(逗号分隔: http2,quic)",
+      "type": "string",
+      "default": "http2,quic"
+    },
+    {
+      "key": "maxRetries",
+      "label": "最大重试次数(0-6)",
+      "type": "number",
+      "default": 3
+    },
+    {
+      "key": "edgeIpVersion",
+      "label": "首选 Edge IP 版本(4 / 6 / auto)",
+      "type": "string",
+      "default": "4"
+    }
+  ],
+  "appUi": {
+    "pages": [
+      {
+        "id": "tunnel",
+        "title": "公网隧道",
+        "icon": "send",
+        "ui": "/ui/tunnel"
+      }
+    ]
+  },
   "icon": "msym:public",
   "adminPage": "pages/admin.html"
 }

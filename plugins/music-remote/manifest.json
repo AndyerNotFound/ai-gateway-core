@@ -1,0 +1,23 @@
+{
+  "id": "music-remote",
+  "name": "音乐远程播放",
+  "version": "2.0.0",
+  "description": "读取系统媒体会话（Shizuku），把手机上任何播放器正在播放的音乐通过公网域名流式传给远程听众。支持跟播进度、静音、远程切歌。",
+  "hasServer": true,
+  "permissions": ["network"],
+  "configSchema": [
+    { "key": "musicRoots", "label": "音乐目录（逗号分隔）", "type": "string", "default": "/storage/emulated/0/Music,/storage/emulated/0/岸听/Music" },
+    { "key": "rishPath", "label": "rish 脚本路径", "type": "string", "default": "/data/data/com.termux/files/home/Shizuku/rish" },
+    { "key": "pollSeconds", "label": "状态轮询间隔(秒)", "type": "number", "default": 3 },
+    { "key": "enableControl", "label": "允许远程切歌", "type": "boolean", "default": true },
+    { "key": "publicBaseUrl", "label": "对外地址(隧道域名/局域网 IP，留空自动)", "type": "string", "default": "" }
+  ],
+  "icon": "msym:music_note",
+  "appUi": {
+    "bottomBar": {
+      "title": "音乐",
+      "icon": "star",
+      "ui": "/ui/player"
+    }
+  }
+}

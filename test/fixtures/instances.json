@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "nextUid": 6,
+  "setupMode": false,
+  "setupDeadline": 1788968736710,
+  "adminCreated": true,
+  "instances": [
+    {
+      "uid": 1,
+      "name": "default",
+      "port": 16484,
+      "enabled": true,
+      "file": "instances/1.json"
+    },
+    {
+      "uid": 4,
+      "name": "demo-user-Qwen-Reverse",
+      "port": 0,
+      "enabled": true,
+      "file": "instances/4.json"
+    },
+    {
+      "uid": 5,
+      "name": "MotoMoto",
+      "port": 0,
+      "enabled": true,
+      "file": "instances/5.json"
+    }
+  ],
+  "serverInfo": {
+    "name": "Test",
+    "description": "巴巴博一",
+    "announcement": "巴巴博一\n[2026/09/14 21:13] 像素方块的硬核才是王道😡😡😡那卡通画风根本没技巧😋😋😋😋萌趣的世界才受大众喜爱🥰🥰🥰🥰你那硬核玩法早就被时代淘汰😂😂😂😂像素方块的硬核才是王道😡😡😡那卡通画风根本没技巧😋😋😋😋萌趣的世界才受大众喜爱🥰🥰🥰🥰你那硬核玩法早就被时代淘汰😂😂😂😂",
+    "contact": "巴巴博一",
+    "website": "http://127.0.0.1:16484",
+    "currencySymbol": "😋",
+    "currencyRate": 10
+  },
+  "marketTestMode": true
+}

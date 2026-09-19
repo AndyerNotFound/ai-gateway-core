@@ -1,0 +1,36 @@
+ai-gateway-core 源码提取包 (2026-09-19)
+=======================================
+版本: v0.7.1 (内置 20 个插件)
+来源: 手机运行版 + 开发版逐文件核对 (代码 1:1 一致; 测试套件取全量)
+
+【内容】
+ai-gateway-core/   AI 网关内核 (Node.js, 零运行时依赖)
+  bin/agw-core.js        启动入口
+  src/                   内核 (core / router / auth / store / plugins / canonical / crypt /
+                         stats / usage-history / modelgroups / modelref ...)
+  plugins/               20 个内置插件:
+      auth-cardkey / auth-user / auth-adminkey / balance / billing / legacy-import /
+      model-square (含 908 个模型图标) / model-sync / music-remote / openai-extras /
+      probe / proxy / record / redact / second-auth / theme-compose / theme-md3 /
+      thinking-summary / tunnel / vault
+  web/                   管理端 (admin.html) 与用户端 (user.html) 网页
+  docs/                  设计文档 CORE-DESIGN.md / PLUGIN-DESIGN.md
+  test/                  测试套件 (run.js + 9 个测试模块 + fixtures)
+  package.json / README.md / LICENSE / .gitignore
+
+【处理】
+- 去注释: js/html 注释移除 (字符串 / 模板字面量 / 正则字面量完整保留)
+- 脱敏: 无真实密钥 / 密码 / 内网 IP;
+  测试与演示数据均为伪造凭据 (sk-mock / pass12345 / t@x.com 等);
+  测试夹具中实例名的个人标识已替换为 demo-user
+- 已排除: data/ 运行数据 / instances / vault 与插件配置 / .bak / 日志 / 临时目录
+
+【验证 (全部真跑)】
+- node --check: 47/47 通过
+- HTML 内联脚本: 9/9 通过 (含 type=module 页面)
+- 自带测试套件 (去注释后): 45 通过 / 0 失败 (真实起服 + 插件管理 + SDUI + 认证 + 加密)
+- 代码与手机运行版逐文件 md5 一致
+
+【运行】
+- node bin/agw-core.js start   (需 Node 18+, 零依赖)
+- 管理端: http://127.0.0.1:16484/admin (首启有 setup 流程)

@@ -1,9 +1,9 @@
 'use strict';
-                                                                
-                                                                                                          
-                                        
-                                                                  
-   
+
+
+
+
+
 const { joinUrl, upstreamRequest, isConnErr, RETRYABLE } = require('../../src/router.js');
 
 const ENDPOINTS = [
@@ -77,7 +77,7 @@ module.exports.activate = (ctx) => {
           upRes.on('error', () => tryNext());
           return;
         }
-                        
+        
         res.writeHead(upRes.statusCode, {
           'Content-Type': upRes.headers['content-type'] || 'application/octet-stream',
           'Access-Control-Allow-Origin': '*',

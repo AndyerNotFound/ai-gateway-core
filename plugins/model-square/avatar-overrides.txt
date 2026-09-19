@@ -1,0 +1,52 @@
+# 模型头像覆盖规则（纯文本格式，一行一条，写错也不会影响其他行）
+#
+# 格式:  模型名前缀*  =  图标文件名
+#        值留空 = 强制用首字母头像
+# 图标来源: 本插件 icons/ 目录（906 个 lobehub 图标，文件名就是图标名）
+#
+# 优先级: 精确模型名 > 覆盖规则(越具体越优先) > 内置规则(gpt/claude/gemini/deepseek/…)
+# 改完保存，App 里刷新页面即生效（不用重启网关）
+#
+# ★2026-09-18 起支持四种写法：
+#     精确模型名 = 图标     仅这个名字
+#     前缀*      = 图标     以它开头（原来的写法）
+#     *后缀      = 图标     以它结尾
+#     *包含*     = 图标     名字里出现就行（例：*deepseek* 能抓到 x-deepseek-v4-pro）
+
+nvidia*    = nvidia-color.svg
+openai*    = openai.svg
+sensenova* = sensenova-color.svg
+mistral*   = mistral-color.svg
+agnes*  = agnesai-text.svg
+codex* = openai.svg
+meta*   = meta-color.svg
+nv-mistralai/mistral-nemo-12b-instruct = mistral-color.svg
+# —— 以下几条按需保留/删除（聚合平台常见厂商，图标库里都有）——
+zai*       = zhipu-color.svg
+z-ai*      = zhipu-color.svg
+poolside*  = poolside-color.svg
+snowflake* = snowflake-color.svg
+google*    = gemini-color.svg
+kimi* = moonshot.svg
+moonshot* = moonshot.svg
+poolside* = poolside-text.svg
+microsoft* = microsoft-color.svg
+ibm* = ibm.svg
+gpt* = openai.svg
+01* = yi-color.svg
+glm* = zhipu-color.svg
+mimo* = xiaomimimo.svg
+cf* = cloudflare-color.svg
+step* = stepfun-color.svg
+
+# ── 2026-09-18 补充：按真实模型清单审计后的缺口 ─────────────────────────
+# 背景：内置规则只认"以厂商词开头"，像 x-deepseek-v4-pro、deepseek-ai/xxx 这种
+#       厂商词在中间/带前缀的会被漏掉 —— 插件已加"分词兜底"自动补上（不用你写规则）。
+#       下面两条是图标库里**确实有图标**、但内置规则没覆盖到的厂商：
+dbrx*      = dbrx-brand.svg
+ai21*      = ai21.svg
+# 图标库里没有对应图标的（暂时留文字头像；想要图标就把 svg/png 丢进 icons/ 再写规则）：
+#   writer/palmyra-*  bigcode/starcoder2-15b  adept/fuyu-8b  zyphra/zamba2-7b-instruct
+#   aisingapore/sea-lion-7b-instruct  mimo-v2.5(-pro)  edge-tts  fake-ai-*
+#   hy3 / hy4-preview（如果你想用 Hyperbolic 的图标，取消下面这行注释）
+# hy* = hyperbolic-color.svg

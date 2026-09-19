@@ -1,5 +1,5 @@
 'use strict';
-                                    
+
 const { Gateway, CORE_VERSION } = require('./core');
 const { Store, RESERVED_PATHS, INST_NAME_RE } = require('./store');
 const { AuthChain } = require('./auth');

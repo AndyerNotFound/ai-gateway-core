@@ -62,7 +62,7 @@ button{font-family:var(--font);cursor:pointer;border:none;background:none;color:
     <div class="frow"><label>用户名 *</label><input id="nu_uid" placeholder="3-32 位字母/数字/_/-"></div>
     <div class="frow"><label>初始密码 *</label><input id="nu_pw" placeholder="至少8位"></div>
     <div class="frow"><label>昵称</label><input id="nu_name" placeholder="可留空"></div>
-    <div class="frow"><label>初始额度 (tokens, 留空=零额度)</label><input id="nu_quota" type="number" placeholder="留空 = 0, 需再充值"></div>
+    <div class="frow"><label>初始额度 (留空=零额度)</label><input id="nu_quota" type="number" placeholder="留空 = 0, 需再充值"></div>
     <div class="frow"><label>邮箱</label><input id="nu_email" placeholder="可留空"></div>
     <div class="frow"><label>用户分组</label><select id="nu_group"></select></div>
   </div>
@@ -199,7 +199,7 @@ $('list').addEventListener('click', async e=>{
   const btn=e.target.closest('button'); if(!btn) return;
   const row=e.target.closest('.urow');
   /* 卡操作 */
-  if(btn.dataset.quota){ const v=prompt('新的额度 (tokens, 0=零额度, -1=不限):'); if(v===null) return;
+  if(btn.dataset.quota){ const v=prompt('新的额度 (0=零额度, -1=不限):'); if(v===null) return;
     try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.quota,quotaTokens:Number(v)||0}}); toast('已改额度'); load(); }catch(e2){ toast(e2.message,true);} return; }
   if(btn.dataset.ktoggle){ try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.ktoggle,enable:btn.dataset.en!=='true'}}); toast('已切换'); load(); }catch(e2){ toast(e2.message,true);} return; }
   if(btn.dataset.newkey){ const nm=prompt('卡名称:', btn.dataset.newkey+' 的卡'); if(nm===null) return;

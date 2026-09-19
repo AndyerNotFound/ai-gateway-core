@@ -53,5 +53,20 @@
       "gc-radius-btn": "12px",
       "gc-font": "system-ui, sans-serif"
     }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "seed": {
+        "type": "string",
+        "title": "浅色模式主色",
+        "description": "填一个颜色（如 #4C8BF5），自动生成整套配色；留空 = MD3 默认紫"
+      },
+      "seedDark": {
+        "type": "string",
+        "title": "深色模式主色",
+        "description": "留空 = 与浅色模式使用同一个主色"
+      }
+    }
   }
 }

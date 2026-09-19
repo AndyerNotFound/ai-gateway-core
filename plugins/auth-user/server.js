@@ -1,10 +1,10 @@
 'use strict';
-                                                     
-                                                                                               
-                                                  
-                                                                                   
-                                                                                                    
-   
+
+
+
+
+
+
 const crypto = require('crypto');
 const https = require('https');
 const net = require('net');
@@ -16,7 +16,7 @@ function jsonRes(res, code, o) {
   res.end(JSON.stringify(o));
 }
 
-                                                                                          
+
 function smtpSend(smtpUrl, from, to, subject, text) {
   return new Promise((resolve, reject) => {
     let mu;
@@ -33,19 +33,19 @@ function smtpSend(smtpUrl, from, to, subject, text) {
     const finish = () => { if (!done) { done = true; clearTimeout(timer); try { sock && sock.end(); } catch (_) {} resolve(true); } };
     const send = (line) => { try { sock.write(line + '\r\n'); } catch (e) { fail(e.message); } };
     const expect = (codes, next) => ({ codes, next });
-                   
+    
     let steps;
     const buildSteps = () => {
       steps = [
         expect([220], () => send('EHLO gateway.local')),
         expect([250], () => {
-          if (isSsl || sock.encrypted) { steps.splice(step, 1); return send('AUTH LOGIN'); }                        
-          if (!caps.starttls) { steps.splice(step, 2); return send('AUTH LOGIN'); }                                      
+          if (isSsl || sock.encrypted) { steps.splice(step, 1); return send('AUTH LOGIN'); } 
+          if (!caps.starttls) { steps.splice(step, 2); return send('AUTH LOGIN'); } 
           send('STARTTLS');
         }),
       ];
       if (!isSsl) steps.push(expect([220], () => {
-                         
+        
         const tlsSock = tls.connect({ socket: sock, servername: host, rejectUnauthorized: false }, () => {
           sock = tlsSock; send('EHLO gateway.local');
         });
@@ -71,7 +71,7 @@ function smtpSend(smtpUrl, from, to, subject, text) {
       if (/^250[ -]STARTTLS$/i.test(line.trim())) caps.starttls = true;
       const m = /^(\d{3})([ -])/.exec(line);
       if (!m) return;
-      if (m[2] === '-') return;           
+      if (m[2] === '-') return; 
       const code = Number(m[1]);
       const st = steps[step];
       if (!st) return;
@@ -79,12 +79,13 @@ function smtpSend(smtpUrl, from, to, subject, text) {
       step++;
       try { st.next && st.next(); } catch (e) { fail(e.message); }
     };
+    const _u8 = new (require('string_decoder').StringDecoder)('utf8');   
     const onData = (chunk) => {
-      buf += chunk.toString('utf8');
+      buf += _u8.write(chunk);
       let i;
       while ((i = buf.indexOf('\r\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2); onLine(line); }
     };
-    const onConnect = () => {                };
+    const onConnect = () => {  };
     const s0 = isSsl
       ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, onConnect)
       : net.connect({ host, port }, onConnect);
@@ -95,8 +96,8 @@ function smtpSend(smtpUrl, from, to, subject, text) {
   });
 }
 
-                                      
-const emailCodes = new Map();                                  
+
+const emailCodes = new Map(); 
 function newEmailCode(email) {
   const code = String(crypto.randomInt(100000, 999999));
   emailCodes.set(email, { code, exp: Date.now() + 600000, lastSent: Date.now() });
@@ -112,17 +113,73 @@ function checkEmailCode(email, code) {
 }
 
 module.exports.activate = (ctx) => {
-  const cfg = ctx.config;
+  
+
+
+  let _cfgCache = null, _cfgRev = -1;
+  const cfgFresh = () => {
+    const r = ctx.configRev ? ctx.configRev() : 0;
+    if (!_cfgCache || r !== _cfgRev) {
+      const fresh = ctx.getPluginConfig('auth-user');
+      _cfgCache = (fresh && typeof fresh === 'object') ? fresh : Object.assign({}, ctx.config);
+      _cfgRev = r;
+    }
+    return _cfgCache;
+  };
+  const cfg = new Proxy({}, {
+    get: (_, k) => cfgFresh()[k],
+    set: (_, k, v) => { cfgFresh()[k] = v; return true; },
+    has: (_, k) => k in cfgFresh(),
+    deleteProperty: (_, k) => { delete cfgFresh()[k]; return true; },
+    ownKeys: () => Reflect.ownKeys(cfgFresh()),
+    getOwnPropertyDescriptor: (_, k) => Object.getOwnPropertyDescriptor(cfgFresh(), k),
+  });
   cfg.users = Array.isArray(cfg.users) ? cfg.users : [];
   cfg.registration = cfg.registration && typeof cfg.registration === 'object' ? cfg.registration : {};
-                                               
+  
   cfg.groups = (Array.isArray(cfg.groups) && cfg.groups.length) ? cfg.groups.map(String) : ['默认'];
   if (cfg.defaultGroup === undefined) cfg.defaultGroup = '默认';
   if (!Array.isArray(cfg._groupsSaved)) { cfg.groups = cfg.groups.slice(); }
   const groupOf = (u) => (u && u.group) || cfg.defaultGroup || '默认';
-  const reg = cfg.registration || {};                                   
-  const save = () => ctx.setPluginConfig(cfg);
-  const apis = () => ctx.gateway.authApis();                   
+  const reg = cfg.registration || {};   
+  
+
+
+
+
+  const save = () => {
+    const snap = {};
+    for (const k of Object.keys(cfg)) snap[k] = cfg[k];
+    ctx.setPluginConfig(snap);
+    if (ctx.configRev) _cfgRev = ctx.configRev();
+  };
+  const apis = () => ctx.gateway.authApis(); 
+
+  
+
+
+
+  const parentRemaining = (uk) => (Number(uk.quotaTokens) === -1
+    ? -1
+    : Math.max(0, (Number(uk.quotaTokens) || 0) - (uk.usedTokens || 0)));
+
+  
+
+
+
+  const clampQuota = (uk, requested) => {
+    const rem = parentRemaining(uk);                 
+    const none = (requested === undefined || requested === null || requested === '');
+    let raw = none ? null : Number(requested);
+    if (raw !== null && !isFinite(raw)) raw = null;
+    if (rem === -1) {
+      if (raw === null) return -1;
+      if (raw === 0) return 0;
+      return raw > 0 ? Math.floor(raw) : -1;
+    }
+    if (raw === null || raw === -1) return rem > 0 ? rem : 0;
+    return Math.min(Math.max(0, Math.floor(raw)), rem);
+  };
 
   const myKeysOf = (uid, mainKey) => {
     const all = apis().listKeys ? apis().listKeys() : [];
@@ -141,8 +198,8 @@ module.exports.activate = (ctx) => {
     return r.userKey;
   };
 
-                                                               
-                                         
+  
+
   ctx.registerTopRoute('POST', '/auth/login', ({ res, body }) => {
     const loginId = String((body && (body.username || body.uid)) || '').trim();
     const user = cfg.users.find(x => x.username === loginId || x.uid === loginId || x.name === loginId);
@@ -153,7 +210,7 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, uid: user.uid, username: user.username || user.name || '', name: user.name || '', nickname: user.nickname || '', avatar: user.avatar || '', keys: keys.map(k => Object.assign({ key: k.key, isMain: !!k.isMain }, apis().creditsJSON(k))) });
   });
 
-                                      
+  
   ctx.registerTopRoute('POST', '/auth/password', ({ res, auth, body }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     if (!uk.uid) return jsonRes(res, 400, { error: '卡密未绑定账号, 无法改密码' });
@@ -168,11 +225,35 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true });
   });
 
-                    
+  
+
+
+  ctx.registerTopRoute('POST', '/auth/rotate-main', ({ res, body }) => {
+    const loginId = String((body && (body.username || body.uid)) || '').trim();
+    const user = cfg.users.find(x => x.username === loginId || x.uid === loginId || x.name === loginId);
+    if (!user || !verifyPassword(String((body && body.password) || ''), user.passwordHash))
+      return jsonRes(res, 401, { error: '用户名或密码错误' });
+    if (user.banned) return jsonRes(res, 403, { error: '该账号已被封禁' + (user.banReason ? ': ' + user.banReason : ''), banned: true });
+    const all = apis().listKeys ? apis().listKeys() : [];
+    const old = all.find(k => k && k.uid === user.uid && k.isMain);
+    if (!old) return jsonRes(res, 404, { error: '未找到主卡, 请联系管理员' });
+    const newKey = apis().genKey();
+    
+    const f = {};
+    ['name','enable','quotaTokens','uid','models','branches','isMain','by','redact','note','groups','expiresAt'].forEach(kk => { if (old[kk] !== undefined) f[kk] = old[kk]; });
+    f.key = newKey;
+    f.createdAt = new Date().toISOString();
+    apis().addKey(f);
+    apis().deleteKey(old.key);
+    save();
+    jsonRes(res, 200, { ok: true, key: newKey, uid: user.uid, message: '主卡已轮换, 旧卡立即失效' });
+  });
+
+  
   ctx.registerTopRoute('GET', '/auth/register', ({ res }) => {
     jsonRes(res, 200, { enable: !!reg.enable, captchaProvider: reg.captchaProvider || 'none', captchaSiteKey: reg.captchaSiteKey || '', minPasswordLen: reg.minPasswordLen || 8, emailVerify: !!(reg.emailVerify && reg.emailVerify.enable) });
   });
-                                                             
+  
   ctx.registerTopRoute('POST', '/auth/email-code', async ({ res, body }) => {
     if (!reg.enable) return jsonRes(res, 403, { error: '该服务器未开放注册' });
     const ev = reg.emailVerify || {};
@@ -199,7 +280,7 @@ module.exports.activate = (ctx) => {
     if (!/^[A-Za-z0-9_-]{3,32}$/.test(username)) return jsonRes(res, 400, { error: '用户名需 3-32 位字母/数字/下划线' });
     if (pw.length < (reg.minPasswordLen || 8)) return jsonRes(res, 400, { error: '密码至少 ' + (reg.minPasswordLen || 8) + ' 位' });
     if (cfg.users.some(x => x.username === username || x.name === username)) return jsonRes(res, 409, { error: '该用户名已被注册' });
-              
+    
     const ev = reg.emailVerify || {};
     let email = '';
     if (ev.enable) {
@@ -223,25 +304,25 @@ module.exports.activate = (ctx) => {
       });
       if (!okT) return jsonRes(res, 403, { error: '人机验证失败' });
     }
-                                            
+    
     const uid = 'u' + crypto.randomBytes(4).toString('hex');
     const user = { uid, username, name: username, group: cfg.defaultGroup, passwordHash: hashPassword(pw), nickname: '', avatar: '', email, banned: false, note: '注册', createdAt: new Date().toISOString() };
     cfg.users.push(user);
     save();
-           
+    
     let mainKey = null;
     if (apis().addKey) {
       const dq = Math.floor(Number(reg.defaultQuota) || 0);
-                                                                       
-                                                            
-                                                       
+      
+      
+
       mainKey = { key: apis().genKey(), name: username + ' 的主卡', enable: true, quotaTokens: dq > 0 ? dq : 0, uid, models: [], branches: [], isMain: true, by: 'auto', createdAt: new Date().toISOString() };
       apis().addKey(mainKey);
     }
     jsonRes(res, 200, { ok: true, uid, username, key: mainKey ? mainKey.key : null });
   });
 
-                              
+  
   ctx.registerTopRoute('GET', '/auth/me', ({ res, auth }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
@@ -257,44 +338,59 @@ module.exports.activate = (ctx) => {
     });
   });
 
-                                    
+  
   ctx.registerTopRoute('POST', '/auth/profile', ({ res, auth, body }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     const j = body || {};
     if (uk.uid) {
-      const user = cfg.users.find(x => x.uid === uk.uid);
-      if (user) {
-        if (j.nickname !== undefined) user.nickname = String(j.nickname).slice(0, 64);
-        if (j.name !== undefined) user.name = String(j.name).slice(0, 64);
-        if (j.avatar !== undefined) user.avatar = String(j.avatar).slice(0, 300);
+      let user = cfg.users.find(x => x.uid === uk.uid);
+      if (!user) {
+        
+
+        user = {
+          uid: uk.uid,
+          username: uk.name || uk.uid,
+          name: uk.name || uk.uid,
+          nickname: '',
+          avatar: '',
+          group: cfg.defaultGroup || '默认',
+          note: '自动创建(管理员身份)',
+          createdAt: new Date().toISOString(),
+        };
+        cfg.users.push(user);
         save();
       }
+      if (j.nickname !== undefined) user.nickname = String(j.nickname).slice(0, 64);
+      if (j.name !== undefined) user.name = String(j.name).slice(0, 64);
+      if (j.avatar !== undefined) user.avatar = String(j.avatar).slice(0, 300);
+      save();
+    } else {
+      
+      return jsonRes(res, 400, { error: '该身份没有用户记录, 无法保存资料' });
     }
     if (j.cardName !== undefined && apis().updateKey) apis().updateKey(uk.key, { name: String(j.cardName).slice(0, 64) });
     jsonRes(res, 200, { ok: true });
   });
 
-                      
+  
   ctx.registerTopRoute('GET', '/auth/mykeys', ({ res, auth }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     const keys = myKeysOf(uk.uid, uk.key);
     jsonRes(res, 200, { keys: keys.map(k => Object.assign({ key: k.key, redact: k.redact == null ? null : !!k.redact, isMain: k.key === uk.key }, apis().creditsJSON(k))) });
   });
-  ctx.registerTopRoute('POST', '/auth/mykeys', ({ res, auth, body }) => {               
+  ctx.registerTopRoute('POST', '/auth/mykeys', ({ res, auth, body }) => { 
     const uk = requireUser(auth, res); if (!uk) return;
     const j = body || {};
-    if (uk.quotaTokens === 0) return jsonRes(res, 403, { error: '主卡额度为 0, 无法发子卡, 请联系管理员充值' });
     const pm = uk.models || [], pb = uk.branches || [];
     const models = Array.isArray(j.models) ? j.models.map(String).filter(m => !pm.length || pm.includes(m)) : [];
+    const groups = Array.isArray(j.groups) ? j.groups.map(String).filter(x => !(uk.groups || []).length || (uk.groups || []).includes(x)) : [];
     const branches = Array.isArray(j.branches) ? j.branches.map(String).filter(b => !pb.length || pb.includes(b)) : [];
-    let quota = Math.max(0, Number(j.quotaTokens) || 0);
-    if (uk.quotaTokens === -1) {
-      quota = quota > 0 ? quota : -1;                        
-    } else if (uk.quotaTokens > 0) {
-      const remaining = uk.quotaTokens - (uk.usedTokens || 0); if (quota <= 0 || quota > remaining) quota = remaining;
-      apis().updateKey(uk.key, { quotaTokens: uk.quotaTokens - quota });            
+    
+    const quota = clampQuota(uk, j.quotaTokens);
+    if (Number(uk.quotaTokens) > 0 && quota > 0) {
+      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); 
     }
-    const nk = { key: apis().genKey(), name: String(j.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, branches, note: String(j.note || '用户自助').slice(0, 200), by: 'user', createdAt: new Date().toISOString() };
+    const nk = { key: apis().genKey(), name: String(j.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, groups, branches, note: String(j.note || '用户自助').slice(0, 200), by: 'user', createdAt: new Date().toISOString() };
     apis().addKey(nk);
     jsonRes(res, 200, { ok: true, key: nk });
   });
@@ -306,15 +402,21 @@ module.exports.activate = (ctx) => {
     const patch = {};
     if (j.name !== undefined) patch.name = String(j.name).slice(0, 64);
     if (j.models !== undefined) { const pm = uk.models || []; patch.models = Array.isArray(j.models) ? j.models.map(String).filter(m => !pm.length || pm.includes(m)) : []; }
+    if (j.groups !== undefined) { const pg = uk.groups || []; patch.groups = Array.isArray(j.groups) ? j.groups.map(String).filter(x => !pg.length || pg.includes(x)) : []; }
     if (j.branches !== undefined) { const pb = uk.branches || []; patch.branches = Array.isArray(j.branches) ? j.branches.map(String).filter(b => !pb.length || pb.includes(b)) : []; }
     if (j.redact !== undefined) patch.redact = j.redact == null ? null : !!j.redact;
-    if (j.quotaTokens !== undefined && j.key !== uk.key) {
-      let q = Math.max(0, Number(j.quotaTokens) || 0);
-      if (uk.quotaTokens > 0) q = Math.min(q, uk.quotaTokens - (uk.usedTokens || 0));
-      patch.quotaTokens = q;
+    let quotaSkipped = false;
+    if (j.quotaTokens !== undefined) {
+      if (j.key === uk.key) {
+        
+        quotaSkipped = true;
+      } else {
+        
+        patch.quotaTokens = clampQuota(uk, j.quotaTokens);
+      }
     }
     apis().updateKey(j.key, patch);
-    jsonRes(res, 200, { ok: true });
+    jsonRes(res, 200, { ok: true, quotaSkipped });
   });
   ctx.registerTopRoute('POST', '/auth/mykeys-delete', ({ res, auth, body }) => {
     const uk = requireUser(auth, res); if (!uk) return;
@@ -325,24 +427,26 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true });
   });
 
-                                  
+  
   ctx.registerTopRoute('GET', '/v1/branches', ({ res, auth }) => {
     const r = auth();
     if (!r.ok) return jsonRes(res, r.status || 401, { error: r.error || 'invalid key' });
     jsonRes(res, 200, { branches: branchesOf(r.userKey) });
   });
 
-                                                                                    
-                                                                         
+  
+
   const ukOf = (p) => {
     const t = (p && p.token) || '';
     if (!t || !apis().findKey) return null;
-    const uk = apis().findKey(null, t);
+    
+    const uk = (p && p.userKey) ? p.userKey : apis().findKey(null, t);
     if (!uk || uk.enable === false) return null;
     return uk;
   };
   const fmtTok = n => n == null ? '不限' : (n >= 1e8 ? (n / 1e8).toFixed(2) + ' 亿' : n >= 1e4 ? (n / 1e4).toFixed(1) + ' 万' : String(n));
-  const creditText = (cd) => cd.zeroLimited ? '零额度 · 请联系管理员充值' : cd.unlimited ? '不限量' : null;
+  
+  const creditText = (cd) => cd.zeroLimited ? '零额度 · 调用模型需充值' : cd.unlimited ? '不限量' : null;
   const keyState = (k, mainKey) => {
     const cd = apis().creditsJSON(k);
     const isMain = k.key === mainKey;
@@ -359,9 +463,112 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  ctx.registerRoute('GET', '/ui/personal', (req, res, p) => {
-    const uk = ukOf(p);
-    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+  
+
+
+
+
+
+
+  
+  const accessOptions = (parent, targetKey) => {
+    let o = { groups: [], models: [], instances: [] };
+    const scope = (parent && targetKey && targetKey !== parent.key) ? parent : null;
+    try { o = Object.assign(o, apis().accessOptions ? apis().accessOptions(scope) : {}); } catch (_) { }
+    return o;
+  };
+  
+  const clampPerm = (parent, mode, groups, models) => {
+    const pg = Array.isArray(parent && parent.groups) ? parent.groups : [];
+    const pm = Array.isArray(parent && parent.models) ? parent.models : [];
+    const inter = (a, b) => a.filter(x => b.includes(x));
+    const out = {};
+    out.groups = pg.length ? (mode === 'group' ? inter(groups, pg) : pg.slice()) : (mode === 'group' ? groups.slice() : []);
+    out.models = pm.length ? (mode === 'model' ? inter(models, pm) : pm.slice()) : (mode === 'model' ? models.slice() : []);
+    return out;
+  };
+  const effMode = (k) => {
+    const g = Array.isArray(k.groups) ? k.groups : [];
+    const m = Array.isArray(k.models) ? k.models : [];
+    if (g.length) return 'group';
+    if (m.length) return 'model';
+    return 'all';
+  };
+  const permText = (k) => {
+    const g = Array.isArray(k.groups) ? k.groups : [];
+    const m = Array.isArray(k.models) ? k.models : [];
+    const b = Array.isArray(k.branches) ? k.branches : [];
+    const parts = [];
+    parts.push(g.length ? '分组 ' + g.join('/') : (m.length ? m.length + ' 个模型' : '全部模型'));
+    if (b.length) parts.push('实例 ' + b.join('/'));
+    return parts.join(' · ');
+  };
+
+  
+  const editKeyPage = (uk, targetKey, mode, groups, models, q) => {
+    const opts = accessOptions(uk, targetKey);
+    const allGroups = (opts.groups || []).map(String);
+    const kw = String(q || '').toLowerCase();
+    const allModels = (opts.models || []).filter(m => !kw || String(m.name).toLowerCase().includes(kw));
+    const isMain = targetKey === uk.key;
+    const pass = { key: targetKey, mode: mode, groups: groups, models: models, q: q };
+    const modeChip = (val, label, icon) => ({
+      type: 'chip', text: label, icon: icon, selected: mode === val,
+      action: { type: 'intent', endpoint: './intent/key-edit-mode', body: Object.assign({}, pass, { mode: val }) },
+    });
+    const cell = (facet, label, value, on) => ({
+      type: 'chip', text: label, selected: on,
+      action: { type: 'intent', endpoint: './intent/key-edit-toggle', body: Object.assign({}, pass, { facet: facet, value: value }) },
+    });
+    let grid = [];
+    if (mode === 'group') grid = allGroups.map(g => cell('group', g, g, groups.includes(g)));
+    else if (mode === 'model') grid = allModels.map(m => cell('model', m.name, m.name, models.includes(m.name)));
+
+    const body2 = [];
+    if (mode === 'all') {
+      body2.push({ type: 'text', text: '当前不限模型 —— 这张卡密可以使用全部模型。', style: 'caption' });
+      body2.push({ type: 'text', text: '想限制的话，点上面的「按分组」或「按模型」再勾选。', style: 'caption' });
+    } else {
+      body2.push({ type: 'text', text: (mode === 'group' ? '选择分组' : '选择模型') + '（可多选，已选 ' + grid.filter(x => x.selected).length + ' 个）', style: 'title4' });
+      if (mode === 'group') {
+        body2.push({ type: 'text', text: '分组由管理端「模型分组 / 快速分组」定义；未定义时按模型名前缀（如 gpt / claude）分组。', style: 'caption' });
+      } else {
+        body2.push({ type: 'input', key: 'q', label: '搜索模型名', value: q || '', leadingIcon: 'msym:search', submit: { type: 'intent', endpoint: './intent/key-edit-search', body: Object.assign({}, pass, { q: '{{input.q}}' }) } });
+        body2.push({ type: 'text', text: '可选 ' + allModels.length + ' 个' + (kw ? '（搜索：' + q + '）' : ''), style: 'caption' });
+      }
+      body2.push({ type: 'list', items: '{{state.grid}}', columns: 2, template: {
+        type: 'chip', text: '{{item.label}}', selected: '{{item.on}}',
+        action: { type: 'intent', endpoint: './intent/key-edit-toggle', body: Object.assign({}, pass, { facet: mode === 'group' ? 'group' : 'model', value: '{{item.value}}' }) },
+      } });
+    }
+    const children = [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 8, children: [
+        { type: 'text', text: '访问权限', style: 'title3' },
+        { type: 'text', text: '卡密：' + (isMain ? '主卡' : (targetKey || '').slice(0, 8) + '…' + (targetKey || '').slice(-4)) + ' · ' + permText({ groups: groups, models: models }), style: 'caption' },
+        { type: 'hscroll', gap: 8, children: [
+          modeChip('all', '不限', 'msym:check'),
+          modeChip('group', '按分组', 'msym:group'),
+          modeChip('model', '按模型', 'msym:apps'),
+        ] },
+      ] },
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: body2.concat([
+        { type: 'row', gap: 10, children: [
+          { type: 'button', text: '保存权限', style: 'filled', shape: 'pill', weight: 1, icon: 'msym:check',
+            action: { type: 'intent', endpoint: './intent/key-edit-save', body: pass } },
+          { type: 'button', text: '返回', style: 'outlined', shape: 'pill', weight: 1,
+            action: { type: 'intent', endpoint: './intent/key-edit-back', body: {} } },
+        ] },
+      ]) },
+    ];
+    return {
+      gcui: 1, title: '访问权限',
+      state: { grid: grid.map(x => ({ label: x.text, value: x.action.body.value, on: !!x.selected })) },
+      root: { type: 'column', gap: 14, children },
+    };
+  };
+
+  
+  const buildPersonalPage = (uk) => {
     const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
     const cd = apis().creditsJSON(uk);
     const display = (user && (user.nickname || user.username || user.name)) || uk.name || uk.uid || '匿名用户';
@@ -372,8 +579,8 @@ module.exports.activate = (ctx) => {
     const quotaTone = cd.zeroLimited ? 'error' : cd.unlimited ? 'primary' : 'success';
     const quotaCap = cd.zeroLimited ? '零额度 · 请联系管理员充值' : cd.unlimited ? '不限量' : ('总额度 ' + fmtTok(cd.quotaTokens));
     const children = [
-                                    
-      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+      
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: [
         { type: 'row', gap: 14, children: [
           { type: 'avatar', text: initial, size: 56, url: (user && user.avatar) || '' },
           { type: 'column', weight: 1, gap: 6, children: [
@@ -388,8 +595,8 @@ module.exports.activate = (ctx) => {
         { type: 'kv', label: '卡密', value: uk.key.slice(0, 8) + '…' + uk.key.slice(-4) },
         ...(cd.expiresAt ? [{ type: 'kv', label: '到期', value: cd.expiresAt }] : []),
       ] },
-                               
-      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+      
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: [
         { type: 'row', gap: 8, children: [
           { type: 'column', weight: 1, gap: 4, children: [
             { type: 'text', text: '剩余额度', style: 'caption', color: '$onSurfaceVariant' },
@@ -401,23 +608,25 @@ module.exports.activate = (ctx) => {
         { type: 'kv', label: '说明', value: quotaCap },
         { type: 'kv', label: '已使用', value: fmtTok(cd.usedTokens) },
       ] },
-                                
-      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '我的卡密 (' + keys.length + ')', children: [
-        { type: 'list', items: '{{state.keys}}', template: { type: 'row', gap: 8, children: [
-          { type: 'column', weight: 1, gap: 5, children: [
-            { type: 'row', gap: 6, children: [
-              { type: 'text', text: '{{item.name}}', style: 'body' },
-              { type: 'badge', text: '{{item.badgeText}}', tone: '{{item.badgeTone}}' },
-            ] },
-            { type: 'text', text: '{{item.keyShort}} · {{item.quotaText}}', style: 'caption' },
+      
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, title: '我的卡密 (' + keys.length + ')', children: [
+        { type: 'list', items: '{{state.keys}}', template: { type: 'column', gap: 10, children: [
+          { type: 'row', gap: 6, children: [
+            { type: 'text', text: '{{item.name}}', style: 'body', weight: 1 },
+            { type: 'badge', text: '{{item.badgeText}}', tone: '{{item.badgeTone}}' },
           ] },
-          { type: 'chip', text: '复制', icon: 'msym:copy', action: { type: 'copy', text: '{{item.key}}', toast: '卡密已复制' } },
-          { type: 'chip', text: '删除', icon: 'msym:delete', visible: '{{item.canDelete}}', action: { type: 'intent', endpoint: './intent/delete-key', confirm: '确定删除这张卡密吗?', body: { key: '{{item.key}}' } } },
+          { type: 'text', text: '{{item.keyShort}} · {{item.quotaText}}', style: 'caption' },
+          { type: 'row', gap: 8, children: [
+            { type: 'chip', text: '复制', icon: 'msym:copy', action: { type: 'copy', text: '{{item.key}}', toast: '卡密已复制' } },
+            { type: 'chip', text: '改名', icon: 'msym:edit', action: { type: 'intent', endpoint: './intent/key-rename-open', body: { key: '{{item.key}}' } } },
+            { type: 'chip', text: '权限', icon: 'msym:key', action: { type: 'intent', endpoint: './intent/key-edit-open', body: { key: '{{item.key}}' } } },
+            { type: 'chip', text: '删除', icon: 'msym:delete', visible: '{{item.canDelete}}', action: { type: 'intent', endpoint: './intent/delete-key', confirm: '确定删除这张卡密吗?', body: { key: '{{item.key}}' } } },
+          ] },
         ] } },
         { type: 'button', text: '发子卡', style: 'filled', shape: 'pill', icon: 'msym:add', action: { type: 'open', target: 'page:create-key' } },
       ] },
-              
-      { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '账号', children: [
+      
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, title: '账号', children: [
         { type: 'row', gap: 8, children: [
           { type: 'button', text: '编辑资料', style: 'outlined', shape: 'pill', weight: 1, action: { type: 'open', target: 'page:edit-profile' } },
           ...(uk.uid ? [{ type: 'button', text: '修改密码', style: 'outlined', shape: 'pill', weight: 1, action: { type: 'open', target: 'page:change-password' } }] : []),
@@ -425,11 +634,17 @@ module.exports.activate = (ctx) => {
         ...(uk.uid ? [{ type: 'button', text: '注销账号', style: 'outlined', shape: 'pill', icon: 'msym:delete', action: { type: 'open', target: 'page:delete-account' } }] : []),
       ] },
     ];
-    jsonRes(res, 200, {
+    return {
       gcui: 1, title: '个人',
       state: { keys: keys.map(k => keyState(k, uk.key)) },
       root: { type: 'column', gap: 14, children },
-    });
+    };
+  };
+
+  ctx.registerRoute('GET', '/ui/personal', (req, res, p) => {
+    const uk = ukOf(p);
+    if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
+    jsonRes(res, 200, buildPersonalPage(uk));
   });
 
   ctx.registerRoute('GET', '/ui/widget-credits', (req, res, p) => {
@@ -507,25 +722,32 @@ module.exports.activate = (ctx) => {
       ] },
       { type: 'card', variant: 'outlined', shape: 'extraLarge', title: '子卡信息', children: [
         { type: 'input', key: 'name', label: '卡密名称', value: '' },
-        { type: 'input', key: 'quotaTokens', label: '额度 tokens (0=跟随上限)', inputType: 'number', value: '' },
+        { type: 'input', key: 'quotaTokens', label: '额度 (0=跟随上限)', inputType: 'number', value: '' },
       ] },
       { type: 'button', text: '创建子卡', style: 'filled', shape: 'pill', icon: 'msym:add', action: { type: 'intent', endpoint: './intent/create-key',
         body: { name: '{{input.name}}', quotaTokens: '{{input.quotaTokens}}' } } },
     ] } });
   });
 
-                                                        
+  
   ctx.registerRoute('POST', '/intent/profile', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
     if (!uk) return { ok: false, error: '需要用户卡密' };
     const b = p.body || {};
-    if (uk.uid) {
-      const user = cfg.users.find(x => x.uid === uk.uid);
-      if (user) {
-        if (typeof b.nickname === 'string') user.nickname = b.nickname.slice(0, 64);
-        if (typeof b.avatar === 'string') user.avatar = b.avatar.slice(0, 300);
-        save();
-      }
+    if (!uk.uid) return { ok: false, error: '该身份没有用户记录, 无法保存资料' };
+    let user = cfg.users.find(x => x.uid === uk.uid);
+    if (!user) {
+      
+
+      user = {
+        uid: uk.uid, username: uk.name || uk.uid, name: uk.name || uk.uid,
+        nickname: '', avatar: '', group: cfg.defaultGroup || '默认',
+        note: '自动创建(管理员身份)', createdAt: new Date().toISOString(),
+      };
+      cfg.users.push(user);
     }
+    if (typeof b.nickname === 'string') user.nickname = b.nickname.slice(0, 64);
+    if (typeof b.avatar === 'string') user.avatar = b.avatar.slice(0, 300);
+    save();
     if (typeof b.cardName === 'string' && apis().updateKey) apis().updateKey(uk.key, { name: b.cardName.slice(0, 64) });
     return { ok: true, toast: '资料已保存' };
   }));
@@ -544,21 +766,20 @@ module.exports.activate = (ctx) => {
 
   ctx.registerRoute('POST', '/intent/create-key', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
     if (!uk) return { ok: false, error: '需要用户卡密' };
-    if (uk.quotaTokens === 0) return { ok: false, error: '主卡额度为 0, 无法发子卡, 请联系管理员充值' };
     const b = p.body || {};
     const pm = uk.models || [], pb = uk.branches || [];
     const models = Array.isArray(b.models) ? b.models.map(String).filter(x => !pm.length || pm.includes(x)) : [];
+    const groups = Array.isArray(b.groups) ? b.groups.map(String).filter(x => !(uk.groups || []).length || (uk.groups || []).includes(x)) : [];
     const branches = Array.isArray(b.branches) ? b.branches.map(String).filter(x => !pb.length || pb.includes(x)) : [];
-    let quota = Math.max(0, Math.floor(Number(b.quotaTokens) || 0));
-    if (uk.quotaTokens === -1) {
-      quota = quota > 0 ? quota : -1;                        
-    } else if (uk.quotaTokens > 0) {
-      const remaining = uk.quotaTokens - (uk.usedTokens || 0); if (quota <= 0 || quota > remaining) quota = remaining;
-      apis().updateKey(uk.key, { quotaTokens: uk.quotaTokens - quota });            
+    const quota = clampQuota(uk, b.quotaTokens);
+    if (Number(uk.quotaTokens) > 0 && quota > 0) {
+      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); 
     }
-    const nk = { key: apis().genKey(), name: String(b.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, branches, note: 'App 自助', createdAt: new Date().toISOString() };
+    const nk = { key: apis().genKey(), name: String(b.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, groups, branches, note: 'App 自助', by: 'user', createdAt: new Date().toISOString() };
     apis().addKey(nk);
-    return { ok: true, toast: '子卡已创建: ' + nk.key.slice(0, 8) + '…', ui: null };
+    
+    
+    return { ok: true, toast: '子卡已创建: ' + nk.key.slice(0, 8) + '…', nav: 'push', ui: editKeyPage(uk, nk.key, 'all', [], [], '') };
   }));
 
   ctx.registerRoute('POST', '/intent/delete-key', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
@@ -570,7 +791,97 @@ module.exports.activate = (ctx) => {
     return { ok: true, toast: '已删除' };
   }));
 
-                                      
+  
+  const permDraft = (b) => ({
+    key: String((b && b.key) || ''),
+    mode: ['all', 'group', 'model'].includes(String(b && b.mode)) ? String(b.mode) : 'all',
+    groups: Array.isArray(b && b.groups) ? b.groups.map(String) : [],
+    models: Array.isArray(b && b.models) ? b.models.map(String) : [],
+    q: String((b && b.q) == null ? '' : b.q).slice(0, 60),
+  });
+  const targetOf = (uk, key) => myKeysOf(uk.uid, uk.key).find(k => k.key === key) || null;
+
+  ctx.registerRoute('POST', '/intent/key-edit-open', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const t = targetOf(uk, String((p.body && p.body.key) || ''));
+    if (!t) return { ok: false, error: '卡密不存在或不属于你' };
+    
+    return { ok: true, ui: editKeyPage(uk, t.key, effMode(t), t.groups || [], t.models || [], ''), refresh: 'intent' };
+  }));
+
+  ctx.registerRoute('POST', '/intent/key-edit-mode', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const d = permDraft(p.body);
+    return { ok: true, nav: 'replace', ui: editKeyPage(uk, d.key, d.mode, d.groups, d.models, d.mode === 'model' ? d.q : '') };
+  }));
+
+  ctx.registerRoute('POST', '/intent/key-edit-toggle', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const d = permDraft(p.body);
+    const v = String((p.body && p.body.value) || '');
+    if (!v) return { ok: false, error: '缺少参数' };
+    const arr = (p.body && p.body.facet === 'group') ? d.groups : d.models;
+    const i = arr.indexOf(v);
+    if (i >= 0) arr.splice(i, 1); else arr.push(v);
+    return { ok: true, nav: 'replace', ui: editKeyPage(uk, d.key, d.mode, d.groups, d.models, d.q) };
+  }));
+
+  ctx.registerRoute('POST', '/intent/key-edit-search', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const d = permDraft(p.body);
+    return { ok: true, nav: 'replace', ui: editKeyPage(uk, d.key, d.mode, d.groups, d.models, d.q) };
+  }));
+
+  ctx.registerRoute('POST', '/intent/key-edit-save', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const d = permDraft(p.body);
+    const t = targetOf(uk, d.key);
+    if (!t) return { ok: false, error: '卡密不存在或不属于你' };
+    const perm = clampPerm(uk, d.mode, d.groups, d.models);
+    apis().updateKey(t.key, { groups: perm.groups, models: perm.models });
+    return { ok: true, toast: '访问权限已保存', back: true, ui: buildPersonalPage(uk) };
+  }));
+
+  ctx.registerRoute('POST', '/intent/key-edit-back', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    return { ok: true, back: true, ui: buildPersonalPage(uk) };
+  }));
+
+  
+  const renamePage = (uk, key) => {
+    const t = (myKeysOf(uk.uid, uk.key).find(k => k.key === key) || {});
+    return { gcui: 1, title: '改名', root: { type: 'column', gap: 14, padding: 16, children: [
+      { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
+        { type: 'text', text: '卡密 ' + String(key).slice(0, 8) + '…', style: 'caption', color: '$onSurfaceVariant' },
+        { type: 'input', key: 'name', label: '卡名', value: String(t.name || '') },
+        { type: 'row', gap: 8, children: [
+          { type: 'button', text: '保存', style: 'filled', shape: 'pill', icon: 'msym:check', weight: 1, action: { type: 'intent', endpoint: './intent/key-rename-save', body: { key: key, name: '{{input.name}}' } } },
+          { type: 'button', text: '取消', style: 'text', shape: 'pill', weight: 1, action: { type: 'intent', endpoint: './intent/key-rename-back', body: {} } },
+        ] },
+      ] },
+    ] } };
+  };
+  ctx.registerRoute('POST', '/intent/key-rename-open', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const key = String((p.body && p.body.key) || '');
+    if (!targetOf(uk, key)) return { ok: false, error: '卡密不存在或不属于你' };
+    return { ok: true, ui: renamePage(uk, key), refresh: 'intent' };
+  }));
+  ctx.registerRoute('POST', '/intent/key-rename-save', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    const key = String((p.body && p.body.key) || '');
+    const t = targetOf(uk, key);
+    if (!t) return { ok: false, error: '卡密不存在或不属于你' };
+    const name = String((p.body && p.body.name) || '').trim().slice(0, 64);
+    apis().updateKey(key, { name: name });
+    return { ok: true, toast: '已改名', back: true, ui: buildPersonalPage(uk) };
+  }));
+  ctx.registerRoute('POST', '/intent/key-rename-back', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
+    if (!uk) return { ok: false, error: '需要用户卡密' };
+    return { ok: true, back: true, ui: buildPersonalPage(uk) };
+  }));
+
+  
   ctx.registerRoute('GET', '/ui/delete-account', (req, res, p) => {
     const uk = ukOf(p);
     if (!uk) return jsonRes(res, 401, { error: '需要卡密登录' });
@@ -595,12 +906,13 @@ module.exports.activate = (ctx) => {
     const user = cfg.users.find(x => x.uid === uk.uid);
     if (!user) return { ok: false, error: '账号不存在' };
     if (!verifyPassword(String((p.body && p.body.password) || ''), user.passwordHash)) return { ok: false, error: '密码错误' };
-                                   
+    
     if (apis().deleteKeysOf) apis().deleteKeysOf(uk.uid);
     const i = cfg.users.findIndex(x => x.uid === uk.uid);
     if (i >= 0) cfg.users.splice(i, 1);
     save();
-    return { ok: true, toast: '账号已注销', ui: { gcui: 1, title: '已注销', root: { type: 'column', gap: 14, children: [
+    
+    return { ok: true, toast: '账号已注销', nav: 'reset', ui: { gcui: 1, title: '已注销', root: { type: 'column', gap: 14, children: [
       { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
         { type: 'text', text: '你的账号已永久删除', style: 'title3' },
         { type: 'text', text: '感谢使用 Gay Core', style: 'caption', color: '$onSurfaceVariant' },
@@ -608,8 +920,8 @@ module.exports.activate = (ctx) => {
     ] } } };
   }));
 
-                      
-                                
+  
+  
   const groupCounts = () => {
     const out = {};
     for (const g of cfg.groups) out[g] = 0;
@@ -620,7 +932,7 @@ module.exports.activate = (ctx) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     jsonRes(res, 200, { ok: true, groups: cfg.groups.slice(), defaultGroup: cfg.defaultGroup, counts: groupCounts() });
   });
-  ctx.registerRoute('POST', '/admin/groups', (req, res, p) => {                                                   
+  ctx.registerRoute('POST', '/admin/groups', (req, res, p) => { 
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const j = p.body || {};
     const name = String(j.name || '').trim().slice(0, 32);
@@ -675,13 +987,13 @@ module.exports.activate = (ctx) => {
       };
     }) });
   });
-  ctx.registerRoute('POST', '/admin/users', (req, res, p) => {                
+  ctx.registerRoute('POST', '/admin/users', (req, res, p) => { 
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const j = p.body || {};
     if (j.action === 'delete') {
       const i = cfg.users.findIndex(x => x.uid === j.uid);
       if (i < 0) return jsonRes(res, 404, { error: '用户不存在' });
-      if (apis().deleteKeysOf) apis().deleteKeysOf(j.uid);               
+      if (apis().deleteKeysOf) apis().deleteKeysOf(j.uid); 
       cfg.users.splice(i, 1); save();
       return jsonRes(res, 200, { ok: true });
     }
@@ -722,8 +1034,8 @@ module.exports.activate = (ctx) => {
     const newGroup = cfg.groups.includes(String(j.group || '')) ? String(j.group) : cfg.defaultGroup;
     cfg.users.push({ uid: newUid, username, name: username, group: newGroup, passwordHash: hashPassword(String(j.password || 'changeme')), nickname: String(j.nickname || ''), avatar: '', email: String(j.email || ''), banned: false, note: String(j.note || ''), createdAt: new Date().toISOString() });
     save();
-                                             
-                                                                   
+    
+
     let mainKey = null;
     if (apis().addKey && j.noCard !== true) {
       const raw = j.quotaTokens !== undefined ? j.quotaTokens : (reg && reg.defaultQuota);
@@ -734,7 +1046,7 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, uid: newUid, username, key: mainKey ? mainKey.key : null });
   });
 
-                                  
+  
   if (!cfg._groupsPersisted) { cfg._groupsPersisted = true; save(); }
   ctx.log('用户体系已激活, 用户数:', cfg.users.length, '注册:', reg.enable ? '开' : '关', '分组:', cfg.groups.join('/'));
 };

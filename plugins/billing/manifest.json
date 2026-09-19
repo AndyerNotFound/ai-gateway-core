@@ -1,0 +1,21 @@
+{
+  "id": "billing",
+  "name": "动态计费",
+  "version": "1.0.5",
+  "type": "business",
+  "icon": "msym:wallet",
+  "description": "动态计费：按模型单价、峰谷时段、上下文阶梯、缓存命中/写入、用户组折扣算加权额度。价格与规则住在「模型广场」的模型元数据里，本插件负责按规则结算与成本核算。**只记账（扣费/成本/用量数字），不记录请求与响应正文**。没配价的模型按原口径扣费。",
+  "hasServer": true,
+  "permissions": [
+    "storage",
+    "gateway:modelGroups",
+    "gateway:listInstances",
+    "gateway:adminUi",
+    "gateway:authApis"
+  ],
+  "configSchema": [],
+  "dataScope": "global",
+  "depends": [
+    "model-square"
+  ]
+}

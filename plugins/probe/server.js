@@ -1,9 +1,9 @@
 'use strict';
-                     
-                                                         
-                                                                          
-                                                     
-   
+
+
+
+
+
 function jsonRes(res, code, o) { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(o)); }
 
 module.exports.activate = (ctx) => {
@@ -45,8 +45,8 @@ module.exports.activate = (ctx) => {
     const inst = ctx.gateway.listInstances().find(i => i.uid === ctx.uid);
     if (!inst || !inst.enabled) return;
     const seen = new Set();
-    for (const pick of ctx.pickChannels()) {
-      const ch = pick.ch;
+    const allCh = (ctx.gateway && ctx.gateway.instanceChannels) ? ctx.gateway.instanceChannels() : [];
+    for (const ch of allCh) {
       if (!ch || !ch.probe || seen.has(ch.name)) continue;
       seen.add(ch.name);
       try { probeOnce(ch); } catch (_) {}
@@ -56,7 +56,7 @@ module.exports.activate = (ctx) => {
   if (cfg.enable) {
     const iv = Math.max(1, Number(cfg.intervalMin) || 10) * 60000;
     ctx.cron('probe-round', iv, probeRound);
-    setTimeout(probeRound, 20000).unref();               
+    setTimeout(probeRound, 20000).unref(); 
   }
 
   ctx.registerRoute('GET', '/status', (req, res) => {

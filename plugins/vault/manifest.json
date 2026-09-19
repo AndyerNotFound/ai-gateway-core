@@ -1,0 +1,17 @@
+{
+  "id": "vault",
+  "name": "密钥保险箱",
+  "version": "1.0.0",
+  "type": "business",
+  "description": "敏感字段加密 + 口令不落盘：解锁/锁定/一键加密现有数据。未解锁时转发请求会被明确 503 拦下，绝不带密文去打上游。管理页走 App 原生 SDUI，改界面不用重编。",
+  "hasServer": true,
+  "icon": "msym:key",
+  "permissions": [
+    "storage",
+    "gateway:adminUi",
+    "gateway:crypt"
+  ],
+  "configSchema": [],
+  "scope": "global",
+  "dataScope": "instance"
+}

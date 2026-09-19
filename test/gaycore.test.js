@@ -1,8 +1,8 @@
 'use strict';
-                                            
-                                                        
-                                                                           
-   
+
+
+
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -33,7 +33,7 @@ function req(port, method, p, { headers = {}, body, timeout = 8000 } = {}) {
 }
 const J = r => JSON.parse(r.body);
 
-                                                           
+
 function findNode(node, pred) {
   if (!node || typeof node !== 'object') return null;
   if (pred(node)) return node;
@@ -44,7 +44,7 @@ function findNode(node, pred) {
 }
 const findInput = (root, key) => findNode(root, n => n.key === key);
 
-                                 
+
 let seqCounter = 0;
 function signedReq(token, method, pathname, bodyObj) {
   const bodyStr = bodyObj == null ? '' : JSON.stringify(bodyObj);
@@ -67,7 +67,7 @@ async function main() {
   const dir = tmpdir();
   process.env.AGW_DIR = dir;
 
-                            
+  
   const pd = path.join(dir, 'plugins', 'intent-test');
   fs.mkdirSync(pd, { recursive: true });
   fs.writeFileSync(path.join(pd, 'manifest.json'), JSON.stringify({
@@ -87,7 +87,7 @@ async function main() {
     });
   };`);
 
-                                
+  
   const badTheme = path.join(dir, 'plugins', 'theme-evil');
   fs.mkdirSync(badTheme, { recursive: true });
   fs.writeFileSync(path.join(badTheme, 'manifest.json'), JSON.stringify({ id: 'theme-evil', name: '恶意主题', type: 'theme', hasServer: true, theme: { dark: {} } }));
@@ -212,7 +212,7 @@ async function main() {
     assert(j.userDebug.until > Date.now(), 'until 应是未来');
     const b = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
     assert.strictEqual(b.userDebug.forUid, 'u1');
-            
+    
     await req(mainPort, 'POST', '/admin/api/client-config/' + uid, { headers: admin, body: { userDebug: null } });
     const b2 = J(await req(mainPort, 'GET', '/api/app/bootstrap'));
     assert.strictEqual(b2.userDebug, null, '关闭后 bootstrap 不再下发');
@@ -233,7 +233,7 @@ async function main() {
     assert.strictEqual(J(r).testMode, true);
     const r2 = await req(mainPort, 'POST', '/admin/api/market/indexes', { headers: admin, body: { url: 'https://example.com/idx.json' } });
     assert.strictEqual(r2.status, 200, r2.body);
-                
+    
     const auditFile = path.join(dir, 'log', 'audit-0.jsonl');
     assert(fs.existsSync(auditFile), '审计文件应存在');
     const lines = fs.readFileSync(auditFile, 'utf8').trim().split('\n').map(JSON.parse);
@@ -274,9 +274,9 @@ async function main() {
     const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', { msg: 'again' });
     const r1 = await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s.headers, body: s.body });
     assert.strictEqual(J(r1).ok, true);
-                                                                                                                                                                         
+    
     const s2 = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', { msg: 'again' });
-    s2.headers['x-gc-intent-id'] = s.headers['x-gc-intent-id'];                     
+    s2.headers['x-gc-intent-id'] = s.headers['x-gc-intent-id']; 
     const bodyHash = require('crypto').createHash('sha256').update(s2.body).digest('hex');
     s2.headers['x-gc-sign'] = require('crypto').createHmac('sha256', 'sk-gc-main')
       .update([s2.headers['x-gc-timestamp'], s2.headers['x-gc-nonce'], s2.headers['x-gc-seq'], s2.headers['x-gc-intent-id'], 'POST', '/plugins/intent-test/intent/ping', bodyHash].join('\n')).digest('hex');
@@ -289,7 +289,7 @@ async function main() {
 
   await T('意图: 序列号回滚拒绝 + currentSeq 提示', async () => {
     const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
-    s.headers['x-gc-seq'] = '1';                    
+    s.headers['x-gc-seq'] = '1'; 
     const bodyHash = crypto.createHash('sha256').update(s.body).digest('hex');
     s.headers['x-gc-sign'] = crypto.createHmac('sha256', 'sk-gc-main')
       .update([s.headers['x-gc-timestamp'], s.headers['x-gc-nonce'], '1', s.headers['x-gc-intent-id'], 'POST', '/plugins/intent-test/intent/ping', bodyHash].join('\n')).digest('hex');
@@ -303,7 +303,7 @@ async function main() {
   await T('意图: nonce 重放拒绝', async () => {
     const s = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
     await req(mainPort, 'POST', '/plugins/intent-test/intent/ping', { headers: s.headers, body: s.body });
-                                    
+    
     const s2 = signedReq('sk-gc-main', 'POST', '/plugins/intent-test/intent/ping', {});
     s2.headers['x-gc-nonce'] = s.headers['x-gc-nonce'];
     const bodyHash = crypto.createHash('sha256').update(s2.body).digest('hex');
@@ -315,12 +315,12 @@ async function main() {
   });
 
   await T('意图: 归属校验(路径必须含本插件 id)', async () => {
-                                                     
+    
     const pm = gw.plugins;
     const st = { uid: 1, pluginId: 'intent-test', _instCfg: null };
     const v = pm.verifyIntent(st, { method: 'POST', url: '/plugins/other-plugin/intent/x', headers: {} }, { token: 'sk-gc-main', rawBody: '' });
     assert.strictEqual(v.ok, false);
-                                       
+    
   });
 
   await T('意图: 安全记录落盘', async () => {
@@ -344,7 +344,7 @@ async function main() {
     assert.strictEqual(j.root.type, 'column');
     assert(Array.isArray(j.state.keys) && j.state.keys.length === 1);
     assert.strictEqual(j.state.keys[0].name, '主卡');
-                 
+    
     const r2 = await req(mainPort, 'GET', '/plugins/auth-user/ui/personal');
     assert.strictEqual(r2.status, 401);
   });
@@ -360,7 +360,7 @@ async function main() {
     const r = await req(mainPort, 'POST', '/plugins/auth-user/intent/profile', { headers, body });
     assert.strictEqual(r.status, 200, r.body);
     assert.strictEqual(J(r).ok, true);
-              
+    
     const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/edit-profile', { headers: { authorization: 'Bearer sk-gc-main' } }));
     assert.strictEqual(findInput(j.root, 'nickname').value, '小红');
     assert.strictEqual(findInput(j.root, 'cardName').value, '主力卡');
@@ -370,17 +370,17 @@ async function main() {
     const s1 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/create-key', { name: '测试子卡', quotaTokens: 1000 });
     const r1 = await req(mainPort, 'POST', '/plugins/auth-user/intent/create-key', { headers: s1.headers, body: s1.body });
     assert.strictEqual(J(r1).ok, true, r1.body);
-                 
+    
     const j = J(await req(mainPort, 'GET', '/plugins/auth-user/ui/personal', { headers: { authorization: 'Bearer sk-gc-main' } }));
     assert.strictEqual(j.state.keys.length, 2);
     const sub = j.state.keys.find(k => k.name === '测试子卡');
     assert(sub && sub.canDelete === true);
-                 
+    
     const main = j.state.keys.find(k => k.isMain);
     const s2 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/delete-key', { key: main.key });
     const r2 = await req(mainPort, 'POST', '/plugins/auth-user/intent/delete-key', { headers: s2.headers, body: s2.body });
     assert.strictEqual(J(r2).ok, false, '删主卡必须失败');
-               
+    
     const s3 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/delete-key', { key: sub.key });
     const r3 = await req(mainPort, 'POST', '/plugins/auth-user/intent/delete-key', { headers: s3.headers, body: s3.body });
     assert.strictEqual(J(r3).ok, true, r3.body);
@@ -393,7 +393,7 @@ async function main() {
     const s2 = signedReq('sk-gc-main', 'POST', '/plugins/auth-user/intent/password', { oldPassword: 'password123', newPassword: 'newpassword456' });
     const r2 = await req(mainPort, 'POST', '/plugins/auth-user/intent/password', { headers: s2.headers, body: s2.body });
     assert.strictEqual(J(r2).ok, true, r2.body);
-                
+    
     const lr = await req(mainPort, 'POST', '/auth/login', { body: { uid: 'u1', password: 'newpassword456' } });
     assert.strictEqual(J(lr).ok, true, '新密码登录失败: ' + lr.body);
   });

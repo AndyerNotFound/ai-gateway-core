@@ -1,7 +1,7 @@
-                                         
-                                       
-                                                                       
-   
+
+
+
+
 module.exports = {
   activate(ctx) {
   const net = require('net');
@@ -14,7 +14,7 @@ module.exports = {
   const saveList = (l) => {
     ctx.config.proxies = l;
     ctx.setPluginConfig(ctx.config);
-                            
+    
     const obj = {};
     for (const p of l) {
       if (!p || !p.name) continue;
@@ -52,7 +52,7 @@ module.exports = {
       const idx = list.findIndex(x => x.name === nm);
       if (idx < 0) return send(res, 404, { error: '代理不存在: ' + nm });
       list.splice(idx, 1);
-                      
+      
       try {
         ctx.gateway.saveInstanceConfig((cfg) => {
           for (const ch of (cfg.channels || [])) if (ch && ch.proxy === nm) delete ch.proxy;
@@ -74,7 +74,7 @@ module.exports = {
     if (b.password) obj.password = String(b.password);
     const idx = list.findIndex(x => x.name === name);
     if (idx >= 0) {
-                        
+      
       if (b.password === undefined || b.password === null || b.password === '') {
         if (list[idx].password) obj.password = list[idx].password;
       }
@@ -84,7 +84,7 @@ module.exports = {
     send(res, 200, { ok: true, proxies: list });
   });
 
-                         
+  
   ctx.registerRoute('POST', '/admin/test', (req, res, p) => {
     const a = p.authAdmin ? p.authAdmin() : { ok: false };
     if (!a.ok) return send(res, 401, { error: '需要管理员密钥' });

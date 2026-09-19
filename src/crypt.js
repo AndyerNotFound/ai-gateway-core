@@ -1,11 +1,11 @@
 'use strict';
-                                     
-                                                                     
-                                                                          
-                                                 
-                                                    
-                                                
-   
+
+
+
+
+
+
+
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -16,6 +16,16 @@ function deriveKey(pass, salt) {
   return crypto.scryptSync(String(pass), salt, 32, { N: 16384, r: 8, p: 1 });
 }
 function isEncText(t) { return typeof t === 'string' && t.startsWith(MAGIC); }
+
+
+
+
+
+const CACHE_MAX = 8000;
+const _dcache = new Map();
+let _dcacheTag = null;
+function passTag(pass) { return crypto.createHash('sha256').update(String(pass)).digest('hex').slice(0, 20); }
+
 function encryptText(plain, pass) {
   const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', deriveKey(pass, salt), iv);
@@ -23,22 +33,28 @@ function encryptText(plain, pass) {
   return MAGIC + Buffer.concat([salt, iv, c.getAuthTag(), ct]).toString('base64');
 }
 function decryptText(enc, pass) {
+  const tag = passTag(pass);
+  if (_dcacheTag !== tag) { _dcache.clear(); _dcacheTag = tag; }
+  const hit = _dcache.get(enc);
+  if (hit !== undefined) return hit;
   const b = Buffer.from(String(enc).slice(MAGIC.length), 'base64');
   if (b.length < 45) throw new Error('密文格式无效');
-  const salt = b.subarray(0, 16), iv = b.subarray(16, 28), tag = b.subarray(28, 44), ct = b.subarray(44);
+  const salt = b.subarray(0, 16), iv = b.subarray(16, 28), tagB = b.subarray(28, 44), ct = b.subarray(44);
   const d = crypto.createDecipheriv('aes-256-gcm', deriveKey(pass, salt), iv);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  d.setAuthTag(tagB);
+  const plain = Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  if (_dcache.size < CACHE_MAX) _dcache.set(enc, plain);
+  return plain;
 }
 
-                                        
+
 function loadPass(dir) {
   if (process.env.AGW_CRYPT_PASS) return process.env.AGW_CRYPT_PASS;
   const kf = path.join(dir || process.cwd(), '.agwkey');
   try { const t = fs.readFileSync(kf, 'utf8').trim(); return t || null; } catch (_) { return null; }
 }
 
-                                                  
+
 const SENSITIVE_KEYS = /^(apiKey|adminKey|secondKey|password|passwordHash|secret|token|accessToken|refreshToken|privateKey|key)$/i;
 
 function encryptFields(obj, pass, keyRe = SENSITIVE_KEYS) {
@@ -66,7 +82,7 @@ function decryptFields(obj, pass, keyRe = SENSITIVE_KEYS) {
   return walk(obj, null);
 }
 
-                                                                
+
 function maskFields(obj, keyRe = SENSITIVE_KEYS) {
   const walk = (v, key) => {
     if (typeof v === 'string' && key && keyRe.test(key) && v) {

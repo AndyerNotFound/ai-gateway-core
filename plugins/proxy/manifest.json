@@ -3,7 +3,7 @@
   "name": "代理设置",
   "version": "1.0.0",
   "type": "business",
-  "icon": "settings",
+  "icon": "msym:settings",
   "description": "出站代理(HTTP / SOCKS5)管理: 渠道按名字引用, 支持连通性测试",
   "hasServer": true,
   "adminPage": "pages/admin.html",

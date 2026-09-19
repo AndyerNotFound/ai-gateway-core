@@ -1,0 +1,13 @@
+{
+  "id": "legacy-import",
+  "name": "旧版配置导入",
+  "version": "1.0.0",
+  "type": "business",
+  "icon": "msym:edit",
+  "description": "导入旧版 ai-gateway 的实例配置 (config.json, 支持 AGWENC1 加密配置, 自动转换渠道/代理/TLS)",
+  "hasServer": true,
+  "adminPage": "pages/admin.html",
+  "scope": "global",
+  "dataScope": "instance",
+  "permissions": ["storage"]
+}

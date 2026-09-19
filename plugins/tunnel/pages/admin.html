@@ -51,7 +51,7 @@ body{background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)
     <button class="btn btn-tonal" id="btnRefresh"><span class="msym" style="font-size:16px">refresh</span> 刷新</button>
   </div>
   <div class="urlbox" id="urlBox"></div>
-  <div class="hint">免费临时域名, 重启隧道会变。隧道指向本网关主端口, 所有实例经 /<b>实例名</b>/ 路径访问。依赖 cloudflared 已安装且在 PATH。</div>
+  <div class="hint">免费临时域名, 重启隧道会变。<b>默认使用 http2 + 强制 IPv4</b>；若 20 秒内未注册成功会自动换策略重试(最多 3 次)。<br>⚠ 本机实测：直连 Cloudflare 约 40% 时间被阻断，而走代理 10/10 成功；但 <b>cloudflared 不认 HTTP(S)_PROXY 环境变量</b>，需在代理 App 里把 <b>Termux</b> 纳入接管范围(分应用/全局 TUN)才能让隧道走代理。</div>
 </div>
 
 <div class="card">
@@ -75,13 +75,19 @@ async function api(p, method){
 async function load(){
   try {
     const r = await api('/status');
-    $('stBadge').textContent = r.running ? '运行中' : '未运行';
-    $('stBadge').className = 'badge ' + (r.running?'on':'off');
-    $('btnStart').disabled = !!r.running;
-    $('btnStop').disabled = !r.running;
+    /* ★v1.4.0: running 已是"真连上才算真"; procAlive 才是"进程活着" */
+    const st = r.connected ? '已连接' : (r.retrying ? '重试中' : (r.procAlive ? '连接中…' : '未运行'));
+    $('stBadge').textContent = st;
+    $('stBadge').className = 'badge ' + (r.connected ? 'on' : 'off');
+    $('btnStart').disabled = !!r.connected;
+    $('btnStop').disabled = !r.procAlive;
     if (r.url){ $('urlBox').style.display='block'; $('urlBox').innerHTML = '<span class="msym" style="font-size:16px">public</span> <b>'+r.url+'</b> <button class="btn btn-tonal" style="height:26px;padding:0 10px;font-size:12px;margin-left:8px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+r.url+'\').then(()=>toast(\'已复制\'))">复制</button>'; }
+    else if (r.pendingUrl){ $('urlBox').style.display='block'; $('urlBox').innerHTML = '<div style="color:#E8B4B4;margin-bottom:6px">⚠ 域名已取得，但边缘连接未注册成功 —— 外部仍然打不开</div><span style="opacity:.8">'+r.pendingUrl+'</span>'; }
+    else if (r.lastUrl){ $('urlBox').style.display='block'; $('urlBox').innerHTML = '<span style="opacity:.65">上次域名（已失效，仅供参考）：'+r.lastUrl+'</span>'; }
     else $('urlBox').style.display='none';
     $('logBox').textContent = (r.log && r.log.length) ? r.log.join('\n') : '(空)';
+    if (r.strategy || r.phase) $('logBox').textContent += '\n\n[状态] phase=' + (r.phase||'?') + '  strategy=' + (r.strategy||'?') + '  protocol=' + (r.protocol||'?') + '  location=' + (r.location||'?') + '  watchdog=' + ((r.watchdogMs||0)/1000) + 's';
+    if (r.hint) $('logBox').textContent += '\n[hint] ' + r.hint;
   } catch(e){ toast(e.message, true); }
 }
 $('btnStart').onclick = async ()=>{ try { await api('/start','POST'); toast('启动中, 域名出现需要几秒'); setTimeout(load, 3000); setTimeout(load, 8000); } catch(e){ toast(e.message, true); } };

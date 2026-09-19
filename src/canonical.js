@@ -1,21 +1,50 @@
 'use strict';
-                                        
-                                                                                   
-                                                                              
-   
+
+
+
+
 const { toText, normStop, randId, nowSec, log, logErr } = require('./util');
 
-                                                              
-                       
-                   
-                                                          
-                                                                                            
-                                                                                                                
-                                                                                       
-                                                                                                                                       
-                                                                           
-                                                                                                        
-                                                                      
+
+
+
+
+
+
+
+
+
+
+
+
+
+function pickCache(u) {
+  if (!u || typeof u !== 'object') return { cacheRead: 0, cacheWrite: 0 };
+  const d = u.prompt_tokens_details || u.input_tokens_details || {};
+  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens
+    : u.cache_read_input_tokens != null ? u.cache_read_input_tokens
+      : u.cachedContentTokenCount != null ? u.cachedContentTokenCount
+        : u.cached_content_token_count != null ? u.cached_content_token_count
+          : d.cached_tokens != null ? d.cached_tokens
+            : 0;
+  const write = u.cache_creation_input_tokens != null ? u.cache_creation_input_tokens
+    : u.cache_creation_tokens != null ? u.cache_creation_tokens
+      : d.cache_creation_tokens != null ? d.cache_creation_tokens
+        : 0;
+  return { cacheRead: Number(read) || 0, cacheWrite: Number(write) || 0 };
+}
+
+
+
+
+
+
+
+
+
+
+
+
 function openaiToCanonical(body, urlModel) {
   const messages = [];
   for (const m of (body.messages || [])) {
@@ -93,7 +122,7 @@ function claudeToCanonical(body, urlModel) {
           : (Array.isArray(b.content) ? b.content.filter(x => x && x.type === 'text').map(x => x.text || '').join('\n') : '');
         messages.push({ role: 'tool', tool_call_id: b.tool_use_id || '', content: c });
       }
-                                                             
+      
     }
     if (m.role === 'assistant') {
       if (textParts.length || toolCalls.length) {
@@ -192,8 +221,8 @@ function geminiToCanonical(body, urlModel) {
   };
 }
 
-                                                                 
-                                           
+
+
 class ResponsesStreamParser {
   constructor(emit) { this.emit = emit; this.finished = false; this.finishReason = undefined; this.usage = null; this.toolIdx = 0; }
   handle(j) {
@@ -222,7 +251,7 @@ class ResponsesStreamParser {
         else if (st === 'failed') this.finishReason = 'content_filter';
         else this.finishReason = 'stop';
         const u = r.usage || j.usage;
-        if (u) this.usage = { input: u.input_tokens || 0, output: u.output_tokens || 0 };
+        if (u) this.usage = Object.assign({ input: u.input_tokens || 0, output: u.output_tokens || 0 }, pickCache(u));
         break;
       }
       default: break;
@@ -236,7 +265,7 @@ class ResponsesStreamParser {
   }
 }
 
-                                                               
+
 function responsesContentToContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -256,7 +285,7 @@ function responsesContentToContent(content) {
   return (out.length === 1 && out[0].type === 'text') ? out[0].text : out;
 }
 
-                                                               
+
 function responsesToCanonical(body, urlModel) {
   const messages = [];
   const instructions = body.instructions;
@@ -286,7 +315,7 @@ function responsesToCanonical(body, urlModel) {
       }
       messages.push({ role, content: responsesContentToContent(item.content) });
     }
-                         
+    
   }
   let tools;
   if (Array.isArray(body.tools) && body.tools.length) {
@@ -310,7 +339,7 @@ function responsesToCanonical(body, urlModel) {
   };
 }
 
-                                                                               
+
 function canonicalToResponsesBody(c) {
   const instructions = [];
   const input = [];
@@ -367,7 +396,7 @@ function canonicalToResponsesBody(c) {
   return body;
 }
 
-                                                                
+
 function canonicalToOpenAIBody(c, opts = {}) {
   const messages = [];
   for (const m of (c.messages || [])) {
@@ -384,7 +413,7 @@ function canonicalToOpenAIBody(c, opts = {}) {
       messages.push({ role: 'system', content: toText(m.content) });
     } else {
       let content = m.content;
-                                                
+      
       if (Array.isArray(content) && content.every(x => x && x.type === 'text')) {
         content = content.map(x => x.text || '').join('');
       }
@@ -473,7 +502,7 @@ function canonicalToClaudeBody(c) {
     }));
     if (c.tool_choice === 'auto') body.tool_choice = { type: 'auto' };
     else if (c.tool_choice === 'required') body.tool_choice = { type: 'any' };
-    else if (c.tool_choice === 'none') {                                          }
+    else if (c.tool_choice === 'none') {  }
     else if (c.tool_choice && typeof c.tool_choice === 'object' && c.tool_choice.function) body.tool_choice = { type: 'tool', name: c.tool_choice.function.name };
   }
   return body;
@@ -555,7 +584,7 @@ function canonicalToGeminiBody(c) {
   return body;
 }
 
-                                                                
+
 function openaiRespToCanonical(j) {
   const choice = (j.choices && j.choices[0]) || {};
   const msg = choice.message || {};
@@ -572,7 +601,7 @@ function openaiRespToCanonical(j) {
     reasoning: typeof msg.reasoning_content === 'string' ? msg.reasoning_content : (typeof msg.reasoning === 'string' ? msg.reasoning : undefined),
     tool_calls: toolCalls,
     finish_reason: ({ stop: 'stop', length: 'length', tool_calls: 'tool_calls', content_filter: 'content_filter', function_call: 'tool_calls' })[choice.finish_reason] || 'stop',
-    usage: { input: usage.prompt_tokens != null ? usage.prompt_tokens : 0, output: usage.completion_tokens != null ? usage.completion_tokens : 0 },
+    usage: Object.assign({ input: usage.prompt_tokens != null ? usage.prompt_tokens : 0, output: usage.completion_tokens != null ? usage.completion_tokens : 0 }, pickCache(usage)),
   };
 }
 function claudeRespToCanonical(j) {
@@ -591,7 +620,7 @@ function claudeRespToCanonical(j) {
     reasoning: reasoningParts.length ? reasoningParts.join('\n') : undefined,
     tool_calls: toolCalls.length ? toolCalls : undefined,
     finish_reason: ({ end_turn: 'stop', stop_sequence: 'stop', max_tokens: 'length', tool_use: 'tool_calls', refusal: 'content_filter' })[j.stop_reason] || 'stop',
-    usage: { input: usage.input_tokens != null ? usage.input_tokens : 0, output: usage.output_tokens != null ? usage.output_tokens : 0 },
+    usage: Object.assign({ input: usage.input_tokens != null ? usage.input_tokens : 0, output: usage.output_tokens != null ? usage.output_tokens : 0 }, pickCache(usage)),
   };
 }
 function geminiRespToCanonical(j) {
@@ -618,11 +647,11 @@ function geminiRespToCanonical(j) {
     reasoning: reasoningParts.length ? reasoningParts.join('\n') : undefined,
     tool_calls: toolCalls.length ? toolCalls : undefined,
     finish_reason: finish,
-    usage: { input: u.promptTokenCount != null ? u.promptTokenCount : (u.prompt_token_count || 0), output: u.candidatesTokenCount != null ? u.candidatesTokenCount : (u.candidates_token_count || 0) },
+    usage: Object.assign({ input: u.promptTokenCount != null ? u.promptTokenCount : (u.prompt_token_count || 0), output: u.candidatesTokenCount != null ? u.candidatesTokenCount : (u.candidates_token_count || 0) }, pickCache(u)),
   };
 }
 
-                                                                   
+
 function canonicalToOpenAIResp(cresp, model) {
   const message = { role: 'assistant', content: cresp.text === '' ? null : cresp.text };
   if (cresp.reasoning) message.reasoning_content = cresp.reasoning;
@@ -668,7 +697,7 @@ function canonicalToGeminiResp(cresp, model) {
   };
 }
 
-                                                  
+
 function responsesRespToCanonical(j) {
   let text = '';
   const reasoningParts = [];
@@ -697,11 +726,11 @@ function responsesRespToCanonical(j) {
     reasoning: reasoningParts.length ? reasoningParts.join('\n') : undefined,
     tool_calls: toolCalls.length ? toolCalls : undefined,
     finish_reason: finish,
-    usage: { input: usage.input_tokens != null ? usage.input_tokens : 0, output: usage.output_tokens != null ? usage.output_tokens : 0 },
+    usage: Object.assign({ input: usage.input_tokens != null ? usage.input_tokens : 0, output: usage.output_tokens != null ? usage.output_tokens : 0 }, pickCache(usage)),
   };
 }
 
-                                     
+
 function canonicalToResponsesResp(cresp, model) {
   const output = [];
   if (cresp.reasoning) {
@@ -724,7 +753,7 @@ function canonicalToResponsesResp(cresp, model) {
   };
 }
 
-                                                                     
+
 class SSEDecoder {
   constructor(onData) { this.onData = onData; this.buf = ''; this.lines = []; }
   push(s) {
@@ -776,13 +805,13 @@ class UpstreamStreamParser {
           if (tc.index != null && tc.index >= this.toolIdx) this.toolIdx = tc.index + 1;
         }
       }
-      if (j.usage) this.usage = { input: j.usage.prompt_tokens || 0, output: j.usage.completion_tokens || 0 };
+      if (j.usage) this.usage = Object.assign({ input: j.usage.prompt_tokens || 0, output: j.usage.completion_tokens || 0 }, pickCache(j.usage));
       if (ch.finish_reason) this.finishReason = ({ stop: 'stop', length: 'length', tool_calls: 'tool_calls', content_filter: 'content_filter', function_call: 'tool_calls' })[ch.finish_reason] || 'stop';
     } else if (this.format === 'claude') {
       const t = j.type;
       if (t === 'message_start') {
         const u = (j.message && j.message.usage) || {};
-        this.usage = { input: u.input_tokens || 0, output: (this.usage && this.usage.output) || 0 };
+        this.usage = Object.assign({ input: u.input_tokens || 0, output: (this.usage && this.usage.output) || 0 }, pickCache(u));
         evs.push({ type: 'start', usage: { input: this.usage.input } });
       } else if (t === 'content_block_start') {
         const b = j.content_block || {};
@@ -795,10 +824,23 @@ class UpstreamStreamParser {
       } else if (t === 'message_delta') {
         const d = j.delta || {};
         if (d.stop_reason) this.finishReason = ({ end_turn: 'stop', stop_sequence: 'stop', max_tokens: 'length', tool_use: 'tool_calls', refusal: 'content_filter' })[d.stop_reason] || 'stop';
-        if (j.usage && j.usage.output_tokens != null) this.usage = { input: (this.usage && this.usage.input) || 0, output: j.usage.output_tokens };
+        if (j.usage && j.usage.output_tokens != null) {
+          
+
+
+          const prev = this.usage || {};
+          const deltaCache = pickCache(j.usage);
+          const msgCache = pickCache((j.message && j.message.usage) || {});
+          this.usage = {
+            input: prev.input || 0,
+            output: j.usage.output_tokens,
+            cacheRead: deltaCache.cacheRead || msgCache.cacheRead || prev.cacheRead || 0,
+            cacheWrite: deltaCache.cacheWrite || msgCache.cacheWrite || prev.cacheWrite || 0,
+          };
+        }
       }
-                                                        
-    } else {          
+      
+    } else { 
       const cand = (j.candidates && j.candidates[0]) || {};
       for (const p of ((cand.content && cand.content.parts) || [])) {
         if (!p) continue;
@@ -812,7 +854,7 @@ class UpstreamStreamParser {
         }
       }
       const u = j.usageMetadata || j.usage_metadata;
-      if (u) this.usage = { input: u.promptTokenCount || 0, output: u.candidatesTokenCount || 0 };
+      if (u) this.usage = Object.assign({ input: u.promptTokenCount || 0, output: u.candidatesTokenCount || 0 }, pickCache(u));
       const fr = cand.finishReason || cand.finish_reason;
       if (fr) this.finishReason = ({ STOP: 'stop', MAX_TOKENS: 'length', SAFETY: 'content_filter', RECITATION: 'content_filter' })[String(fr).toUpperCase()] || 'stop';
     }
@@ -825,7 +867,7 @@ class UpstreamStreamParser {
   }
 }
 
-                                                                
+
 function sseData(res, obj) { res.write('data: ' + JSON.stringify(obj) + '\n\n'); }
 function sseEvent(res, ev, obj) { res.write('event: ' + ev + '\ndata: ' + JSON.stringify(obj) + '\n\n'); }
 
@@ -920,7 +962,7 @@ function makeWriter(format, res, model, opts = {}) {
     };
   }
 
-                                            
+  
   const isArray = !!opts.geminiArray;
   let firstArray = true;
   let toolBuf = null;
@@ -961,7 +1003,7 @@ function makeWriter(format, res, model, opts = {}) {
   };
 }
 
-                                                                             
+
 function makeResponsesWriter(res, model) {
   const respId = randId('resp_');
   const msgId = randId('msg_');
@@ -1046,10 +1088,10 @@ function makeResponsesWriter(res, model) {
   };
 }
 
-                                                               
 
-                                               
-                                                  
+
+
+
 
 module.exports = {
   openaiToCanonical, claudeToCanonical, geminiToCanonical, responsesToCanonical,

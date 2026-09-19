@@ -1,9 +1,9 @@
 'use strict';
-                      
-                                                                                        
-                                                    
-                                                
-   
+
+
+
+
+
 const { upstreamRequest } = require('../../src/router.js');
 
 const PRESETS = {
@@ -27,9 +27,8 @@ module.exports.activate = (ctx) => {
   ctx.registerRoute('GET', '/query', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const chName = String(p.query.ch || '');
-    const pick = ctx.pickChannels().find(x => x.ch.name === chName);
-    if (!pick) return jsonRes(res, 404, { error: '渠道不存在: ' + chName });
-    const ch = pick.ch;
+    const ch = (ctx.gateway && ctx.gateway.instanceChannels ? ctx.gateway.instanceChannels() : []).find(x => x.name === chName);
+    if (!ch) return jsonRes(res, 404, { error: '渠道不存在: ' + chName });
     const preset = PRESETS[chName.toLowerCase()] || PRESETS[(ch.type || '').toLowerCase()];
     const url = ch.balanceUrl || (preset && preset.url);
     const jpath = ch.balancePath || (preset && preset.path);

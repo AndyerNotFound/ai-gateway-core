@@ -31,6 +31,46 @@
   --md-sys-shape-corner-medium:12px; --md-sys-shape-corner-large:16px; --md-sys-shape-corner-full:9999px;
   color-scheme:dark;
 }
+:root[data-theme="light"]{
+  --md-sys-color-primary:#6750A4; --md-sys-color-on-primary:#FFFFFF;
+  --md-sys-color-primary-container:#EADDFF; --md-sys-color-on-primary-container:#21005D;
+  --md-sys-color-secondary:#625B71; --md-sys-color-on-secondary:#FFFFFF;
+  --md-sys-color-secondary-container:#E8DEF8; --md-sys-color-on-secondary-container:#1D192B;
+  --md-sys-color-tertiary:#7D5260; --md-sys-color-tertiary-container:#FFD8E4; --md-sys-color-on-tertiary-container:#31111D;
+  --md-sys-color-error:#BA1A1A; --md-sys-color-on-error:#FFFFFF;
+  --md-sys-color-error-container:#FFDAD6; --md-sys-color-on-error-container:#410002;
+  --md-sys-color-background:#FEF7FF; --md-sys-color-on-background:#1D1B20;
+  --md-sys-color-surface:#FEF7FF; --md-sys-color-on-surface:#1D1B20;
+  --md-sys-color-surface-variant:#E7E0EC; --md-sys-color-on-surface-variant:#49454F;
+  --md-sys-color-surface-container-lowest:#FFFFFF; --md-sys-color-surface-container-low:#F7F2FA;
+  --md-sys-color-surface-container:#F3EDF7; --md-sys-color-surface-container-high:#ECE6F0;
+  --md-sys-color-surface-container-highest:#E6E0E9;
+  --md-sys-color-inverse-surface:#322F35; --md-sys-color-inverse-on-surface:#F5EFF7;
+  --md-sys-color-outline:#79747E; --md-sys-color-outline-variant:#CAC4D0;
+  --md-sys-color-surface-dim:#DED8E1; --md-sys-color-surface-bright:#FEF7FF;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: light){
+  :root[data-theme="auto"]{
+    --md-sys-color-primary:#6750A4; --md-sys-color-on-primary:#FFFFFF;
+    --md-sys-color-primary-container:#EADDFF; --md-sys-color-on-primary-container:#21005D;
+    --md-sys-color-secondary:#625B71; --md-sys-color-on-secondary:#FFFFFF;
+    --md-sys-color-secondary-container:#E8DEF8; --md-sys-color-on-secondary-container:#1D192B;
+    --md-sys-color-tertiary:#7D5260; --md-sys-color-tertiary-container:#FFD8E4; --md-sys-color-on-tertiary-container:#31111D;
+    --md-sys-color-error:#BA1A1A; --md-sys-color-on-error:#FFFFFF;
+    --md-sys-color-error-container:#FFDAD6; --md-sys-color-on-error-container:#410002;
+    --md-sys-color-background:#FEF7FF; --md-sys-color-on-background:#1D1B20;
+    --md-sys-color-surface:#FEF7FF; --md-sys-color-on-surface:#1D1B20;
+    --md-sys-color-surface-variant:#E7E0EC; --md-sys-color-on-surface-variant:#49454F;
+    --md-sys-color-surface-container-lowest:#FFFFFF; --md-sys-color-surface-container-low:#F7F2FA;
+    --md-sys-color-surface-container:#F3EDF7; --md-sys-color-surface-container-high:#ECE6F0;
+    --md-sys-color-surface-container-highest:#E6E0E9;
+    --md-sys-color-inverse-surface:#322F35; --md-sys-color-inverse-on-surface:#F5EFF7;
+    --md-sys-color-outline:#79747E; --md-sys-color-outline-variant:#CAC4D0;
+    --md-sys-color-surface-dim:#DED8E1; --md-sys-color-surface-bright:#FEF7FF;
+    color-scheme:light;
+  }
+}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-tap-highlight-color:transparent}
 body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
@@ -101,8 +141,14 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
 .stat-box .lbl{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:2px}
 @media(max-width:600px){.stat-row{grid-template-columns:repeat(2,1fr)}.stat-box .num{font-size:22px}}
-md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
+md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--gc-radius-card,var(--md-sys-shape-corner-large));
   border:1px solid var(--md-sys-color-outline-variant);padding:16px;margin-bottom:16px;display:block}
+/* Compose 主题: 卡片风格 (gc-card-style) 覆盖 md-filled-card */
+body[data-card-style="filled"] md-filled-card{background:var(--md-sys-color-surface-container-high);border-color:transparent}
+body[data-card-style="elevated"] md-filled-card{background:var(--md-sys-color-surface);border-color:transparent;box-shadow:0 2px 8px #0004}
+body[data-card-style="tonal"] md-filled-card{background:color-mix(in srgb,var(--md-sys-color-surface),var(--md-sys-color-primary) 10%);border-color:transparent}
+body[data-card-style="gradient"] md-filled-card{background:linear-gradient(160deg,var(--md-sys-color-surface),var(--md-sys-color-surface-container));border-color:transparent}
+body[data-card-style="outlined"] md-filled-card{border-width:var(--gc-stroke-width,1px)}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;margin-bottom:12px}
 .card-title{font-size:16px;font-weight:500}
 .card-sub{font-size:13px;color:var(--md-sys-color-on-surface-variant)}
@@ -188,6 +234,28 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
 .mkt-row:last-child{border-bottom:none}
 .mkt-row .ic{width:44px;height:44px;border-radius:12px;flex:none;display:grid;place-items:center;font-size:22px;background:var(--md-sys-color-surface-container-high)}
 .mkt-row .grow{flex:1;min-width:0}
+/* charts & activity feed */
+.chart-card{margin-bottom:16px}
+.chart-canvas{width:100%;height:120px;display:block;border-radius:8px}
+.ov-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:700px){.ov-grid{grid-template-columns:1fr!important}}
+.bar-row{display:flex;align-items:center;gap:8px;padding:5px 0}
+.bar-label{width:70px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none}
+.bar-track{flex:1;height:22px;border-radius:6px;background:var(--md-sys-color-surface-container);overflow:hidden;min-width:0}
+.bar-fill{height:100%;border-radius:6px;background:var(--md-sys-color-primary);transition:width .5s ease}
+.bar-val{width:50px;font-size:12px;text-align:right;flex:none;font-variant-numeric:tabular-nums;color:var(--md-sys-color-on-surface-variant)}
+.act-feed{max-height:340px;overflow-y:auto}
+.act-feed::-webkit-scrollbar{width:4px}
+.act-feed::-webkit-scrollbar-thumb{background:var(--md-sys-color-outline-variant);border-radius:2px}
+.act-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--md-sys-color-outline-variant)}
+.act-row:last-child{border-bottom:none}
+.act-dot{width:7px;height:7px;border-radius:50%;flex:none}
+.act-dot.ok{background:#4caf50}
+.act-dot.err{background:var(--md-sys-color-error)}
+.act-time{font-size:11px;color:var(--md-sys-color-on-surface-variant);flex:none;width:46px;font-variant-numeric:tabular-nums}
+.act-model{font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.act-chan{font-size:11px;color:var(--md-sys-color-on-surface-variant);flex:none;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-dur{font-size:11px;flex:none;font-variant-numeric:tabular-nums;color:var(--md-sys-color-on-surface-variant)}
 .mkt-row .mt{font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-top:3px;word-break:break-all}
 </style>
 </head>
@@ -209,6 +277,7 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
     <h1 id="pageTitle">总览</h1>
     <div class="tools">
       <md-outlined-select id="topInst" aria-label="当前实例"></md-outlined-select>
+      <md-outlined-icon-button id="themeBtn" title="主题"><span class="msym" id="themeIcon">dark_mode</span></md-outlined-icon-button>
       <md-outlined-icon-button id="refreshBtn" title="刷新"><md-icon>refresh</md-icon></md-outlined-icon-button>
       <md-outlined-icon-button id="keyBtn" title="管理密码"><md-icon>key</md-icon></md-outlined-icon-button>
     </div>
@@ -216,13 +285,49 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
 
   <main class="main" id="main">
 
-    <section id="page-overview" class="page">
+    <div class="dlg-overlay" id="themeDlg" hidden><div class="dlg-box">
+  <h2>主题设置</h2>
+  <div class="dlg-sub">颜色模式 · 主题 · 自定义主色</div>
+  <div class="mtitle" style="margin-top:12px">颜色模式</div>
+  <div style="display:flex;gap:6px;margin-top:6px" id="tdModes">
+    <button class="btnx btnx-tonal" data-m="dark">深色</button>
+    <button class="btnx btnx-tonal" data-m="light">浅色</button>
+    <button class="btnx btnx-tonal" data-m="auto">跟随系统</button>
+  </div>
+  <div class="mtitle" style="margin-top:14px">主题</div>
+  <div id="tdThemes" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><div class="empty" style="padding:4px">加载中…</div></div>
+  <div class="mtitle" style="margin-top:14px">自定义主色</div>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+    <input type="color" id="tdSeed" value="#4C8BF5" style="width:44px;height:36px;border:none;background:none;border-radius:8px;cursor:pointer">
+    <button class="btnx btnx-tonal" id="tdSeedClear">清除</button>
+    <button class="btnx btnx-fill" id="tdSeedApply">应用</button>
+  </div>
+  <div class="dlg-sub" style="margin-top:4px">主色经服务端生成整套配色, 保存后所有客户端刷新生效</div>
+  <div style="display:flex;justify-content:flex-end;margin-top:16px"><button class="btnx btnx-fill" id="tdClose">关闭</button></div>
+</div></div>
+
+<section id="page-overview" class="page">
       <div class="stat-row">
         <div class="stat-box"><div class="num" id="ov-instances">-</div><div class="lbl">实例数</div></div>
         <div class="stat-box"><div class="num" id="ov-running">-</div><div class="lbl">运行中</div></div>
         <div class="stat-box"><div class="num" id="ov-requests">-</div><div class="lbl">总请求</div></div>
         <div class="stat-box"><div class="num" id="ov-errors">-</div><div class="lbl">总错误</div></div>
         <div class="stat-box"><div class="num" id="ov-uptime">-</div><div class="lbl">运行时长</div></div>
+      </div>
+      <md-filled-card class="chart-card">
+        <div class="card-head"><div><div class="card-title">请求趋势</div><div class="card-sub">近 24 小时请求量</div></div>
+          <md-text-button onclick="loadOvStats()"><md-icon slot="icon">refresh</md-icon>刷新</md-text-button></div>
+        <canvas id="ov-chart" class="chart-canvas"></canvas>
+      </md-filled-card>
+      <div class="ov-grid">
+        <md-filled-card>
+          <div class="card-head"><div><div class="card-title">渠道分布</div><div class="card-sub">按请求量排序</div></div></div>
+          <div id="ov-bars"><div class="empty">暂无数据</div></div>
+        </md-filled-card>
+        <md-filled-card>
+          <div class="card-head"><div><div class="card-title">最近请求</div><div class="card-sub">实时活动流</div></div></div>
+          <div id="ov-feed" class="act-feed"><div class="empty">暂无数据</div></div>
+        </md-filled-card>
       </div>
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">实例状态</div><div class="card-sub">点击卡片管理实例</div></div>
@@ -292,6 +397,24 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
 
     <section id="page-settings" class="page" hidden>
       <md-filled-card>
+        <div class="card-head"><div><div class="card-title">主题与配色</div><div class="card-sub">颜色模式 · 主题 · 自定义主色</div></div></div>
+        <div class="mtitle">颜色模式</div>
+        <div style="display:flex;gap:6px;margin-top:6px" id="tsModes">
+          <button class="btnx btnx-tonal" data-m="dark">深色</button>
+          <button class="btnx btnx-tonal" data-m="light">浅色</button>
+          <button class="btnx btnx-tonal" data-m="auto">跟随系统</button>
+        </div>
+        <div class="mtitle" style="margin-top:14px">主题</div>
+        <div id="themeList" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><div class="empty" style="padding:8px">加载中…</div></div>
+        <div class="mtitle" style="margin-top:14px">自定义主色</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <input type="color" id="tsSeed" value="#4C8BF5" style="width:44px;height:36px;border:none;background:none;border-radius:8px;cursor:pointer">
+          <button class="btnx btnx-tonal" id="tsSeedClear">清除</button>
+          <button class="btnx btnx-fill" id="tsSeedApply">应用</button>
+        </div>
+        <div class="card-sub" style="margin-top:4px">主色经服务端生成整套配色, 保存后所有客户端刷新生效</div>
+      </md-filled-card>
+      <md-filled-card>
         <div class="card-head"><div><div class="card-title">实例高级设置</div><div class="card-sub">网关密钥 / 超时 / 重试 / TLS, 保存即热生效</div></div></div>
         <div class="frow"><label class="fld-lb">gatewayKey 网关密码 (空=免密)</label><input class="fld" id="adv_gatewayKey" type="password"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -309,7 +432,20 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btnx btnx-fill" id="advSave"><span class="msym" style="font-size:18px">save</span>保存高级设置</button></div>
       </md-filled-card>
-      <div id="pluginSettings"></div>
+            <md-filled-card>
+        <div class="card-head"><div><div class="card-title">访问控制 (accessGuard)</div><div class="card-sub">限制哪些客户端能访问此服务点</div></div></div>
+        <div class="frow-h"><div><div class="lb">模式</div><div class="sub2">off=不过滤 · app=仅 App 客户端 (UA 匹配) · web=仅浏览器</div></div></div>
+        <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap" id="agModeBtns">
+          <button class="btnx btnx-tonal ag-mode" data-m="off">关闭 off</button>
+          <button class="btnx btnx-tonal ag-mode" data-m="app">仅 App</button>
+          <button class="btnx btnx-tonal ag-mode" data-m="web">仅网页</button>
+        </div>
+        <div class="frow"><label class="fld-lb">允许的客户端标识 (逗号分隔, 匹配 UA 子串)</label><input class="fld" id="ag_allowUA" placeholder="okhttp,dalvik,gaycore"></div>
+        <div class="frow"><label class="fld-lb">豁免路径前缀 (逗号分隔, 永远放行)</label><input class="fld" id="ag_exempt" placeholder="/admin,/health,/plugins,/user"></div>
+        <div class="card-sub" style="margin-top:4px">弱边界 (UA 可伪造), 真要隔离就别开公网隧道。管理端点始终有 adminKey 鉴权。</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btnx btnx-fill" id="agSave"><span class="msym" style="font-size:18px">save</span>保存访问控制</button></div>
+      </md-filled-card>
+<div id="pluginSettings"></div>
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">实例配置</div><div class="card-sub" id="cfgInstName"></div></div></div>
         <textarea class="code" id="cfgJson" rows="15" spellcheck="false"></textarea>
@@ -321,7 +457,22 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
       </md-filled-card>
     </section>
 
-    <section id="page-pluginview" class="page" hidden>
+    <section id="page-models" class="page" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">模型管理</div><div class="card-sub" id="mdSub">加载中…</div></div></div>
+        <div id="mdStats" class="stat-row" style="margin-bottom:14px"></div>
+      </md-filled-card>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">分组管理</div><div class="card-sub">分组用于模型分类与计费倍率</div></div>
+          <button class="btnx btnx-fill" id="mdAddGroup"><span class="msym" style="font-size:18px">add</span>新建分组</button></div>
+        <div id="mdGroups" style="margin-top:8px"></div>
+      </md-filled-card>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">模型列表</div><div class="card-sub">跨实例 · 按渠道分组 · 可编辑分组/别名/价格</div></div></div>
+        <div id="mdModels" style="margin-top:8px"></div>
+      </md-filled-card>
+    </section>
+<section id="page-pluginview" class="page" hidden>
       <iframe id="pluginFrame" title="插件页面"></iframe>
     </section>
 
@@ -420,6 +571,155 @@ async function api(path, opts={}){
 
 /* ---------- key ---------- */
 let keyFirstShow = true;
+/* ---- 主题: dark / light / auto ---- */
+function applyTheme(t){
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem('agw_theme', t);
+  const ic = document.getElementById('themeIcon');
+  if (ic) ic.textContent = t==='dark' ? 'light_mode' : (t==='light' ? 'auto_mode' : 'dark_mode');
+  const tb = document.getElementById('themeBtn');
+  if (tb) tb.title = '主题设置' + (t==='dark'?' · 深色':t==='light'?' · 浅色':' · 跟随系统');
+}
+(function(){
+  const t = localStorage.getItem('agw_theme') || 'dark';
+  applyTheme(t);
+})();
+document.addEventListener('DOMContentLoaded', ()=>{
+  const b = document.getElementById('themeBtn');
+  if (b) b.addEventListener('click', ()=>switchTab('settings'));
+  $('tdClose').onclick = ()=>{ $('themeDlg').hidden = true; };
+  $('tdModes').querySelectorAll('button').forEach(btn => btn.onclick = ()=>{ applyTheme(btn.dataset.m); openThemeDialog(); });
+});
+/* 打开主题设置面板 */
+async function openThemeDialog(){
+  const cur = document.documentElement.dataset.theme || 'dark';
+  $('tdModes').querySelectorAll('button').forEach(b => {
+    const on = b.dataset.m === cur;
+    b.classList.toggle('btnx-fill', on); b.classList.toggle('btnx-tonal', !on);
+  });
+  try {
+    const b = await fetch('/api/app/bootstrap').then(r=>r.json());
+    const curT = (b.layout && b.layout.theme) || (b.themes[0] && b.themes[0].id);
+    $('tdThemes').innerHTML = b.themes.map(t => '<button class="btnx '+(t.id===curT?'btnx-fill':'btnx-tonal')+'" data-tid="'+t.id+'">'+t.name+(t.locked?' <span class="bdg off">默认</span>':'')+'</button>').join('');
+    $('tdThemes').querySelectorAll('button[data-tid]').forEach(btn => btn.onclick = async ()=>{
+      try { await api('/admin/api/client-config/'+state.uid, {method:'POST', body:{layout:Object.assign({}, b.layout||{}, {theme:btn.dataset.tid})}}); toast('主题已切换'); openThemeDialog(); } catch(e){ toast(e.message,true); }
+    });
+    $('tdSeedApply').onclick = async () => {
+      try { await api('/admin/api/plugin-config/'+state.uid+'/'+curT, {method:'POST', body:{seed:$('tdSeed').value}}); toast('主色已应用, 刷新后生效'); } catch(e){ toast(e.message,true); }
+    };
+    $('tdSeedClear').onclick = async () => {
+      try { await api('/admin/api/plugin-config/'+state.uid+'/'+curT, {method:'POST', body:{seed:''}}); toast('已清除主色'); } catch(e){ toast(e.message,true); }
+    };
+  } catch(_){}
+  $('themeDlg').hidden = false;
+}
+/* 应用服务端主题: 注入活动主题的颜色令牌 + cssVars(圆角/描边/卡片风格) */
+function applyServerTheme(b){
+  try {
+    if (!b || !b.themes || !b.themes.length) return;
+    const tid = (b.layout && b.layout.theme) || b.themes[0].id;
+    state.activeTheme = tid;
+    const t = b.themes.find(x=>x.id===tid) || b.themes[0];
+    const dark = matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light';
+    const useDark = document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    const toks = useDark ? (t.dark||{}) : (t.light||t.dark||{});
+    const r = document.documentElement;
+    for (const k of Object.keys(toks)) r.style.setProperty('--md-sys-color-'+k.replace(/([A-Z])/g,'-$1').toLowerCase(), toks[k]);
+    const cv = t.cssVars || {};
+    for (const k of Object.keys(cv)) r.style.setProperty(k, cv[k]);
+    document.body.dataset.cardStyle = cv['gc-card-style'] || 'outlined';
+  } catch(_){}
+}
+/* 主题选择器: 列出 bootstrap 主题, 点击设为 layout.theme */
+async function loadThemes(){
+  try {
+    const b = await fetch('/api/app/bootstrap').then(r=>r.json());
+    applyServerTheme(b);
+    const curMode = document.documentElement.dataset.theme || 'dark';
+    $('tsModes').querySelectorAll('button').forEach(btn => {
+      const on = btn.dataset.m === curMode;
+      btn.classList.toggle('btnx-fill', on); btn.classList.toggle('btnx-tonal', !on);
+      btn.onclick = () => { applyTheme(btn.dataset.m); loadThemes(); };
+    });
+    const box = $('themeList'); if (!box) return;
+    const cur = (b.layout && b.layout.theme) || (b.themes[0] && b.themes[0].id);
+    box.innerHTML = b.themes.map(t => '<button class="btnx '+(t.id===cur?'btnx-fill':'btnx-tonal')+'" data-tid="'+t.id+'" style="margin:2px">'+t.name+(t.locked?' <span class="bdg off">默认</span>':'')+'</button>').join('');
+    box.querySelectorAll('button[data-tid]').forEach(btn => btn.onclick = async ()=>{
+      const tid = btn.dataset.tid;
+      try { await api('/admin/api/client-config/'+state.uid, {method:'POST', body:{layout:Object.assign({}, b.layout||{}, {theme:tid})}}); toast('主题已切换'); loadThemes(); } catch(e){ toast(e.message, true); }
+    });
+    $('tsSeedApply').onclick = async () => {
+      try { await api('/admin/api/plugin-config/'+state.uid+'/'+cur, {method:'POST', body:{seed:$('tsSeed').value}}); toast('主色已应用, 刷新后生效'); } catch(e){ toast(e.message, true); }
+    };
+    $('tsSeedClear').onclick = async () => {
+      try { await api('/admin/api/plugin-config/'+state.uid+'/'+cur, {method:'POST', body:{seed:''}}); toast('已清除主色'); } catch(e){ toast(e.message, true); }
+    };
+  } catch(_){}
+}
+let mdData = null;
+async function loadModelManagement(){
+  try {
+    const r = await api('/plugins/model-square/admin/groups?uid='+state.uid);
+    mdData = r;
+    const insts = r.instances||[];
+    const groups = r.groups||[];
+    const counts = r.counts||{};
+    const totalModels = insts.reduce((n,i)=>n + (i.channels||[]).reduce((m,c)=>m+(c.models||[]).length,0),0);
+    $('mdSub').textContent = totalModels + ' 个模型 / ' + groups.length + ' 个分组 / ' + insts.length + ' 个实例';
+    $('mdStats').innerHTML = '<div class="stat-box"><div class="num">'+totalModels+'</div><div class="lbl">模型</div></div>'
+      + '<div class="stat-box"><div class="num">'+groups.length+'</div><div class="lbl">分组</div></div>'
+      + '<div class="stat-box"><div class="num">'+insts.length+'</div><div class="lbl">实例</div></div>';
+    // 分组
+    const gh = $('mdGroups');
+    gh.innerHTML = groups.map(g => 
+      '<div class="lrow"><span class="msym" style="color:var(--md-sys-color-primary)">label</span>'
+      + '<span class="grow"><span class="nm">'+g.name+'</span><span class="mt">倍率 '+(g.rate||1)+' / '+(counts[g.name]||0)+' 个模型</span></span>'
+      + '<button class="btnx btnx-tonal btn-sm" data-act="rename" data-name="'+g.name+'">改名</button> '
+      + '<button class="btnx btnx-tonal btn-sm" data-act="rate" data-name="'+g.name+'" data-rate="'+(g.rate||1)+'">倍率</button> '
+      + (g.name==='Default' ? '' : '<button class="btnx btn-danger btn-sm" data-act="del" data-name="'+g.name+'">删</button>')
+      + '</div>'
+    ).join('') || '<div class="empty">暂无分组</div>';
+    gh.querySelectorAll('button[data-act]').forEach(btn => btn.onclick = async ()=>{
+      const act = btn.dataset.act, name = btn.dataset.name;
+      if (act==='rename'){ const nn=prompt('新名称:',name); if(!nn||nn===name) return; try{ await api('/plugins/model-square/admin/groups',{method:'POST',body:{action:'renameGroup',name,newName:nn}}); toast('已改名'); loadModelManagement(); }catch(e){toast(e.message,true);} }
+      else if (act==='rate'){ const r=prompt(name+' 倍率:',String(btn.dataset.rate)); if(!r) return; try{ await api('/plugins/model-square/admin/groups',{method:'POST',body:{action:'setGroupRate',name,rate:Number(r)}}); toast('已设倍率'); loadModelManagement(); }catch(e){toast(e.message,true);} }
+      else if (act==='del'){ if(!confirm('删除分组「'+name+'」?')) return; try{ await api('/plugins/model-square/admin/groups',{method:'POST',body:{action:'removeGroup',name}}); toast('已删除'); loadModelManagement(); }catch(e){toast(e.message,true);} }
+    });
+    $('mdAddGroup').onclick = async () => {
+      const name=prompt('新分组名:'); if(!name) return;
+      try{ await api('/plugins/model-square/admin/groups',{method:'POST',body:{action:'addGroup',name,rate:1}}); toast('已添加'); loadModelManagement(); }catch(e){toast(e.message,true);}
+    };
+    // 模型列表
+    let html = '';
+    for (const inst of insts) for (const ch of (inst.channels||[])) {
+      const models = ch.models||[]; if(!models.length) continue;
+      html += '<div style="margin-bottom:16px"><div class="mtitle" style="margin-bottom:6px">'+inst.name+' / '+ch.name+' <span class="bdg biz">'+models.length+'</span></div><div style="display:grid;gap:2px">';
+      for (const m of models) {
+        const key = encodeURIComponent(JSON.stringify({i:inst.name,c:ch.name,m:m.name}));
+        html += '<div class="lrow" style="padding:4px 0"><span class="grow"><span class="nm">'+m.name+'</span>'
+          + (m.alias?' <span class="bdg off">'+m.alias+'</span>':'')
+          + ' <span class="bdg '+(m.group==='Default'?'off':'biz')+'">'+(m.group||'Default')+'</span>'
+          + ' <span class="mt">'+(m.price?('¥'+(m.price.in||0)+'/'+(m.price.out||0)):(m.perCall?'按次¥'+m.perCall:'无价'))+'</span></span>'
+          + '<button class="btnx btnx-tonal btn-sm" data-edit="'+key+'">编辑</button></div>';
+      }
+      html += '</div></div>';
+    }
+    const mh = $('mdModels');
+    mh.innerHTML = html || '<div class="empty">暂无模型</div>';
+    mh.querySelectorAll('button[data-edit]').forEach(btn => btn.onclick = () => mdEditModel(btn.dataset.edit));
+  } catch(e){ $('mdSub').textContent = '加载失败: '+e.message; }
+}
+async function mdEditModel(key){
+  const o = JSON.parse(decodeURIComponent(key));
+  const group = prompt('分组 (Default/VIP/...):', '');
+  const alias = prompt('对外别名 (可空):', '');
+  const priceIn = prompt('输入价格 ¥/1M (可空):', '');
+  const body = {action:'setModel', instance:o.i, channel:o.c, model:o.m};
+  if(group) body.group = group;
+  if(alias) body.alias = alias;
+  if(priceIn){ const priceOut = prompt('输出价格 ¥/1M (可空):', ''); body.price = {in:Number(priceIn), out:Number(priceOut||priceIn)}; }
+  try { await api('/plugins/model-square/admin/groups', {method:'POST', body:body}); toast('已保存'); loadModelManagement(); } catch(e){ toast(e.message, true); }
+}
 function setKey(k){ state.key=k||''; if(k){ localStorage.setItem('agw_core_key',k); document.cookie='adminKey='+encodeURIComponent(k)+'; path=/; SameSite=Strict'; } }
 function showKeyDlg(wrong){
   $('keyDlgTitle').textContent = wrong ? '密钥不正确' : '管理密钥';
@@ -446,12 +746,17 @@ const TABS = [
   {id:'instances', ic:'dns', lb:'实例'},
   {id:'plugins', ic:'extension', lb:'插件'},
   {id:'settings', ic:'settings', lb:'设置'},
+  {id:'models', ic:'apps', lb:'模型'},
 ];
-const TAB_TITLES = { overview:'总览', channels:'渠道', instances:'实例', plugins:'插件', settings:'设置', pluginview:'插件', setup:'首次安装' };
+const TAB_TITLES = { overview:'总览', channels:'渠道', instances:'实例', plugins:'插件', settings:'设置', models:'模型', pluginview:'插件', setup:'首次安装' };
 function pluginIconHtml(p, size){
   const ic = p.icon || (p.type==='auth' ? 'msym:lock' : 'msym:extension');
   const s = size||20;
-  if (String(ic).startsWith('msym:')) return '<span class="msym" style="font-size:'+s+'px">'+esc(ic.slice(5))+'</span>';
+  let name = String(ic);
+  if (name.startsWith('msym:')) name = name.slice(5);
+  else if (/^[a-z0-9_]+$/i.test(name)) { /* 裸英文单词按 Material Symbols 名处理 */ }
+  else name = null;
+  if (name) return '<span class="msym" style="font-size:'+s+'px">'+esc(name)+'</span>';
   return '<span style="font-size:'+s+'px">'+esc(ic)+'</span>';
 }
 function mktIconHtml(icon){
@@ -464,6 +769,7 @@ function renderNav(){
   for (const pp of state.pluginPages){
     let ic = pp.icon || 'msym:extension', sym = true;
     if (String(ic).startsWith('msym:')) ic = ic.slice(5);
+    else if (/^[a-z0-9_]+$/i.test(String(ic))) { /* 裸英文单词按 Material Symbols 名处理 */ }
     else sym = false; // 插件自定义 emoji 图标
     items.push({id:'pp:'+pp.id, ic, lb:pp.name, sym});
   }
@@ -505,6 +811,7 @@ function switchTab(tab){
   const el = $('page-'+pg);
   if (el){ el.hidden=false; el.classList.remove('anim-in'); void el.offsetWidth; el.classList.add('anim-in'); }
   if (tab==='settings') loadConfig();
+    if (tab==='models') loadModelManagement();
   if (tab==='channels') loadChannels();
   closeDrawer();
   renderNav();
@@ -540,6 +847,7 @@ async function loadAll(){
     if (!state.instances.find(i=>i.uid===state.uid)) state.uid = state.instances[0].uid;
     $('topInst').value = String(state.uid);
     await loadPlugins();
+    loadThemes();
     renderNav();
     if (!state.tab.startsWith('pp:')) switchTab(state.tab); else switchTab(state.tab);
   } catch(e){
@@ -569,12 +877,76 @@ function renderOverview(){
   $('ov-requests').textContent = fmtNum(ins.reduce((a,i)=>a+(i.requests||0),0));
   $('ov-errors').textContent = fmtNum(ins.reduce((a,i)=>a+(i.errors||0),0));
   fetch('/health').then(r=>r.json()).then(h=>{ upBase=h.uptime||0; upAt=Date.now(); if(!upTimer) tickUp(); }).catch(()=>{});
+  loadOvStats();
   $('ov-inst-list').innerHTML = ins.map(i=>
     '<div class="lrow"><span class="dot '+(i.running?'on':'off')+'"></span><div class="grow"><div class="nm">'+esc(i.name)+'</div><div class="mt">uid '+i.uid+' · 端口 '+i.port+(i.enabled===false?' · 已禁用':'')+'</div></div><span class="bdg '+(i.running?'ok':'off')+'">'+fmtNum(i.requests||0)+' 请求</span></div>'
   ).join('') || '<div class="empty"><span class="msym">dns</span>还没有实例</div>';
 }
 function tickUp(){ $('ov-uptime').textContent = fmtUp(upBase+(Date.now()-upAt)/1000); upTimer=setTimeout(tickUp,1000); }
 document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>switchTab(b.getAttribute('data-goto')));
+
+/* ---------- 图表 & 活动流 ---------- */
+let ovStatsTimer=null;
+async function loadOvStats(){
+  if(!state.uid) return;
+  try{
+    const s=await api('/admin/api/stats/'+state.uid);
+    renderOvChart(s.hourly||[]);
+    renderOvBars(s.byChannel||[]);
+    renderOvFeed(s.recent||[]);
+  }catch(e){}
+  if(ovStatsTimer) clearTimeout(ovStatsTimer);
+  ovStatsTimer=setTimeout(loadOvStats,10000);
+}
+function renderOvChart(hourly){
+  const c=$('ov-chart'); if(!c) return;
+  const dpr=window.devicePixelRatio||1;
+  const w=c.clientWidth||300,h=120;
+  c.width=w*dpr; c.height=h*dpr;
+  const ctx=c.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  const bars=hourly.slice(-24);
+  const max=Math.max(1,...bars.map(b=>b.count));
+  const bw=w/bars.length;
+  const p=getComputedStyle(document.documentElement);
+  const cPri=p.getPropertyValue('--md-sys-color-primary').trim()||'#D0BCFF';
+  const cErr=p.getPropertyValue('--md-sys-color-error').trim()||'#F2B8B5';
+  const cOut=p.getPropertyValue('--md-sys-color-outline-variant').trim()||'#49454F';
+  const cTxt=p.getPropertyValue('--md-sys-color-on-surface-variant').trim()||'#CAC4D0';
+  bars.forEach((b,i)=>{
+    const x=i*bw, bh=(b.count/max)*(h-24), y=h-18-bh;
+    if(bh>1){ctx.fillStyle=b.errors>0?cErr:cPri; ctx.fillRect(x+1.5,y,bw-3,bh);}
+    else{ctx.fillStyle=cOut; ctx.fillRect(x+1.5,h-19,bw-3,1);}
+  });
+  ctx.fillStyle=cTxt; ctx.font='10px system-ui'; ctx.textBaseline='top';
+  ctx.textAlign='left'; ctx.fillText('-24h',2,0);
+  ctx.textAlign='right'; ctx.fillText('now',w-2,0);
+  ctx.textAlign='center'; ctx.fillText('\u5cf0\u503c '+max,w/2,0);
+}
+function renderOvBars(chs){
+  const el=$('ov-bars'); if(!el) return;
+  if(!chs.length){el.innerHTML='<div class="empty">\u6682\u65e0\u6e20\u9053\u6570\u636e</div>'; return;}
+  const max=Math.max(1,...chs.map(c=>c.requests));
+  el.innerHTML=chs.slice(0,8).map(c=>{
+    const pct=(c.requests/max*100).toFixed(0);
+    return '<div class="bar-row"><span class="bar-label">'+esc(c.name)+'</span>'
+      +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div>'
+      +'<span class="bar-val">'+c.requests+'</span></div>';
+  }).join('');
+}
+function renderOvFeed(recent){
+  const el=$('ov-feed'); if(!el) return;
+  if(!recent.length){el.innerHTML='<div class="empty">\u6682\u65e0\u8bf7\u6c42\u8bb0\u5f55</div>'; return;}
+  el.innerHTML=recent.slice(-30).reverse().map(r=>{
+    const ok=(r.status||0)<400;
+    return '<div class="act-row"><span class="act-dot '+(ok?'ok':'err')+'"></span>'
+      +'<span class="act-time">'+esc((r.time||'').slice(11))+'</span>'
+      +'<span class="act-model">'+esc(r.model||'')+'</span>'
+      +'<span class="act-chan">'+esc(r.channel||'')+'</span>'
+      +'<span class="act-dur">'+(r.duration||0)+'ms</span></div>';
+  }).join('');
+}
+
 
 /* ---------- 渠道管理 ---------- */
 let curCfg = null; // 当前实例完整配置(打码版, 编辑回填用)
@@ -819,11 +1191,11 @@ $('pluginList').addEventListener('change', async e=>{
   const sw = e.target.closest('input[data-pid]'); if(!sw) return;
   const pid = sw.getAttribute('data-pid'), enable = !!sw.checked;
   try {
-    const c = await api('/admin/api/config/'+state.uid);
-    const cfg = c.config; cfg.plugins = Array.isArray(cfg.plugins)?cfg.plugins:[];
-    const ex = cfg.plugins.find(x=>x&&x.id===pid);
-    if (ex) ex.enable = enable; else cfg.plugins.push({id:pid, enable});
-    await api('/admin/api/config/'+state.uid,{method:'POST',body:cfg});
+    /* ★2026-09-19 修复：插件的启用状态存在**全局表**（data/plugin-enable.json），
+     *  对应 /admin/api/plugin-enable。以前这里写的是**实例内联 cfg.plugins[]**（走 /admin/api/config），
+     *  而内核运行时读的是全局表 —— 于是"点了没反应、刷新还是旧状态"；
+     *  而且整份 cfg 回写还有覆盖其它字段的风险。 */
+    await api('/admin/api/plugin-enable',{method:'POST',body:{id:pid,enable:enable}});
     toast((enable?'已启用 ':'已禁用 ')+pid);
     await loadPlugins();
   } catch(e2){ toast(e2.message, true); sw.checked = !enable; }
@@ -848,6 +1220,11 @@ async function loadConfig(){
     $('adv_tls').checked = !!tls.enable;
     $('adv_tlsBox').style.display = tls.enable ? '' : 'none';
     $('adv_tlsPort').value = tls.port??''; $('adv_tlsCert').value = tls.cert||''; $('adv_tlsKey').value = tls.key||'';
+    const ag = c.accessGuard||{};
+    state.agMode = ag.mode||'off';
+    $('ag_allowUA').value = (ag.allowUA||['okhttp','dalvik','gaycore']).join(',');
+    $('ag_exempt').value = (ag.exemptPaths||['/admin','/health']).join(',');
+    document.querySelectorAll('.ag-mode').forEach(b=>{ const on=b.dataset.m===state.agMode; b.classList.toggle('btnx-fill',on); b.classList.toggle('btnx-tonal',!on); });
   } catch(e){ toast(e.message, true); }
 }
 $('adv_tls').addEventListener('change', ()=>{ $('adv_tlsBox').style.display = $('adv_tls').checked ? '' : 'none'; });
@@ -869,6 +1246,19 @@ $('advSave').onclick = async ()=>{
     } else c.tls = { enable:false };
     await api('/admin/api/config/'+state.uid, {method:'POST', body:c});
     toast('高级设置已保存并热生效'); loadConfig();
+  } catch(e){ toast(e.message, true); }
+};
+document.querySelectorAll('.ag-mode').forEach(b=>{ b.onclick=()=>{ state.agMode=b.dataset.m; document.querySelectorAll('.ag-mode').forEach(x=>{ const on=x.dataset.m===state.agMode; x.classList.toggle('btnx-fill',on); x.classList.toggle('btnx-tonal',!on); }); }; });
+$('agSave').onclick = async ()=>{
+  try {
+    await api('/admin/api/config/'+state.uid, {method:'POST', body:{
+      accessGuard:{
+        mode: state.agMode,
+        exemptPaths: $('ag_exempt').value.split(',').map(x=>x.trim()).filter(Boolean),
+        allowUA: $('ag_allowUA').value.split(',').map(x=>x.trim()).filter(Boolean)
+      }
+    }});
+    toast('访问控制已保存并热生效'); loadConfig();
   } catch(e){ toast(e.message, true); }
 };
 $('cfgReload').onclick = loadConfig;

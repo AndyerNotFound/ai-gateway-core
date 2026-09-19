@@ -1,0 +1,71 @@
+{
+  "id": "theme-compose",
+  "name": "Compose 表现主题",
+  "version": "1.0.0",
+  "type": "theme",
+  "author": "ai-gateway-core",
+  "description": "可定制卡片风格(描边/实色/阴影/淡彩/渐变)、圆角缩放、描边宽度、配色方案(标准/表现力/鲜艳/柔和/单色)。打破 MD3 只有描边+实色的单调。",
+  "icon": "msym:palette",
+  "hasServer": false,
+  "theme": {
+    "id": "compose",
+    "name": "Compose Expressive",
+    "dark": {
+      "primary": "#BBCEFF",
+      "onPrimary": "#002B6B",
+      "primaryContainer": "#3A4A7A",
+      "onPrimaryContainer": "#DDE6FF",
+      "secondary": "#B6C5DC",
+      "onSecondary": "#21303F",
+      "secondaryContainer": "#384654",
+      "onSecondaryContainer": "#D2E0F6",
+      "tertiary": "#D4BEE8",
+      "surface": "#121318",
+      "surfaceContainer": "#1C1E24",
+      "surfaceContainerHigh": "#262931",
+      "background": "#121318",
+      "onSurface": "#E3E4EA",
+      "onSurfaceVariant": "#C4C6CF",
+      "outline": "#8E909A",
+      "error": "#F2B8B5",
+      "onError": "#601410"
+    },
+    "light": {
+      "primary": "#4C6FE0",
+      "onPrimary": "#FFFFFF",
+      "primaryContainer": "#DDE6FF",
+      "onPrimaryContainer": "#101F4A",
+      "secondary": "#565F71",
+      "onSecondary": "#FFFFFF",
+      "secondaryContainer": "#DAE2F9",
+      "onSecondaryContainer": "#131C2B",
+      "tertiary": "#7157A8",
+      "surface": "#FAFBFF",
+      "surfaceContainer": "#EEF0F8",
+      "surfaceContainerHigh": "#E8EAF2",
+      "background": "#FAFBFF",
+      "onSurface": "#1A1B22",
+      "onSurfaceVariant": "#46474F",
+      "outline": "#76767F",
+      "error": "#BA1A1A",
+      "onError": "#FFFFFF"
+    },
+    "cssVars": {
+      "gc-radius-card": "20px",
+      "gc-radius-input": "12px",
+      "gc-radius-btn": "12px",
+      "gc-radius-chip": "8px",
+      "gc-stroke-width": "1px",
+      "gc-card-style": "outlined",
+      "gc-scheme": "standard"
+    }
+  },
+  "configSchema": [
+    { "key": "seed", "label": "浅色主色 (留空=默认蓝)", "type": "string", "default": "" },
+    { "key": "seedDark", "label": "深色主色 (留空=同浅色)", "type": "string", "default": "" },
+    { "key": "cardStyle", "label": "卡片风格", "type": "string", "default": "outlined" },
+    { "key": "cornerScale", "label": "圆角缩放 (0.5~2, 1=标准)", "type": "number", "default": 1 },
+    { "key": "strokeWidth", "label": "描边宽度 (0~4px, 1=标准)", "type": "number", "default": 1 },
+    { "key": "scheme", "label": "配色方案", "type": "string", "default": "standard" }
+  ]
+}

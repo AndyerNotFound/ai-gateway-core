@@ -1,23 +1,23 @@
 'use strict';
-                                                                
-  
-                                                              
-                                                  
-                                      
-                                 
-                                         
-                   
-                                      
-  
-                                                                         
-                                                                     
-   
+
+
+
+
+
+
+
+
+
+
+
+
+
 const crypto = require('crypto');
 const { logErr } = require('./util');
 
-                                              
-                                                     
-                   
+
+
+
 let _lastQueryKeyWarn = 0;
 function warnQueryAdminKey(req) {
   const now = Date.now();
@@ -28,7 +28,13 @@ function warnQueryAdminKey(req) {
     ' — 密钥会进入浏览器历史 / Referer 头 / 服务器访问日志 / 截图。建议改用 x-admin-key 头或 adminKey cookie。');
 }
 
-                                                
+
+function decodeURIComponentSafe(v) {
+  if (!v) return '';
+  try { return decodeURIComponent(v); } catch (_) { return String(v); }
+}
+
+
 function base32Decode(s) {
   const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   s = String(s || '').toUpperCase().replace(/=+$/, '').replace(/[^A-Z2-7]/g, '');
@@ -69,7 +75,7 @@ function totpVerify(secretB32, code) {
   return false;
 }
 
-                                      
+
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16).toString('base64url');
   const h = crypto.scryptSync(String(pw), salt, 32);
@@ -90,7 +96,7 @@ function genApiKey(len) {
   return 'sk-' + crypto.randomBytes(bytes).toString('base64url').slice(0, n);
 }
 
-                                                            
+
 function presentedToken(req, query) {
   const h = req.headers;
   const auth = h.authorization || '';
@@ -98,25 +104,25 @@ function presentedToken(req, query) {
   return bearer || h['x-api-key'] || h['x-goog-api-key'] || (query && query.get('key')) || '';
 }
 
-                          
-               
-                                                  
-                                                                      
-                                                                                                     
-    
-                                                   
-   
+
+
+
+
+
+
+
+
 class AuthChain {
   constructor() {
-    this.strategies = [];              
-    this.adminStrategies = [];                
+    this.strategies = [];      
+    this.adminStrategies = []; 
   }
 
-                                                    
+  
   registerAuth(strategy, opts = {}) {
     if (!strategy || typeof strategy.check !== 'function') throw new Error('认证策略必须提供 check()');
     if (!strategy.name) strategy.name = 'strategy-' + this.strategies.length;
-    if (opts.admin) this.adminStrategies.push(strategy);                         
+    if (opts.admin) this.adminStrategies.push(strategy); 
     else this.strategies.push(strategy);
     return strategy.name;
   }
@@ -124,35 +130,53 @@ class AuthChain {
     this.strategies = this.strategies.filter(s => s.name !== name);
     this.adminStrategies = this.adminStrategies.filter(s => s.name !== name);
   }
+  
 
-                                                        
+
+
+
+
+  unregisterAuthObj(strategy) {
+    if (!strategy) return;
+    this.strategies = this.strategies.filter(s => s !== strategy);
+    this.adminStrategies = this.adminStrategies.filter(s => s !== strategy);
+  }
+
+  
   check(cfg, req, query) {
     const token = presentedToken(req, query);
-                         
+    
     if (cfg.gatewayKey && token && token === cfg.gatewayKey) return { ok: true, admin: true, strategy: 'gatewayKey' };
-            
+    
     const ctx = { token, req, query, cfg };
     for (const s of this.strategies) {
       let r;
       try { r = s.check(ctx); } catch (e) { r = { ok: false, status: 500, error: '认证策略 ' + s.name + ' 异常: ' + e.message }; }
       if (r) { r.strategy = s.name; return r; }
     }
-                                          
+    
     if (!cfg.gatewayKey && !this.strategies.length) return { ok: true, admin: true, strategy: 'none' };
     return { ok: false, status: 401, error: 'invalid key' };
   }
 
-                                                                                        
-                                                                
+  
+
   checkAdmin(cfg, req, query) {
     const h = req.headers;
     const auth = h.authorization || '';
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     const cookie = h.cookie || '';
-    const cookieKey = (cookie.match(/(?:^|;\s*)adminKey=([^;]+)/) || [])[1] || '';
+    const cookieRaw = (cookie.match(/(?:^|;\s*)adminKey=([^;]+)/) || [])[1] || '';
     const queryKey = (query && query.get('adminKey')) || '';
     if (queryKey) warnQueryAdminKey(req);
-    const adminToken = bearer || h['x-admin-key'] || queryKey || cookieKey || '';
+    
+
+
+
+
+
+    const cands = [bearer, h['x-admin-key'], queryKey, decodeURIComponentSafe(cookieRaw), cookieRaw].filter(Boolean);
+    const adminToken = (cfg.adminKey && cands.find(t => t === cfg.adminKey)) || cands[0] || '';
     if (cfg.adminKey && adminToken !== cfg.adminKey) return { ok: false, status: 401, error: '需要管理密码(adminKey)' };
     const ctx = { token: adminToken, req, query, cfg, admin: true };
     for (const s of this.adminStrategies) {
@@ -164,8 +188,8 @@ class AuthChain {
   }
 }
 
-                                    
-                                                                      
+
+
 function isLocalhost(req) {
   const ip = (req.socket && req.socket.remoteAddress) || '';
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';

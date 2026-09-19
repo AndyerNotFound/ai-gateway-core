@@ -1,7 +1,7 @@
 {
   "id": "auth-user",
   "name": "用户体系",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "auth",
   "description": "用户注册/账密登录/自助发卡/资料编辑 (依赖 auth-cardkey)",
   "hasServer": true,
@@ -19,7 +19,7 @@
     },
     {
       "key": "registration.defaultQuota",
-      "label": "注册默认额度(tokens) · 0=零额度需管理员充值",
+      "label": "注册默认额度 · 0=零额度需管理员充值",
       "type": "number",
       "default": 0
     },

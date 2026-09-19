@@ -1,8 +1,8 @@
 'use strict';
-                                
-                                                                               
-                                                                                                          
-   
+
+
+
+
 const redactCache = require('../../src/redact-cache.js');
 
 const REDACT_FIELD_RE = /api[-_]?key|apikey|secret|password|passwd|token|authorization/i;
@@ -22,7 +22,7 @@ function rpWalk(v, rules, depth, skipModel) {
   if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = rpWalk(v[i], rules, depth + 1, skipModel); return v; }
   if (typeof v === 'object') {
     for (const k of Object.keys(v)) {
-      if (skipModel && k === 'model') continue;                     
+      if (skipModel && k === 'model') continue; 
       v[k] = rpWalk(v[k], rules, depth + 1, skipModel);
     }
     return v;
@@ -52,7 +52,7 @@ module.exports.activate = (ctx) => {
   const incRules = rpCompile(replace.inc);
   const extra = String(cfg.extra || '').split(',').map(s => s.trim()).filter(Boolean);
 
-                                      
+  
   const effRedact = (c) => {
     if (!cfg.enable) return false;
     const uk = c && c.urlInfo && c.urlInfo.userKey;
