@@ -1,8 +1,8 @@
 'use strict';
-/* balance 插件 - 渠道余额代查
- * 预设: deepseek /user/balance, siliconflow /v1/user/info, openai credit_grants, bigmodel
- * 渠道可自配 balanceUrl + balancePath(点路径) + balanceUnit
- * 端点: GET /plugins/balance/query?ch=<渠道名> (管理端)
+/** the balance plugin - channel balance proxy lookup
+   * presets: deepseek /user/balance, siliconflow /v1/user/info, openai credit_grants, bigmodel
+   * channels may configure balanceUrl + balancePath (dot path) + balanceUnit
+   * endpoint: GET /plugins/balance/query?ch=<channel> (admin side)
  */
 const { upstreamRequest } = require('../../src/router.js');
 

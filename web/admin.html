@@ -82,7 +82,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
   background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container);display:none}
 .compat-bar.show{display:block}
 
-/* ==== 桌面侧栏 ==== */
+/*/* ==== Desktop sidebar ==== */
 .rail{display:none;width:264px;flex-shrink:0;flex-direction:column;gap:4px;padding:12px 8px;
   background:var(--md-sys-color-surface-container);border-right:1px solid var(--md-sys-color-outline-variant);overflow-y:auto}
 .rail-brand{display:flex;align-items:center;gap:12px;padding:12px 16px 16px}
@@ -100,7 +100,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
 .rail-item .rl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-item[active]{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);font-weight:600}
 
-/* ==== 主区 ==== */
+/*/* ==== Main area ==== */
 .shell{flex:1;display:flex;flex-direction:column;min-width:0}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
   padding:10px 16px;background:var(--md-sys-color-surface);border-bottom:1px solid var(--md-sys-color-outline-variant);flex-shrink:0}
@@ -117,7 +117,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
 @media(min-width:840px){.rail{display:flex}.main{padding:24px 28px}}
 @media(min-width:1200px){.page{max-width:1080px;width:100%;margin:0 auto}.main{padding:28px 32px}}
 
-/* ==== 展开式侧栏(移动端抽屉) ==== */
+/*/* ==== Expanding sidebar (mobile drawer) ==== */
 .drawer{position:fixed;top:0;left:0;bottom:0;width:288px;max-width:84vw;z-index:200;display:flex;flex-direction:column;
   background:var(--md-sys-color-surface-container);border-right:1px solid var(--md-sys-color-outline-variant);
   transform:translateX(-105%);transition:transform .26s cubic-bezier(.2,0,0,1);padding:12px 8px;overflow-y:auto;
@@ -128,12 +128,12 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
 .menu-btn{display:none;border:none}
 @media(max-width:839px){.menu-btn{display:inline-flex}}
 @media(min-width:840px){.drawer,.drawer-scrim{display:none!important}}
-/* 底栏已弃用(展开式侧栏替代) */
+/*/* the bottom bar is deprecated (replaced by the expanding sidebar) */
 .navbar{display:none!important}
 @media(max-width:839px){.main{padding:16px}}
 #toast{bottom:28px}
 
-/* ==== 结构件 ==== */
+/*/* ==== Structural parts ==== */
 .stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:16px}
 .stat-box{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
   padding:16px;border:1px solid var(--md-sys-color-outline-variant);min-width:0}
@@ -143,7 +143,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-s
 @media(max-width:600px){.stat-row{grid-template-columns:repeat(2,1fr)}.stat-box .num{font-size:22px}}
 md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--gc-radius-card,var(--md-sys-shape-corner-large));
   border:1px solid var(--md-sys-color-outline-variant);padding:16px;margin-bottom:16px;display:block}
-/* Compose 主题: 卡片风格 (gc-card-style) 覆盖 md-filled-card */
+/*/* Compose theme: card style (gc-card-style) overriding md-filled-card */
 body[data-card-style="filled"] md-filled-card{background:var(--md-sys-color-surface-container-high);border-color:transparent}
 body[data-card-style="elevated"] md-filled-card{background:var(--md-sys-color-surface);border-color:transparent;box-shadow:0 2px 8px #0004}
 body[data-card-style="tonal"] md-filled-card{background:color-mix(in srgb,var(--md-sys-color-surface),var(--md-sys-color-primary) 10%);border-color:transparent}
@@ -172,7 +172,7 @@ body[data-card-style="outlined"] md-filled-card{border-width:var(--gc-stroke-wid
 .bdg.off{background:var(--md-sys-color-surface-variant);color:var(--md-sys-color-on-surface-variant)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 
-/* ==== 对话框/toast ==== */
+/*/* ==== Dialogs/toasts ==== */
 .dlg-overlay{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center;
   background:rgba(0,0,0,.6);padding:24px}
 .dlg-overlay[hidden]{display:none}
@@ -187,7 +187,7 @@ body[data-card-style="outlined"] md-filled-card{border-width:var(--gc-stroke-wid
 #toast.on{opacity:1}
 #toast.err{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}
 
-/* ==== 表单 ==== */
+/*/* ==== Forms ==== */
 .frow{margin-bottom:14px}
 .frow-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0}
 .frow-h .lb{font-size:14px}
@@ -205,7 +205,7 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
 .setup-wrap{max-width:440px;margin:48px auto}
 @media(max-width:600px){.lrow .mt{white-space:normal}}
 
-/* ==== 自绘控件(动态生成内容用: 动态插入的 mw 组件不可靠, 静态保留) ==== */
+/*/* ==== custom-drawn controls (for dynamically generated content: dynamically inserted mw components are unreliable; static ones kept) ==== */
 .sw{position:relative;width:44px;height:26px;flex:none;display:inline-block}
 .sw input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:2;margin:0}
 .sw .tr{position:absolute;inset:0;border-radius:999px;background:var(--md-sys-color-surface-variant);border:2px solid var(--md-sys-color-outline);transition:.18s}
@@ -488,7 +488,7 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
   </main>
 </div>
 
-<!-- 展开式侧栏 (移动端抽屉, 桌面端用常驻 rail) -->
+<!--<!-- expanding sidebar (a mobile drawer; desktop uses a persistent rail) -->
 <div class="drawer-scrim" id="drawerScrim"></div>
 <nav class="drawer" id="drawer" aria-label="主导航">
   <div class="rail-brand">
@@ -498,7 +498,7 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
   <div id="drawerList" class="rail-list"></div>
 </nav>
 
-<!-- key 对话框 -->
+<!--<!-- key dialog -->
 <div class="dlg-overlay" id="keyDlg" hidden><div class="dlg-box">
   <h2 id="keyDlgTitle">管理密钥</h2>
   <div class="dlg-sub" id="keyDlgSub">输入管理密码 (adminKey) 进入面板</div>
@@ -506,13 +506,13 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
   <div class="dlg-acts"><button class="btnx btnx-fill" id="keySave">进入</button></div>
 </div></div>
 
-<!-- 确认对话框 -->
+<!--<!-- confirm dialog -->
 <div class="dlg-overlay" id="cfmDlg" hidden><div class="dlg-box">
   <h2 id="cfmTitle"></h2><div class="dlg-sub" id="cfmBody"></div>
   <div class="dlg-acts"><md-text-button id="cfmNo">取消</md-text-button><md-filled-button id="cfmOk">确认</md-filled-button></div>
 </div></div>
 
-<!-- 渠道编辑对话框 -->
+<!--<!-- channel edit dialog -->
 <div class="dlg-overlay" id="chDlg" hidden><div class="dlg-box" style="max-width:520px;max-height:88vh;overflow-y:auto">
   <h2 id="chDlgTitle">添加渠道</h2>
   <div class="frow"><label class="fld-lb">名称 *</label><input class="fld" id="ch_name" placeholder="如 deepseek"></div>
@@ -532,7 +532,7 @@ textarea.code:focus{border-color:var(--md-sys-color-primary)}
   <div class="dlg-acts"><button class="btnx btnx-tonal" id="chCancel">取消</button><button class="btnx btnx-fill" id="chOk">保存</button></div>
 </div></div>
 
-<!-- 代理编辑对话框 -->
+<!--<!-- proxy edit dialog -->
 <div class="dlg-overlay" id="pxDlg" hidden><div class="dlg-box">
   <h2 id="pxDlgTitle">添加代理</h2>
   <div class="frow"><label class="fld-lb">名称 *</label><input class="fld" id="px_name" placeholder="如 home"></div>
@@ -554,7 +554,7 @@ const $ = id => document.getElementById(id);
 const state = { key:'', uid:0, instances:[], plugins:[], tab:'overview', pluginPages:[], version:'' };
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg, err){ const t=$('toast'); t.textContent=msg; t.className='on'+(err?' err':''); clearTimeout(t._tm); t._tm=setTimeout(()=>t.className='',2600); }
-/* 全局错误捕获: 便于用户反馈准确的错误来源 */
+/*/* global error capture: helps users report exactly where an error came from */
 window.addEventListener('error', e=>{ if (e && e.message) toast('页面脚本错误: '+e.message+' @'+(e.filename||'').split('/').pop()+':'+(e.lineno||''), true); });
 window.addEventListener('unhandledrejection', e=>{ const m = e.reason && (e.reason.message || String(e.reason)); if (m) toast('异步错误: '+m, true); });
 function fmtNum(n){ n=n||0; if(n>=1e8)return(n/1e8).toFixed(2)+'亿'; if(n>=1e4)return(n/1e4).toFixed(1)+'万'; return String(n); }
@@ -571,7 +571,7 @@ async function api(path, opts={}){
 
 /* ---------- key ---------- */
 let keyFirstShow = true;
-/* ---- 主题: dark / light / auto ---- */
+/*/* ---- Theme: dark / light / auto ---- */
 function applyTheme(t){
   document.documentElement.dataset.theme = t;
   localStorage.setItem('agw_theme', t);
@@ -590,7 +590,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('tdClose').onclick = ()=>{ $('themeDlg').hidden = true; };
   $('tdModes').querySelectorAll('button').forEach(btn => btn.onclick = ()=>{ applyTheme(btn.dataset.m); openThemeDialog(); });
 });
-/* 打开主题设置面板 */
+/*/* open the theme settings panel */
 async function openThemeDialog(){
   const cur = document.documentElement.dataset.theme || 'dark';
   $('tdModes').querySelectorAll('button').forEach(b => {
@@ -613,7 +613,7 @@ async function openThemeDialog(){
   } catch(_){}
   $('themeDlg').hidden = false;
 }
-/* 应用服务端主题: 注入活动主题的颜色令牌 + cssVars(圆角/描边/卡片风格) */
+/*/* apply the server theme: inject the active theme's color tokens + cssVars (radius/outline/card style) */
 function applyServerTheme(b){
   try {
     if (!b || !b.themes || !b.themes.length) return;
@@ -630,7 +630,7 @@ function applyServerTheme(b){
     document.body.dataset.cardStyle = cv['gc-card-style'] || 'outlined';
   } catch(_){}
 }
-/* 主题选择器: 列出 bootstrap 主题, 点击设为 layout.theme */
+/*/* theme picker: lists bootstrap themes; tapping sets layout.theme */
 async function loadThemes(){
   try {
     const b = await fetch('/api/app/bootstrap').then(r=>r.json());
@@ -669,7 +669,7 @@ async function loadModelManagement(){
     $('mdStats').innerHTML = '<div class="stat-box"><div class="num">'+totalModels+'</div><div class="lbl">模型</div></div>'
       + '<div class="stat-box"><div class="num">'+groups.length+'</div><div class="lbl">分组</div></div>'
       + '<div class="stat-box"><div class="num">'+insts.length+'</div><div class="lbl">实例</div></div>';
-    // 分组
+    // grouping
     const gh = $('mdGroups');
     gh.innerHTML = groups.map(g => 
       '<div class="lrow"><span class="msym" style="color:var(--md-sys-color-primary)">label</span>'
@@ -689,7 +689,7 @@ async function loadModelManagement(){
       const name=prompt('新分组名:'); if(!name) return;
       try{ await api('/plugins/model-square/admin/groups',{method:'POST',body:{action:'addGroup',name,rate:1}}); toast('已添加'); loadModelManagement(); }catch(e){toast(e.message,true);}
     };
-    // 模型列表
+    // model list
     let html = '';
     for (const inst of insts) for (const ch of (inst.channels||[])) {
       const models = ch.models||[]; if(!models.length) continue;
@@ -733,13 +733,13 @@ $('keyInput').addEventListener('keydown', e=>{ if(e.key==='Enter') $('keySave').
 $('keyBtn').onclick = ()=>showKeyDlg(false);
 $('refreshBtn').onclick = ()=>loadAll();
 
-/* ---------- 确认框 ---------- */
+/*/* ---------- Confirm dialogs ---------- */
 let cfmCb=null;
 function confirm2(title, body, cb){ $('cfmTitle').textContent=title; $('cfmBody').innerHTML=body; cfmCb=cb; $('cfmDlg').hidden=false; }
 $('cfmNo').onclick=()=>{ $('cfmDlg').hidden=true; cfmCb=null; };
 $('cfmOk').onclick=()=>{ $('cfmDlg').hidden=true; const cb=cfmCb; cfmCb=null; cb&&cb(); };
 
-/* ---------- 导航 ---------- */
+/*/* ---------- Navigation ---------- */
 const TABS = [
   {id:'overview', ic:'dashboard', lb:'总览'},
   {id:'channels', ic:'cell_tower', lb:'渠道'},
@@ -754,7 +754,7 @@ function pluginIconHtml(p, size){
   const s = size||20;
   let name = String(ic);
   if (name.startsWith('msym:')) name = name.slice(5);
-  else if (/^[a-z0-9_]+$/i.test(name)) { /* 裸英文单词按 Material Symbols 名处理 */ }
+  else if (/^[a-z0-9_]+$/i.test(name)) { /* bare English words are treated as Material Symbols names */ }
   else name = null;
   if (name) return '<span class="msym" style="font-size:'+s+'px">'+esc(name)+'</span>';
   return '<span style="font-size:'+s+'px">'+esc(ic)+'</span>';
@@ -769,11 +769,11 @@ function renderNav(){
   for (const pp of state.pluginPages){
     let ic = pp.icon || 'msym:extension', sym = true;
     if (String(ic).startsWith('msym:')) ic = ic.slice(5);
-    else if (/^[a-z0-9_]+$/i.test(String(ic))) { /* 裸英文单词按 Material Symbols 名处理 */ }
-    else sym = false; // 插件自定义 emoji 图标
+    else if (/^[a-z0-9_]+$/i.test(String(ic))) { /* bare latin words are treated as Material Symbols names */ }
+    else sym = false; // plugin-supplied emoji icon
     items.push({id:'pp:'+pp.id, ic, lb:pp.name, sym});
   }
-  /* 桌面 rail + 移动端 drawer 共用 rail-item 结构渲染 */
+  /* the desktop rail and mobile drawer share the same rail-item structure rendering */
   for (const listId of ['railList', 'drawerList']){
     const rl = $(listId); if (!rl) continue;
     rl.innerHTML='';
@@ -790,7 +790,7 @@ function renderNav(){
     }
   }
 }
-/* 抽屉开合 */
+/*/* drawer open/close */
 function openDrawer(){ $('drawer').classList.add('open'); $('drawerScrim').classList.add('on'); }
 function closeDrawer(){ $('drawer').classList.remove('open'); $('drawerScrim').classList.remove('on'); }
 $('menuBtn').onclick = openDrawer;
@@ -868,7 +868,7 @@ function renderInstSel(){
 }
 $('topInst').addEventListener('change', ()=>{ state.uid=Number($('topInst').value); loadPlugins(); loadConfig(); });
 
-/* ---------- 总览 ---------- */
+/*/* ---------- Overview ---------- */
 let upBase=0, upAt=0, upTimer=null;
 function renderOverview(){
   const ins = state.instances;
@@ -885,7 +885,7 @@ function renderOverview(){
 function tickUp(){ $('ov-uptime').textContent = fmtUp(upBase+(Date.now()-upAt)/1000); upTimer=setTimeout(tickUp,1000); }
 document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>switchTab(b.getAttribute('data-goto')));
 
-/* ---------- 图表 & 活动流 ---------- */
+/*/* ---------- Charts & activity stream ---------- */
 let ovStatsTimer=null;
 async function loadOvStats(){
   if(!state.uid) return;
@@ -948,8 +948,8 @@ function renderOvFeed(recent){
 }
 
 
-/* ---------- 渠道管理 ---------- */
-let curCfg = null; // 当前实例完整配置(打码版, 编辑回填用)
+/*/* ---------- Channel management ---------- */
+letlet curCfg = null; // the current instance's full config (masked; used to backfill the editor)
 async function loadChannels(){
   if (!state.uid) return;
   try {
@@ -1002,7 +1002,7 @@ function openChDlg(idx){
   $('ch_balanceUrl').value = c.balanceUrl||''; $('ch_balancePath').value = c.balancePath||''; $('ch_balanceUnit').value = c.balanceUnit||'';
   $('chDlg').hidden = false;
 }
-/* ---- 模型列表同步（model-sync 插件 v1.1.0） ---- */
+/*/* ---- model list sync (model-sync plugin v1.1.0) ---- */
 function msHint(t){ const h=$('chSyncHint'); if(h) h.textContent = t||''; }
 async function loadMsHint(){
   const hasSync = state.plugins.some(p=>p.id==='model-sync'&&p.enable&&p.running);
@@ -1014,7 +1014,7 @@ async function loadMsHint(){
     msHint('已同步 '+n+' 个模型'+(last?(' · 上次 '+String(last.at).slice(5,16).replace('T',' ')):'')+' · 模型列表从上游 /models 拉取并合并（只增不减）');
   }catch(e){ msHint('model-sync: '+e.message); }
 }
-/** only=null 同步全部；传渠道名只同步该渠道 */
+/**/** only=null syncs everything; a channel name syncs just that channel */
 async function syncModels(only){
   try{
     toast(only?('正在同步「'+only+'」…'):'正在同步全部渠道…');
@@ -1124,7 +1124,7 @@ $('proxyList').addEventListener('click', e=>{
   }
 });
 
-/* ---------- 实例 ---------- */
+/*/* ---------- Instances ---------- */
 function renderInstances(){
   $('instList').innerHTML = state.instances.map(i=>
     '<div class="lrow"><span class="dot '+(i.running?'on':'off')+'"></span><div class="grow"><div class="nm">'+esc(i.name)+(i.enabled===false?' <span class="bdg off">禁用</span>':'')+'</div><div class="mt">uid '+i.uid+' · :'+i.port+' · '+fmtNum(i.requests||0)+' 请求 / '+fmtNum(i.errors||0)+' 错误</div></div>'
@@ -1160,7 +1160,7 @@ $('ni_btn').onclick = ()=>{
     .then(()=>{ $('ni_name').value=''; $('ni_port').value=''; toast('已创建'); loadAll(); }).catch(e=>toast(e.message,true));
 };
 
-/* ---------- 插件 ---------- */
+/*/* ---------- Plugins ---------- */
 async function loadPlugins(){
   if (!state.uid) return;
   const r = await api('/admin/api/plugins/'+state.uid);
@@ -1191,24 +1191,24 @@ $('pluginList').addEventListener('change', async e=>{
   const sw = e.target.closest('input[data-pid]'); if(!sw) return;
   const pid = sw.getAttribute('data-pid'), enable = !!sw.checked;
   try {
-    /* ★2026-09-19 修复：插件的启用状态存在**全局表**（data/plugin-enable.json），
-     *  对应 /admin/api/plugin-enable。以前这里写的是**实例内联 cfg.plugins[]**（走 /admin/api/config），
-     *  而内核运行时读的是全局表 —— 于是"点了没反应、刷新还是旧状态"；
-     *  而且整份 cfg 回写还有覆盖其它字段的风险。 */
+    /* *2026-09-19 fix: plugin enablement lives in a **global table** (data/plugin-enable.json),
+     *  corresponds to /admin/api/plugin-enable. This used to write the **inline instance cfg.plugins[]** (via /admin/api/config),
+     *  while the core runtime reads the global table -- hence "taps do nothing, refresh still shows the old state";
+     *  and a whole-cfg rewrite also risks clobbering other fields. */
     await api('/admin/api/plugin-enable',{method:'POST',body:{id:pid,enable:enable}});
     toast((enable?'已启用 ':'已禁用 ')+pid);
     await loadPlugins();
   } catch(e2){ toast(e2.message, true); sw.checked = !enable; }
 });
 
-/* ---------- 设置: 实例配置 ---------- */
+/*/* ---------- Settings: instance config ---------- */
 async function loadConfig(){
   if (!state.uid) return;
   try {
     const r = await api('/admin/api/config/'+state.uid);
     $('cfgInstName').textContent = '当前实例: '+r.name+' (uid '+r.uid+')';
     $('cfgJson').value = JSON.stringify(r.config, null, 2);
-    /* 高级设置回填 */
+    /* advanced settings backfill */
     const c = r.config;
     $('adv_gatewayKey').value = c.gatewayKey||'';
     $('adv_connectTimeout').value = c.connectTimeout??'';
@@ -1267,8 +1267,8 @@ $('cfgSave').onclick = async ()=>{
   try { await api('/admin/api/config/'+state.uid,{method:'POST',body:j}); toast('已保存并热生效'); await loadPlugins(); } catch(e){ toast(e.message, true); }
 };
 
-/* ---------- 设置: 插件配置(configSchema 自动表单) ---------- */
-/* 点路径 key 读写 (registration.emailVerify.enable ↔ 嵌套对象) */
+/*/* ---------- Settings: plugin config (configSchema auto-forms) ---------- */
+/*/* dot-path key read/write (registration.emailVerify.enable <-> nested objects) */
 function getDeep(o, k){ return String(k).split('.').reduce((x, kk)=> (x==null? undefined : x[kk]), o); }
 function setDeep(o, k, v){ const ks=String(k).split('.'); let cur=o; for(let i=0;i<ks.length-1;i++){ const kk=ks[i]; cur[kk]=(cur[kk]&&typeof cur[kk]==='object'&&!Array.isArray(cur[kk]))?cur[kk]:{}; cur=cur[kk]; } cur[ks[ks.length-1]]=v; }
 function renderPluginSettings(){
@@ -1316,7 +1316,7 @@ $('pluginSettings').addEventListener('click', async e=>{
   } catch(e2){ toast(e2.message, true); }
 });
 
-/* ---------- 插件市场 ---------- */
+/*/* ---------- Plugin market ---------- */
 function fmtSize(n){ n=Number(n)||0; if(n>=1048576)return(n/1048576).toFixed(1)+'MB'; if(n>=1024)return(n/1024).toFixed(1)+'KB'; return n?n+'B':''; }
 async function loadMarketIndexes(){
   try {
@@ -1343,13 +1343,13 @@ $('mkt_browse').onclick = async ()=>{
   try {
     const r = await api('/admin/api/market/plugins'+(proxy?'?proxy='+encodeURIComponent(proxy):''));
     const list = r.plugins||[];
-    /* 分组: 内置 / 外部安装 / 市场可安装 */
+    /* groups: built-in / externally installed / market-installable */
     if (!state.plugins || !state.plugins.length) { try { await loadPlugins(); } catch(_){} }
     const installedMap = {}; for (const p of (state.plugins||[])) installedMap[p.id] = p;
     const errs = list.filter(p=>p._error);
     const mkt = list.filter(p=>!p._error);
     const builtIns = mkt.filter(p=>installedMap[p.id] && installedMap[p.id].builtin);
-    const externals = (state.plugins||[]).filter(p=>!p.builtin); /* 外部安装 = 已安装的非内置 */
+    const externals = (state.plugins||[]).filter(p=>!p.builtin); /* externally installed = installed non-built-ins */
     const avail = mkt.filter(p=>!installedMap[p.id]);
     const rowHtml = (p, act, extraMeta)=> '<div class="mkt-row"><div class="ic">'+mktIconHtml(p.icon)+'</div><div class="grow">'
       +'<div class="nm">'+esc(p.name)+' <span class="bdg '+(p.type==='auth'?'auth':'biz')+'">'+esc(p.type==='auth'?'认证':'业务')+'</span></div>'
@@ -1375,7 +1375,7 @@ $('mkt_list').addEventListener('click', async e=>{
     const meta = [...document.querySelectorAll('#mkt_list .mkt-row')].indexOf(row);
     ib.disabled = true; ib.textContent = '安装中…';
     try {
-      // 从当前市场列表找到该插件的 url/sha256
+      // find the plugin's url/sha256 in the current market list
       const r = await api('/admin/api/market/plugins'+($('mkt_proxy').value.trim()?'?proxy='+encodeURIComponent($('mkt_proxy').value.trim()):''));
       const p = (r.plugins||[]).find(x=>x.id===id);
       if (!p || !p.url) throw new Error('找不到下载地址');

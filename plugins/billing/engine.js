@@ -1,31 +1,31 @@
 'use strict';
-/* billing/engine.js — 动态计费引擎（纯计算，无副作用，可单测）
+/* billing/engine.js -- dynamic billing engine (pure computation, no side effects, unit-testable)
  *
- * 计费口径（一句话）：把一次请求的用量换算成「应扣多少额度」。
+   * billing in one sentence: convert a request's usage into "how much quota should be deducted".
  *
- *   charged = Σ(各字段 token × 该字段单价权重)
- *             × 命中规则的倍率 / 命中规则的直接定价
- *             × 用户组折扣
+ *   charged = sum(each field's tokens x that field's unit-price weight)
+ *             x the matched rule's multiplier / the matched rule's direct price
+ *             x the user-group discount
  *
- * 关键设计（都是踩过坑后的结论）：
- *   1. **price 一律按「额度 / 1M tokens」解释**（★2026-09-18 修正口径：此前权重模式漏了 /1e6，
- *      把「0.85 / 1M」当成「0.85 / token」，实际多扣 100 万倍 —— 已发卡密的额度尺度随之变小
- *      100 万倍，等价于额度更耐用；本部署的卡额是 2^32 级"近似无限"，无需迁移）。
- *      想按真金白银定价时把 weightMode 关掉，引擎按 moneyPerToken 汇率换算（见 cfg.moneyPerToken）。
- *      ★2026-09-19 新增 cfg.miBase 开关：true = 权重模式按 1Mi tokens(2²⁰) 计费，false = 1M(10⁶)。
- *   2. **缓存命中要从 input 里拆出来**：上游的 input 通常**已包含** cacheRead，
- *      若不拆就会「既按新价算一次、又按输入价算一次」→ 双重计费（严重超扣）。
- *      所以先算 fresh = max(0, input - cacheRead)。
- *   3. **不返回负数**：规则可以乱配，引擎必须兜底，否则会变成「刷额度」。
- *   4. **规则不命中 = 返回 null**（交给内核走老口径），而不是返回 0。
- *      0 是"这次免费"的合法值，两者语义完全不同（桩测试专门盯这条）。
+   * key design points (all conclusions learned the hard way):
+ *   1. **price is always interpreted as "quota / 1M tokens"** (★2026-09-18 unit fix: weight mode previously dropped the /1e6,
+ *      treating "0.85 / 1M" as "0.85 / token" and overcharging 1,000,000x -- issued card quotas effectively shrank
+ *      by the same 1,000,000x, i.e. quota lasts longer; this deployment's card quota is 2^32-scale "near-infinite", so no migration was needed).
+ *      To price in real money, turn weightMode off; the engine converts via the moneyPerToken rate (see cfg.moneyPerToken).
+ *      ★2026-09-19 adds the cfg.miBase switch: true = weight mode bills per 1Mi tokens (2^20), false = per 1M (10^6).
+ *   2. **Cache hits must be split out of input**: an upstream input usually **already includes** cacheRead;
+ *      not splitting it would "bill once at the cache price and again at the input price" -> double charging (severe over-deduction).
+ *      So compute fresh = max(0, input - cacheRead) first.
+ *   3. **Never return negative values**: rules can be misconfigured and the engine must backstop them -- otherwise quotas can be farmed.
+ *   4. **No rule matched = return null** (let the core apply the legacy convention), not 0.
+ *      0 legitimately means "free this time"; the two are semantically worlds apart (a stub test watches exactly this).
  */
 
-/* ==================== 安全表达式求值 ====================
- * 用户自定义规则里要能写 `ctxLen >= 32000 && hour < 8` 这种条件。
- * ★绝对不用 eval / new Function：那是任意代码执行，等于把网关交给页面作者。
- * 这里实现一个**受限文法**的递归下降求值器，只认白名单里的东西，别的字符直接报错。
- * 支持：数字、标识符（变量名）、+ - * / %、比较、&& || !、括号、三元不用（用规则表达）
+/** ==================== Safe expression evaluation ====================
+   * user-defined rules must be able to express conditions like `ctxLen >= 32000 && hour < 8`.
+   * *never eval / new Function: that is arbitrary code execution -- handing the gateway to the page author.
+   * this implements a recursive-descent evaluator over a **restricted grammar**, accepting only whitelisted constructs; any other character is an immediate error.
+   * supports: numbers, identifiers (variable names), + - * / %, comparisons, && || !, parentheses; no ternaries (express them as rules)
  */
 const EXPR_VARS = ['ctxLen', 'input', 'output', 'cacheRead', 'cacheWrite', 'total', 'hour', 'minute', 'day', 'weekday', 'perCall', 'priceIn', 'priceOut'];
 
@@ -121,23 +121,23 @@ function evalExpr(src, vars) {
   return val;
 }
 
-/* ==================== 规则匹配 ==================== */
+/** ==================== Rule matching ==================== */
 
-/** 单条 when 条件 → bool。ctx: {model,group,ugroup,ctxLen,hour,minute,day,weekday,cacheRead,cacheWrite,input,output,perCall} */
+/** one when condition -> bool. ctx: {model,group,ugroup,ctxLen,hour,minute,day,weekday,cacheRead,cacheWrite,input,output,perCall} */
 function matchOne(cond, ctx) {
   if (!cond || typeof cond !== 'object') return false;
   const k = String(cond.k || '');
   const op = String(cond.op || 'eq');
   const v = cond.v;
   const numOf = x => (typeof x === 'number' ? x : (x === true ? 1 : x === false ? 0 : Number(x) || 0));
-  /* ★in / nin / between 的 v 是**数组**，绝不能被 num()/String() 先吃掉
-   *  （`Number([8,18])` = NaN → 区间判断恒为 false，桩测试抓到过）。*/
+  /* *for in / nin / between, v is an **array**; it must never be eaten first by num()/String()
+   *  (`Number([8,18])` = NaN -> the range check is always false; a stub test caught this). */
   const rawV = (op === 'between' || op === 'in' || op === 'nin') ? v : undefined;
   const S = (x) => String(x == null ? '' : x);
   const N = (x) => numOf(x);
   switch (k) {
     case 'expr': {
-      try { return !!evalExpr(v, ctx); } catch (_) { return false; }   // 表达式写错 → 该条不命中（不报错中断）
+      try { return !!evalExpr(v, ctx); } catch (_) { return false; }   // broken expression -> that rule does not match (no crash)
     }
     case 'model': return rawV !== undefined ? cmp(S(ctx.model), op, rawV) : cmp(S(ctx.model), op, S(v));
     case 'group': return rawV !== undefined ? cmp(S(ctx.group), op, rawV) : cmp(S(ctx.group), op, S(v));
@@ -178,7 +178,7 @@ function cmp(a, op, b) {
   }
 }
 
-/** 规则是否命中（when 全部满足；空 when = 无条件命中） */
+/** whether a rule matches (all whens hold; an empty when = unconditional match) */
 function matchRule(rule, ctx) {
   if (!rule || rule.on === false) return false;
   const when = Array.isArray(rule.when) ? rule.when : [];
@@ -186,10 +186,10 @@ function matchRule(rule, ctx) {
   return when.every(c => matchOne(c, ctx));
 }
 
-/* ==================== 计费主函数 ==================== */
+/** ==================== Main billing function ==================== */
 
 /**
- * 算一次请求该扣多少。
+   * computing what one request should deduct.
  * @param usage { input, output, cacheRead, cacheWrite, model, channel }
  * @param opt   { price:{in,out,cacheRead,cacheWrite}, perCall, rules:[], globalRules:[], cfg:{weightMode,moneyPerToken,ugroupDiscount}, at:Date, ugroup }
  * @returns { charged, detail }
@@ -201,12 +201,12 @@ function compute(usage, opt) {
 
   const input = Math.max(0, Number(usage.input) || 0);
   const output = Math.max(0, Number(usage.output) || 0);
-  const cacheRead = Math.min(Math.max(0, Number(usage.cacheRead) || 0), input); // 命中量不会超过 input
+  const cacheRead = Math.min(Math.max(0, Number(usage.cacheRead) || 0), input); // cache hits can never exceed input
   const cacheWrite = Math.max(0, Number(usage.cacheWrite) || 0);
-  const fresh = Math.max(0, input - cacheRead);   // ★关键：input 已含命中量，先拆开
+  const fresh = Math.max(0, input - cacheRead);   // ★key: input already includes cache hits, split it first
   const total = input + output;
 
-  /* 价格（权重）——没配 = 全 1 */
+  /* Prices (weights) -- unset = all 1 */
   const pr = o.price || {};
   let P = {
     in: Number(pr['in']) || (pr['in'] === 0 ? 0 : 1),
@@ -214,8 +214,8 @@ function compute(usage, opt) {
     cacheRead: Number(pr.cacheRead) || (pr.cacheRead === 0 ? 0 : 1),
     cacheWrite: Number(pr.cacheWrite) || (pr.cacheWrite === 0 ? 0 : 1),
   };
-  /* ★"填了 0" 与 "没填" 语义不同：填 0 = 免费（合法的促销配置）。
-   *  上面用 `Number(x) || ...` 会把 0 吃掉，所以显式判 undefined。 */
+  /* *"explicit 0" and "unset" mean different things: 0 = free (a legitimate promotional config).
+   *  `Number(x) || ...` above would eat 0, hence the explicit undefined check. */
   if (pr['in'] === undefined || pr['in'] === null || pr['in'] === '') P.in = 1;
   else P.in = Math.max(0, Number(pr['in']) || 0);
   if (pr.out === undefined || pr.out === null || pr.out === '') P.out = 1;
@@ -228,18 +228,18 @@ function compute(usage, opt) {
   const ctx = {
     model: String(usage.model || ''), channel: String(usage.channel || ''),
     group: String(o.group || ''), ugroup: String(o.ugroup || ''),
-    ctxLen: input + cacheRead,        // 上下文长度按"输入总长"算（含命中部分）
+    ctxLen: input + cacheRead,        // context length counts total input (hits included)
     input, output, cacheRead, cacheWrite, total,
     hour: at.getHours(), minute: at.getMinutes(), day: at.getDate(), weekday: at.getDay(),
     perCall: false, priceIn: P.in, priceOut: P.out,
   };
 
   const hits = [];
-  let mult = 1;        // 全局倍率
-  let free = false;    // 直接免费
+  let mult = 1;        // global multiplier
+  let free = false;    // outright free
   let perCallCharge = null;
 
-  /* 规则顺序：全局规则 → 模型规则（模型的更具体，后作用，可覆盖全局） */
+  /* Rule order: global rules -> model rules (model rules are more specific, apply later, and may override globals) */
   const rules = [].concat(o.globalRules || [], o.rules || []);
   for (const r of rules) {
     if (!matchRule(r, ctx)) continue;
@@ -269,18 +269,18 @@ function compute(usage, opt) {
     }
   }
 
-  /* ★向后兼容的第一道闸（放在**匹配之后**，语义才准）：
-   *  模型没配价格 + 没有任何规则命中 + 不是按次 → 返回 null，交给内核按老口径
-   *  (input+output) 扣。这样"没配过计费的模型"扣费与今天逐字节一致，已发卡密零迁移。
-   *  ⚠️不能只判断"存在已启用的规则"——规则存在但这次没命中，也同样不该插手。 */
+  /* *the first backward-compat gate (placed **after matching**, or the semantics would be wrong):
+   *  no model price + no rule matched + not per-call -> return null and let the core apply the legacy convention
+   *  (input+output). So "unpriced models" deduct exactly as today, byte for byte; issued cards need zero migration.
+   *  ⚠️do not merely check "an enabled rule exists" -- a rule that exists but did not match this time must stay out of it too. */
   const hasPrice = !!(o.price && typeof o.price === 'object' && Object.keys(o.price).length);
   const hasPerCallCfg = o.perCall != null && o.perCall !== '' && Number(o.perCall) > 0;
   if (!hasPrice && !hits.length && !hasPerCallCfg) return null;
 
   if (free) return { charged: 0, detail: { mode: 'free', hits, price: P } };
 
-  /* 按次计费：命中 perCall 规则 或 模型配了 perCall（且开了开关）
-   * ★按次时不再叠加 token 计费 —— 两者是"二选一"，叠加会重复收钱。 */
+  /* per-call billing: a perCall rule matched, or the model has perCall configured (with the switch on)
+   * ★Per-call mode never stacks token billing -- the two are mutually exclusive; stacking would charge twice. */
   const modelPerCall = (o.perCall != null && o.perCall !== '' && Number(o.perCall) > 0) ? Number(o.perCall) : null;
   if (perCallCharge != null || modelPerCall != null) {
     let c = perCallCharge != null ? perCallCharge : modelPerCall;
@@ -290,17 +290,17 @@ function compute(usage, opt) {
   }
 
   const raw = fresh * P.in + cacheRead * P.cacheRead + cacheWrite * P.cacheWrite + output * P.out;
-  /* ★口径统一 (2026-09-18)：price **一律按「额度 / 1M tokens」**解释（界面与文档一直这么写）。
-   *  此前权重模式漏了 /1e6 → 把「0.85 / 1M」当成「0.85 / token」，实际多扣 100 万倍
-   *  （实测：界面填 0.85 / 4.25 的 Claude，一次请求被扣 6916，正确值 0.0069）。
-   *  ★计费基数开关 miBase (2026-09-19)：true = 按 1Mi tokens(2²⁰=1048576) 计费，
-   *  false(默认) = 按 1M tokens(10⁶) 计费；价格表填的数含义不变，只换分母。 */
+  /* *unified convention (2026-09-18): price is **always interpreted as "quota / 1M tokens"** (the UI and docs have always said so).
+   *  weight mode previously dropped the /1e6, treating "0.85 / 1M" as "0.85 / token" and overcharging 1,000,000x
+   *  (measured: a Claude priced 0.85 / 4.25 in the UI got charged 6916 for one request; the correct value is 0.0069).
+   *  *billing base switch miBase (2026-09-19): true = bill per 1Mi tokens (2^20 = 1048576),
+   *  false (default) = bill per 1M tokens (10^6); the numbers in the price table keep their meaning; only the denominator changes. */
   const BASE = (cfg.miBase === true) ? 1048576 : 1e6;
   let charged = (raw / BASE) * mult * discountOf(cfg, o.ugroup);
 
-  /* weightMode=false：price 当「元/1M tokens」→ 先换回额度（除以每 token 的钱）。
-   *  ★金额模式的分母**不受 miBase 开关影响**：元/1M tokens 是行业定价惯例
-   *  （与模型广场官价同口径），Mi 基数只作用于权重模式的额度扣费。 */
+  /* weightMode=false: price is "per 1M tokens" -> convert back to quota first (divide by the per-token price).
+   *  *money mode's denominator is **unaffected by miBase**: per-1M-tokens pricing is the industry convention
+   *  (the same convention as the model plaza's official prices); the Mi base affects only weight-mode quota deduction. */
   if (cfg.weightMode === false) {
     const mpt = Number(cfg.moneyPerToken) || 0;
     charged = mpt > 0 ? (raw / 1e6) / mpt * mult * discountOf(cfg, o.ugroup) : charged;
@@ -322,10 +322,10 @@ function discountOf(cfg, ugroup) {
   return (d > 0 && d <= 10) ? d : 1;
 }
 
-/** 取整策略：默认 round（整数额度）；cfg.chargePrecision 可设小数位 */
+/** rounding policy: round by default (integer quota); cfg.chargePrecision may set decimal places */
 function roundCharge(v, cfg) {
   let x = Number(v);
-  if (!isFinite(x) || x < 0) x = 0;      // ★兜底：规则乱配也绝不产生负数/NaN
+  if (!isFinite(x) || x < 0) x = 0;      // ★backstop: even misconfigured rules must never yield negatives/NaN
   const p = Number((cfg && cfg.chargePrecision));
   if (p > 0 && p <= 6) { const m = Math.pow(10, p); return Math.round(x * m) / m; }
   return Math.round(x);

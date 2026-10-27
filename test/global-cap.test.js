@@ -1,5 +1,5 @@
 'use strict';
-/* 验证: 全局能力层 + groupIndex 走能力 (不依赖真实网关, 用桩) */
+/** verify: the global capability layer + groupIndex via capabilities (no real gateway; stubs only) */
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
@@ -39,7 +39,7 @@ T('传能力对象时不再读 store(内核不点名 model-square)', () => {
     allMeta: () => ({ 'inst|ch|gpt-4o': { group: '高级' } }),
     groups: () => [{ name: '高级', rate: 2 }],
   };
-  const idx = mg.buildIndex(null, cap);   // ★store 传 null: 证明不依赖 store
+  const idx = mg.buildIndex(null, cap);   // ★null store passed in: proves independence from store
   assert(idx.declared.includes('高级'), '应读到能力声明的分组');
   assert(idx.groupsOf('gpt-4o').includes('高级'), '模型应落在能力给的分组里');
 });

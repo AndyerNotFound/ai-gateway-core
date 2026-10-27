@@ -1,12 +1,12 @@
 'use strict';
-/* store.js - 存储层 (文档 §4 UID / §5 存储 / §8 迁移)
- * 结构:
- *   <dir>/instances.json            主索引: {version,nextUid,setupMode,setupDeadline,instances:[{uid,name,port,enabled,file}]}
- *   <dir>/instances/<uid>.json      实例配置: {uid,name,listen,gatewayKey,adminKey,channels,proxies,tls,plugins,...}
- *   <dir>/plugins-config/<id>.json  插件配置: { "<uid>": {...} }  (UID 引用实例, 改名不断)
- *   <dir>/.agwkey                   加密口令(可选, 权限600)
- * UID: 顺序分配 32bit, 从 1 递增, nextUid 持久化在主索引; 与实例名分离(名=路由前缀可变, UID=引用永不变)。
- * 加密: 字段级 AGWENC1 (只加密敏感字段, 主索引明文)。
+/** store.js - the storage layer (doc §4 UID / §5 storage / §8 migration)
+   * structure:
+*   <dir>/instances.json            main index: {version,nextUid,setupMode,setupDeadline,instances:[{uid,name,port,enabled,file}]}
+*   <dir>/instances/<uid>.json      instance config: {uid,name,listen,gatewayKey,adminKey,channels,proxies,tls,plugins,...}
+*   <dir>/plugins-config/<id>.json  plugin config: { "<uid>": {...} }  (UID references the instance; renames stay intact)
+*   <dir>/.agwkey                   encryption passphrase (optional, mode 600)
+   * UID: sequential 32-bit allocation starting at 1, with nextUid persisted in the master index; separate from instance names (name = mutable routing prefix, UID = immutable reference).
+   * encryption: field-level AGWENC1 (only sensitive fields; the master index stays plaintext).
  */
 const fs = require('fs');
 const path = require('path');
@@ -15,17 +15,17 @@ const { atomicWrite, readJson, logErr } = require('./util');
 
 const INDEX_VERSION = 1;
 const INST_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
-// 路由保留字 (文档 §2.1): 不会被当作实例名
+//// routing reserved words (doc §2.1): never taken as instance names
 const RESERVED_PATHS = new Set(['v1', 'v1beta', 'v1alpha', 'admin', 'health', 'status', 'favicon.ico', 'robots.txt', 'setup', 'plugins', 'user', 'credits', 'auth', 'api', 'theme-config', 'ui']);
 
 const CHANNEL_TYPES = ['openai', 'gemini', 'claude'];
 
-/* 实例配置默认值规整 (内核版: 只保留内核字段; 卡密/用户/probe/thinkingSummary/openaiExtras 由插件管) */
+/** instance config default normalization (kernel version: kernel fields only; cards/users/probe/thinkingSummary/openaiExtras are plugin-owned) */
 function applyDefaults(cfg) {
   cfg.listen = cfg.listen || {};
-  /* ★ port=0 = 不单独监听(只走 <主端口>/<实例名>/ 前缀路由); 只有「未配置」才回退 16384。
-     原来写 `cfg.listen.port || 16384` 会把 0 当成 falsy → 每个不监听的实例都去抢 16384,
-     和旧版 ai-gateway 的端口撞车(谁先启动谁占)。 */
+  /* *port=0 = no separate listener (only /<main-port>/<instance>/ prefix routing); only "unconfigured" falls back to 16384.
+     writing `cfg.listen.port || 16384` treated 0 as falsy -> every non-listening instance raced for 16384,
+     colliding with the old ai-gateway's port (first to start wins). */
   cfg.listen.port = cfg.listen.port == null ? 16384 : Number(cfg.listen.port);
   cfg.listen.host = String(cfg.listen.host || '0.0.0.0');
   cfg.gatewayKey = cfg.gatewayKey ? String(cfg.gatewayKey) : '';
@@ -33,19 +33,19 @@ function applyDefaults(cfg) {
   cfg.maxBodyBytes = Number(cfg.maxBodyBytes || 64 * 1024 * 1024);
   cfg.connectTimeout = Number(cfg.connectTimeout || 15000);
   cfg.responseTimeout = Number(cfg.responseTimeout || 180000);
-  if (cfg.connRetry === undefined) cfg.connRetry = 2; // 连接级错误的同渠道重试次数; 0=关闭
+if (cfg.connRetry === undefined) cfg.connRetry = 2; // same-channel retries for connection-level errors; 0=off
   cfg.cors = cfg.cors !== false;
   cfg.tls = cfg.tls || {};
   if (cfg.tls.enable) {
     cfg.tls.cert = String(cfg.tls.cert || 'cert.pem');
     cfg.tls.key = String(cfg.tls.key || 'key.pem');
-    cfg.tls.port = cfg.tls.port != null ? Number(cfg.tls.port) : null; // null=与HTTP同端口(纯HTTPS)
+    cfg.tls.port = cfg.tls.port != null ? Number(cfg.tls.port) : null; // null = same port as HTTP (pure HTTPS)
   }
   cfg.plugins = Array.isArray(cfg.plugins) ? cfg.plugins.filter(p => p && p.id) : [];
   return cfg;
 }
 
-/* 渠道白名单规整 (只认内核字段; 未知自定义字段如 probe/useResponses 保留透传, 插件要用) */
+/** channel whitelist normalization (kernel fields only; unknown custom fields like probe/useResponses pass through untouched -- plugins need them) */
 function normalizeChannels(list, log = logErr) {
   const out = [];
   let i = 0;
@@ -84,24 +84,24 @@ class Store {
     for (const d of [this.dir, this.instancesDir, this.pluginsConfigDir, this.pluginsDataDir, this.pluginsDir])
       fs.mkdirSync(d, { recursive: true });
     this._pass = crypt.loadPass(this.dir);
-    /* ★加密锁定状态 (2026-09-18「密钥保险箱」)：口令只在内存里时，重启后就是"有密文但没口令"。
-     *  此时读出来的敏感字段是 AGWENC1 密文，直接拿去连上游必然 401 一片 —— 内核据此**拒绝转发**并
-     *  明确提示去解锁（见 Gateway 的 503 拦截），而不是让用户对着莫名的 401 排查。
-     *  判定方式是"盘上真的存在密文"，所以不依赖额外标记文件，也不怕用户手工改配置降低安全性。 */
+    /* *encryption-locked state (key vault, 2026-09-18): with the passphrase memory-only, a restart yields "ciphertext but no passphrase".
+*  At this point sensitive fields read back as AGWENC1 ciphertext; using them against upstreams means 401s across the board -- the core therefore **refuses to forward** and
+     *  clearly hint to unlock (see Gateway's 503 interception) instead of leaving users debugging a mystery 401.
+     *  the test is "ciphertext really exists on disk", so no extra marker file is needed and hand-edited configs cannot weaken security. */
     this.locked = false;
     if (!this._pass) {
       try { this.locked = this.hasCiphertext(); } catch (_) { this.locked = false; }
     }
-    /* ★内核回调(2026-09-18 多实例一致性): 任何一条写插件配置的路径 —— 包括**绕过 ctx** 的
-     *  `/admin/api/plugin-config/:uid/:pid`(App 插件配置页用) —— 写盘后都会触发它，
-     *  由 PluginManager 递增版本号并把新配置同步给同插件的其它实例。
-     *  只挂在 ctx.setPluginConfig 上的话，走管理 API 改的配置别的实例永远发现不了。 */
+/* ★Core callback (2026-09-18 multi-instance consistency): every path that writes plugin config -- including ones that **bypass ctx** --
+     *  `/admin/api/plugin-config/:uid/:pid` (the App plugin-config page) -- both fire it after persisting,
+     *  the PluginManager bumps the version and syncs the new config to the plugin's other instances.
+     *  hooked only onto ctx.setPluginConfig, configs changed via the admin API would never be noticed by other instances. */
     this.onPluginConfigWrite = null;
     this.index = this.loadIndex();
     this.scanUidUnique();
   }
 
-  /* ---------- 主索引 ---------- */
+  /* ---------- Master index ---------- */
   loadIndex() {
     let idx = readJson(this.indexFile);
     if (!idx || typeof idx !== 'object' || !Array.isArray(idx.instances)) {
@@ -120,7 +120,7 @@ class Store {
     this.saveIndex();
     return uid;
   }
-  /* 启动时全局扫描 UID 唯一性; 重复自动重生 (文档 §4.3) */
+  /* scan UID uniqueness globally at startup; auto-regenerate duplicates (doc §4.3) */
   scanUidUnique() {
     const seen = new Set();
     let changed = false;
@@ -147,7 +147,7 @@ class Store {
   meta(uid) { return this.index.instances.find(m => m.uid === uid) || null; }
   metaByName(name) { return this.index.instances.find(m => m.name === name) || null; }
 
-  /* ---------- 服务点(中转站)资料: 全局, 存 instances.json (App/用户页展示用) ---------- */
+  /* ---------- Site (relay) profile: global, stored in instances.json (shown on the App/user pages) ---------- */
   getServerInfo() {
     const s = this.index.serverInfo;
     return (s && typeof s === 'object') ? s : {};
@@ -157,8 +157,8 @@ class Store {
     const out = {};
     for (const k of allow) if (info && typeof info[k] === 'string') out[k] = info[k].slice(0, 2000);
     if (out.currencySymbol != null) out.currencySymbol = out.currencySymbol.slice(0, 8);
-    /* 代币展示汇率: 1 个货币单位 = 多少代币 (数字; 不填 = 1, 即直接按代币数显示)。
-     * 只影响客户端**显示**, 不影响额度计算。 */
+    /* token display rate: how many tokens one currency unit buys (number; unset = 1, i.e. display raw token counts).
+     * affects only client **display**, never quota math. */
     if (info && info.currencyRate != null && info.currencyRate !== '') {
       const r = Number(info.currencyRate);
       if (isFinite(r) && r > 0) out.currencyRate = r;
@@ -168,7 +168,7 @@ class Store {
     return out;
   }
 
-  /* ---------- 实例配置 ---------- */
+  /* ---------- Instance config ---------- */
   instFile(uid) { return path.join(this.dir, 'instances', uid + '.json'); }
   hasInstance(uid) { return fs.existsSync(this.instFile(uid)); }
 
@@ -192,7 +192,7 @@ class Store {
     const meta = this.meta(uid);
     if (!meta) throw new Error('实例不存在 uid=' + uid);
     const out = Object.assign({}, cfg);
-    // 剥运行时字段 (_ 开头)
+    // strip runtime fields (_-prefixed)
     for (const k of Object.keys(out)) if (k.startsWith('_')) delete out[k];
     out.uid = uid;
     out.name = meta.name;
@@ -220,7 +220,7 @@ class Store {
     this.index.instances = this.index.instances.filter(m => m.uid !== uid);
     this.saveIndex();
     try { fs.unlinkSync(this.instFile(uid)); } catch (_) {}
-    // 插件配置里该 UID 的配置一并清 (文档 §6.3 卸载=干净)
+    // also clear this UID's entry in the plugin config (doc §6.3: uninstall = clean)
     for (const f of fs.readdirSync(this.pluginsConfigDir)) {
       const p = path.join(this.pluginsConfigDir, f);
       const j = readJson(p);
@@ -251,38 +251,38 @@ class Store {
     this.saveIndex();
   }
 
-  /* ---------- 插件配置 (按 UID 引用, 文档 §6.1) ----------
-   * ★作用域(2026-09-12 用户决策)：插件配置默认**全局共享**(所有实例一份)，
-   *   插件数据默认仍按实例隔离。manifest.json 里可以覆盖：
-   *     "scope":     "global"(默认) | "instance"     —— 配置
-   *     "dataScope": "instance"(默认) | "global"     —— 运行数据(ctx.data)
-   *   注意 applyDefaults/loadInstance 重建渠道对象会丢自定义字段, 插件相关字段要单独保。
+  /* ---------- Plugin configs (UID-referenced, doc §6.1) ----------
+* ★Scope (2026-09-12 user decision): plugin config is **globally shared** by default (one copy for all instances),
+   *   plugin data stays per-instance by default. manifest.json can override:
+   *     "scope":     "global" (default) | "instance"     -- config
+   *     "dataScope": "instance" (default) | "global"     -- runtime data (ctx.data)
+   *   note: applyDefaults/loadInstance rebuild channel objects and drop custom fields; plugin-relevant fields need separate preservation.
    */
   pluginConfigFile(pluginId) { return path.join(this.pluginsConfigDir, pluginId + '.json'); }
-  /* ---------- 插件启用表 (2026-09-12 用户决策: 全局一份, 新实例自动带上) ---------- */
+  /* ---------- Plugin enablement table (user decision 2026-09-12: one global copy; new instances inherit it) ---------- */
   pluginEnableFile() { return path.join(this.dir, 'plugin-enable.json'); }
   pluginEnableList(cfg) {
     let g = null;
     try { g = readJson(this.pluginEnableFile()); } catch (_) {}
     if (Array.isArray(g)) return g;
-    /* 兼容: 全局表不存在时回退实例内联的 plugins[] */
+    /* compat: fall back to inline instance plugins[] when the global table is absent */
     return Array.isArray(cfg && cfg.plugins) ? cfg.plugins : [];
   }
   setPluginEnableList(list) {
     atomicWrite(this.pluginEnableFile(), JSON.stringify(Array.isArray(list) ? list : [], null, 2));
   }
-  /** 读插件 manifest(带缓存) */
-  /** 读插件 manifest。
-   *  ★必须**两级都查**（内置 `源码 plugins/` + 数据目录 `data/plugins/`），与 `PluginManager.scanInstalled()`
-   *  的查找顺序一致 —— 只查数据目录的话，内置插件（如主题 theme-compose）读不到 manifest，
-   *  `configKey()` 会退化成 `_global`（踩过：主题参数按端分开存没生效）。 */
+/** Read a plugin manifest (cached) */
+/** Read a plugin manifest.
+   *  *must check **both levels** (built-in `source plugins/` + the data dir `data/plugins/`), consistent with `PluginManager.scanInstalled()`
+*  matches that lookup order -- if only the data directory were searched, built-in plugins (e.g. theme theme-compose) would never find their manifest,
+   *  `configKey()` would degrade to `_global` (been there: per-side theme params silently not applying). */
   manifestOf(pluginId) {
     if (!this._mfCache) this._mfCache = {};
     if (this._mfCache[pluginId] !== undefined) return this._mfCache[pluginId];
     let m = null;
     const dirs = [
       path.resolve(__dirname, '..', 'plugins'),  // 内置（随内核分发）
-      this.pluginsDir,                           // 用户安装（数据目录，同 id 覆盖内置）
+      this.pluginsDir,                           // user-installed (data dir; same id overrides built-ins)
     ];
     for (const base of dirs) {
       try {
@@ -302,9 +302,9 @@ class Store {
     const m = this.manifestOf(pluginId);
     return m.dataScope === 'global' ? 'global' : 'instance';
   }
-  /** 配置存哪个键：全局插件统一用 _global；
-   *  ★主题插件的「配色参数」按端分开（2026-09-16）：同一实例内，管理端与用户端各存一份
-   *  （`_admin` / `_user`），这样"改管理端配色不影响用户端"（用户明确要求：主题不需要双端同步）。 */
+/** Which key stores the config: global plugins always use _global;
+   *  *theme plugins' "palette params" are stored per side (2026-09-16): within one instance, admin and user each keep their own copy
+*  (`_admin` / `_user`), so "changing admin-side colors never touches the user side" (explicit user request: themes need no cross-side sync). */
   configKey(pluginId, uid, scope) {
     const m = this.manifestOf(pluginId);
     if (m && m.type === 'theme') return scope === 'admin' ? '_theme_admin' : '_theme_user';
@@ -314,24 +314,24 @@ class Store {
     const j = readJson(this.pluginConfigFile(pluginId));
     if (!j || typeof j !== 'object') return null;
     let v = j[this.configKey(pluginId, uid, scope)];
-    /* 迁移兼容：主题插件**旧数据存在 `_global`**。按端分开后，某一端还没写过就沿用旧值 ——
-     * 用户端因此不会因为这次改动突变；管理端首次也会看到"原来调过的那套"，而不是突然回默认。 */
+/* Migration compatibility: the theme plugin's **old data lives in `_global`**. After the per-side split, a side that has not written yet keeps the old value --
+     * so the user side sees no sudden change from this; the admin side also sees "the palette it tuned before" on first visit instead of snapping back to defaults. */
     if (v === undefined) {
       const m = this.manifestOf(pluginId);
       if (m && m.type === 'theme') v = j['_global'];
     }
     const raw = (v && typeof v === 'object') ? crypt.decryptFields(v, this._pass) : null;
-    /* ★读出来也还原一次：历史脏数据（"true"/"false" 字符串）自动纠正，无需手改文件 */
+    /* *also restore on read: historical dirty data ("true"/"false" strings) is corrected automatically, no manual file edits */
     return raw ? this.coerceConfigBySchema(pluginId, raw) : null;
   }
-  /* ★按 manifest.configSchema 还原"被客户端字符串化"的值 (2026-09-19 事故修复)
-   * 背景：App 的 SDUI 表单把所有输入打包成**字符串**（Renderer 的 inputs 是 Map<String,String>），
-   *  于是 boolean 字段落盘成 "true"/"false"、number 落盘成 "3"；插件侧写的是
-   *  `cfg.x === false` / `!!cfg.x` → 被字符串骗，表现为"开关关不掉"
-   *  （music-remote「允许远程切歌」事故：盘上 "false" 恒 ≠ false，403 拦截永远不触发）。
-   * 规则：①只处理 schema 里**声明过**的字段（运行数据如 users/groups 一律不碰）
-   *      ②解析不出来的值**原样保留** —— 绝不猜、绝不重演"空串被静默当成关闭"
-   *      ③类型本来就对时直接返回原对象（读路径调用频繁，避免无谓拷贝）。 */
+  /* *restore "client-stringified" values per manifest.configSchema (2026-09-19 incident fix)
+* Background: the App's SDUI form packs every input as a **string** (Renderer's inputs is a Map<String,String>),
+   *  so booleans persisted as "true"/"false" and numbers as "3"; the plugin wrote
+   *  `cfg.x === false` / `!!cfg.x` -> fooled by strings, showing up as "the switch cannot be turned off"
+*  (the music-remote "allow remote skip" incident: on disk "false" never equals false, so the 403 guard never fired).
+* Rules: (1) touch only fields **declared** in the schema (runtime data like users/groups is never touched)
+*      (2) values that fail to parse are **kept verbatim** -- no guessing, never repeat "empty string silently treated as off"
+   *      (3) when the type is already right, return the original object (the read path is hot; avoid pointless copies). */
   coerceConfigBySchema(pluginId, obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
     const m = this.manifestOf(pluginId);
@@ -351,7 +351,7 @@ class Store {
           const t2 = v.trim().toLowerCase();
           if (t2 === 'true' || t2 === '1' || t2 === 'on' || t2 === 'yes') put(f.key, true);
           else if (t2 === 'false' || t2 === '0' || t2 === 'off' || t2 === 'no') put(f.key, false);
-          /* 其它（含空串）→ 保留原值交给插件 */
+          /* anything else (including empty strings) -> keep the original value for the plugin */
         }
       } else if (t === 'number') {
         if (typeof v === 'number') continue;
@@ -366,20 +366,20 @@ class Store {
   setPluginConfig(pluginId, uid, cfgObj, scope) {
     const file = this.pluginConfigFile(pluginId);
     const j = readJson(file) || {};
-    /* ★落盘前按 schema 还原类型（客户端提交的都是字符串） */
+    /* *restore types per schema before persisting (clients submit everything as strings) */
     j[this.configKey(pluginId, uid, scope)] = crypt.encryptFields(this.coerceConfigBySchema(pluginId, cfgObj || {}), this._pass);
     atomicWrite(file, JSON.stringify(j, null, 2));
-    /* ★写盘后通知内核(2026-09-18): 版本号 +1, 并把新配置同步给同插件的其它实例。
-     *  集中挂在 Store 上 —— 这样 ctx.setPluginConfig 与 /admin/api/plugin-config 两条路都覆盖(不会漏)。 */
+    /* *notify the kernel after persisting (2026-09-18): bump the version and push-sync the new config to the plugin's other instances.
+*  centralized on the Store -- so both ctx.setPluginConfig and /admin/api/plugin-config are covered (nothing slips through). */
     if (typeof this.onPluginConfigWrite === 'function') { try { this.onPluginConfigWrite(pluginId); } catch (_) {} }
   }
 
-  /* ==================== 加密口令 / 锁定 / 重加密 (2026-09-18) ====================
-   * 设计：口令**默认不落盘**（不写 .agwkey），只在内存里；重启 = 自动回到锁定态，
-   * 由 Gay Core 的「密钥保险箱」插件页解锁（口令存 App 侧 Keystore，自动解锁）。
-   * 这里只提供"检测 / 校验 / 设置 / 重加密"四个纯函数，UI 与流程都在插件里。 */
+  /* ==================== Encryption passphrase / lock / re-encrypt (2026-09-18) ====================
+* Design: the passphrase is **not persisted by default** (no .agwkey written), memory only; a restart = back to locked state,
+* unlocked from Gay Core's "key vault" plugin page (passphrase stored in the App-side Keystore for automatic unlock).
+* This module provides only the four pure functions "detect / verify / set / re-encrypt"; UI and flows live in the plugin. */
 
-  /** 数据目录里是否已存在 AGWENC1 密文（判断"已加密但未解锁"；.bak-* 备份不算） */
+/** Whether AGWENC1 ciphertext already exists in the data directory (tells "encrypted but locked"; .bak-* backups do not count) */
   hasCiphertext() {
     for (const d of [this.instancesDir, this.pluginsConfigDir]) {
       let files = [];
@@ -392,14 +392,14 @@ class Store {
     return false;
   }
 
-  /** 运行期设置口令（null = 锁定）。会自动重算 locked。 */
+/** Set the passphrase at runtime (null = locked). Recomputes locked automatically. */
   setPass(pass) {
     this._pass = pass ? String(pass) : null;
     this.locked = !this._pass && this.hasCiphertext();
     return this.cryptStatus();
   }
 
-  /** 用盘上已有密文校验口令：没有密文时返回 true（首次启用加密，任何合规口令都行） */
+/** Verify the passphrase against existing ciphertext on disk: returns true when there is none (first-time encryption, any compliant passphrase works) */
   verifyPass(pass) {
     const findEnc = (o) => {
       if (typeof o === 'string') return crypt.isEncText(o) ? o : null;
@@ -420,7 +420,7 @@ class Store {
     return true;
   }
 
-  /** 口令/加密状态（给「密钥保险箱」页显示） */
+/** Passphrase / encryption status (for the "key vault" page) */
   cryptStatus() {
     let files = 0, encrypted = 0;
     const backups = [];
@@ -446,12 +446,12 @@ class Store {
     };
   }
 
-  /** ★锁定时"你是谁"怎么证明（2026-09-18）：盘上**不放任何明文凭据**。
-   *  做法：拿提交的口令去解实例文件里的 adminKey/secondKey 密文，解出来 == 提交的管理员密钥
-   *  ⇒ 口令对 **且** 管理员密钥对（两因子）。锁定时卡密表/管理员密钥本身都是密文，任何常规鉴权
-   *  都过不了（这正是"锁"的意义），所以解锁这条路必须自带凭据。
-   *  代价：爆破者仍需先算出 scrypt（每次 ~50ms，再加插件侧限速）；且若用户开了 secondKey/TOTP，
-   *  解锁这一步不校验第二验证（口令本身就是解开一切的钥匙）。 */
+/** ★How to prove "who you are" while locked (2026-09-18): **no plaintext credentials on disk** whatsoever.
+   *  approach: decrypt the instance file's adminKey/secondKey ciphertext with the submitted passphrase; the result == the submitted admin key
+   *  => the passphrase is right **and** the admin key is right (two factors). While locked, the card table/admin key are themselves ciphertext, so any normal auth
+*  none of them pass (that is the whole point of the lock), so the unlock path must carry its own credential.
+   *  cost: an attacker still needs scrypt first (~50ms each, plus plugin-side rate limiting); and if the user enabled secondKey/TOTP,
+*  Unlocking skips second-factor checks (the passphrase itself is the key that opens everything). */
   verifyAdminKeyWithPass(pass, adminKey) {
     const want = String(adminKey == null ? '' : adminKey).trim();
     if (!pass || !want) return false;
@@ -477,7 +477,7 @@ class Store {
     return false;
   }
 
-  /** 删除迁移/换口令时留下的 `.bak-crypt-*` 备份（★里面是明文或旧密文，确认无误后应清掉） */  cleanCryptBackups() {
+/** Delete `.bak-crypt-*` backups left by migration/passphrase change (★they hold plaintext or old ciphertext; clean up once confirmed) */  cleanCryptBackups() {
     const removed = [];
     for (const d of [this.instancesDir, this.pluginsConfigDir]) {
       let list = [];
@@ -490,9 +490,9 @@ class Store {
     return { ok: true, removed, count: removed.length };
   }
 
-  /** 把所有实例配置 + 插件配置里的敏感字段重写为**新口令**的密文（做加密迁移 / 换口令）。
-   *  oldPass = 当前内存口令（null 表示盘上是明文）；每个被改写的文件先留一份 `.bak-crypt-<ts>` 备份
-   *  （用户要求保留，方便回滚；★注意这份备份里是明文/旧密文，敏感期过后应在插件页一键删除）。 */
+/** Rewrite sensitive fields in all instance configs + plugin configs as ciphertext of the **new passphrase** (encryption migration / passphrase change).
+   *  oldPass = the current in-memory passphrase (null = the disk file is plaintext); every rewritten file leaves a `.bak-crypt-<ts>` backup first
+*  (kept at the user's request for easy rollback; ★the backups hold plaintext/old ciphertext -- delete them from the plugin page once the risky window closes). */
   reencryptAll(newPass, { tag = 'crypt' } = {}) {
     const p = String(newPass || '').trim();
     if (!p) return { ok: false, error: '口令不能为空' };
@@ -502,22 +502,22 @@ class Store {
     for (const d of [this.instancesDir, this.pluginsConfigDir]) {
       try { for (const f of fs.readdirSync(d)) if (f.endsWith('.json')) targets.push(path.join(d, f)); } catch (_) {}
     }
-    /* 找第一个密文（判断"这个文件已经加密过没有"） */
+    /* find the first ciphertext (to tell "whether this file was ever encrypted") */
     const firstEnc = (o) => {
       if (typeof o === 'string') return crypt.isEncText(o) ? o : null;
       if (Array.isArray(o)) { for (const x of o) { const r = firstEnc(x); if (r) return r; } return null; }
       if (o && typeof o === 'object') { for (const k of Object.keys(o)) { const r = firstEnc(o[k]); if (r) return r; } }
       return null;
     };
-    /* ★预检(2026-09-18)：只要有一个"已加密文件"用 (内存口令 → 目标口令) 都解不开，就**整体拒绝** ——
-     *  绝不允许"部分跳过"式地写一半（否则会把网关留在半加密/假解锁状态，换口令时最危险）。
-     *  ⚠️注意 `decryptFields` 对错口令是"原样返回密文"而**不抛错**，所以判定必须用 decryptText 取样。 */
-    const plain = new Map();          /* 文件 → 已解出的明文（顺便缓存，后面复用） */
+/* ★Pre-check (2026-09-18): if even one "encrypted file" cannot be decrypted with (in-memory passphrase -> target passphrase), **reject the whole operation** --
+     *  never allow "skip some, write the rest" partial writes (they leave the gateway half-encrypted/falsely unlocked -- most dangerous during a passphrase change).
+     *  note: decryptFields returns ciphertext as-is for a wrong passphrase **without throwing**, so the check must sample via decryptText. */
+    const plain = new Map();          /* file -> decrypted plaintext (cached for reuse below) */
     for (const f of targets) {
       let j = null;
       try { j = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) { continue; }
       const sample = firstEnc(j);
-      if (!sample) { plain.set(f, j); continue; }           /* 明文文件：直接用 */
+      if (!sample) { plain.set(f, j); continue; }           /* plaintext file: use directly */
       let dec = null;
       if (this._pass) {
         try { crypt.decryptText(sample, this._pass); dec = crypt.decryptFields(j, this._pass); } catch (_) { dec = null; }
@@ -536,9 +536,9 @@ class Store {
         const raw = fs.readFileSync(f, 'utf8');
         const j = JSON.parse(raw);
         const dec = plain.get(f) || j;
-        /* ★已经是"目标口令"的密文、且没有残留明文敏感值 → 跳过（否则每点一次都重写 + 多一堆备份,
-         *  还白烧几秒 CPU —— 2026-09-18 实测连点把网关阻塞到无响应）
-         *  判定要用**原始文件对象 j**：encryptFields 不会重复加密已是密文的值 ⇒ 结果与 j 一致 = 无明文待加密。 */
+        /* *already ciphertext of the target passphrase with no plaintext leftovers -> skip (otherwise every tap rewrites everything and piles up backups,
+         *  and burns seconds of CPU -- measured 2026-09-18: rapid taps blocked the gateway entirely)
+         *  the check must use the **original file object j**: encryptFields never re-encrypts ciphertext, so result == j means no plaintext left to encrypt. */
         const sample = firstEnc(j);
         if (sample) {
           let samePass = false;
@@ -548,10 +548,10 @@ class Store {
         }
         const enc = crypt.encryptFields(dec, p);
         const text = JSON.stringify(enc, null, 2);
-        if (text === raw) { out.skipped++; continue; }          /* 没有任何可加密字段 */
-        /* ★只在"文件当前是明文"时留备份 —— 那才是真正的回滚点（含明文，可恢复）。
-         *  已加密文件再加密（换口令/重复点）留的备份里是**旧密文**，既救不了急又白占空间，
-         *  还会让"从备份找回明文密钥"的恢复手段误判（2026-09-18 踩过：6 份备份里只有最早那份是明文）。 */
+        if (text === raw) { out.skipped++; continue; }          /* nothing encryptable */
+        /* *keep a backup only when the file is currently plaintext -- that is the real rollback point (contains plaintext, recoverable).
+         *  re-encrypting encrypted files (pass change / repeated taps) leaves backups holding **old ciphertext** -- useless in an emergency and a waste of space,
+         *  and fools the "recover plaintext keys from backups" procedure (2026-09-18: of 6 backups only the earliest was plaintext). */
         if (!sample) {
           const bak = f + '.bak-' + tag + '-' + ts;
           fs.copyFileSync(f, bak);
@@ -569,10 +569,10 @@ class Store {
     if (j && j[String(uid)] !== undefined) { delete j[String(uid)]; atomicWrite(file, JSON.stringify(j, null, 2)); }
   }
 
-  /* ---------- setup 模式 (文档 §3.3) ---------- */
+  /* ---------- setup mode (doc §3.3) ---------- */
   isSetupMode() {
     if (!this.index.setupMode) return false;
-    if (this.index.setupDeadline && Date.now() > this.index.setupDeadline) return false; // 超时锁死
+    if (this.index.setupDeadline && Date.now() > this.index.setupDeadline) return false; // locked after the deadline
     return !this.index.adminCreated;
   }
   armSetup(windowMs = 10 * 60 * 1000) {
@@ -586,7 +586,7 @@ class Store {
     this.saveIndex();
   }
 
-  /* ---------- 迁移 (文档 §8.2): 旧 config.<name>.json → instances/<uid>.json ---------- */
+  /* ---------- Migration (doc §8.2): old config.<name>.json -> instances/<uid>.json ---------- */
   detectLegacy(legacyDir) {
     const d = legacyDir || this.dir;
     let files = [];
@@ -594,7 +594,7 @@ class Store {
     return files.filter(f => /^config(\.[A-Za-z0-9_-]{1,32})?\.json$/.test(f));
   }
 
-  /* 执行迁移: 返回 {migrated:[{name,uid}], skipped:[], errors:[]} */
+  /* run the migration: returns {migrated:[{name,uid}], skipped:[], errors:[]} */
   migrate(legacyDir, { log = logErr } = {}) {
     const d = legacyDir || this.dir;
     const files = this.detectLegacy(d);
@@ -612,18 +612,18 @@ class Store {
           raw = crypt.decryptText(raw, oldPass);
         }
         let cfg = JSON.parse(raw);
-        // 旧格式整文件加密已解; 剥旧运行时字段
+        // old whole-file encryption already decrypted; strip legacy runtime fields
         for (const k of Object.keys(cfg)) if (k.startsWith('_')) delete cfg[k];
         const uid = this.createInstance(name, cfg);
         res.migrated.push({ name, uid });
-        // 插件内联配置拆到 plugins-config (文档 §8.2 步骤2)
+        // split inline plugin config out to plugins-config (doc §8.2 step 2)
         if (Array.isArray(cfg.plugins)) {
           for (const pc of cfg.plugins) {
             if (pc && pc.id && pc.config && typeof pc.config === 'object') {
               this.setPluginConfig(pc.id, uid, pc.config);
             }
           }
-          // 实例配置里 plugins 只留 id+enable (配置迁走了)
+          // instance configs keep only id+enable in plugins (the config itself moved out)
           const inst = this.loadInstance(uid);
           inst.plugins = inst.plugins.map(pc => ({ id: pc.id, enable: !!pc.enable }));
           this.saveInstance(uid, inst);
@@ -637,7 +637,7 @@ class Store {
     return res;
   }
 
-  /* 迁移校验: 对比实例数/渠道数 (文档 §8.2 步骤4) */
+/* Migration check: compare instance/channel counts (docs §8.2 step 4) */
   verifyMigration(legacyDir) {
     const d = legacyDir || this.dir;
     const files = this.detectLegacy(d).concat(
@@ -663,7 +663,7 @@ class Store {
     return report;
   }
 
-  /* 实例状态总览 (文档 §5.5): 按 UID 聚合实例配置 + 所有插件配置 */
+  /* instance status overview (doc §5.5): aggregate the instance config + all plugin configs by UID */
   instanceFull(uid) {
     const meta = this.meta(uid);
     if (!meta) return null;

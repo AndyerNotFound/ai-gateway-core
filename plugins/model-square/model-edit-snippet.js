@@ -1,11 +1,11 @@
-/* model-edit SDUI 页面（由 model-square registerAdminUi 注册，menu:false 子页）
- * 在「快速分组」里点模型卡 → App 打开 /admin/ui/model-edit?instance=...&channel=...&model=...
- * 返回 gcui JSON：表单（别名/分组/按次/价格）+ 规则列表 + 保存/关闭按钮
- * ★设计决策：
- *   - 按次计费用的 switch 砍了——留空 perCall 字段 = 按量计费，填了数值 = 按次（服务端已处理空串→null）
- *   - 分组用文本输入（列出可选分组名做提示）——chip 选择需要 state+setState 联动，弹窗里太重
- *   - 规则是只读卡片 + 删除按钮（增/改规则去 billing 网页端，避免在弹窗里做复杂表单）
- *   - 保存只提交表单字段，不碰 rules（setModel 只更新提供的字段 → rules 保留）
+/** the model-edit SDUI page (registered via model-square's registerAdminUi; a menu:false sub-page)
+   * tapping a model card in "quick groups" -> the App opens /admin/ui/model-edit?instance=...&channel=...&model=...
+   * returns gcui JSON: a form (alias/group/per-call/price) + the rule list + save/close buttons
+   * *design decisions:
+ *   - The per-call billing switch is gone -- an empty perCall field = pay-per-token; a number = pay-per-call (the server maps empty strings to null)
+ *   - Groups use a text input (existing group names are listed as hints) -- chip selection needs state+setState wiring, too heavy inside a dialog
+ *   - Rules are read-only cards + delete buttons (add/edit rules on billing's web page, avoiding complex forms inside the dialog)
+ *   - Saving submits only form fields, never rules (setModel updates only provided fields -> rules survive)
  */
   ctx.registerAdminUi({
     id: 'model-edit',

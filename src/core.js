@@ -1,17 +1,17 @@
 'use strict';
-/* core.js - HTTP server + 多实例池(UID) + 请求路由 + setup 模式 + admin 最小 API (文档 §2.1/§3.3)
+/** core.js - HTTP server + multi-instance pool (UID) + request routing + setup mode + the minimal admin API (doc §2.1/§3.3)
  *
- * 内核端点(白名单, 其余都是插件的事):
+   * kernel endpoints (whitelisted; everything else is a plugin's business):
  *   GET  /health /status
- *   POST /setup/admin                 setup 模式(仅 localhost, 限时)
+*   POST /setup/admin                 setup mode (localhost only, time-limited)
  *   GET  /v1/models /v1beta/models
  *   POST /v1/chat/completions         OpenAI
  *   POST /v1/messages                 Claude
  *   POST /v1beta/models/:m:(stream)GenerateContent   Gemini
- *   POST /v1/responses                OpenAI Responses (canonical 正统格式, 不再需要 openaiExtras 开关)
- *   *    /plugins[/<id>/...]          插件分发
- *   *    插件注册的扩展端点 (registerExtraEndpoint)
- *   *    /admin/api/*                 管理最小集(实例/配置/插件列表)
+*   POST /v1/responses                OpenAI Responses (canonical native format, no more openaiExtras switch)
+*   *    /plugins[/<id>/...]          plugin dispatch
+*   *    plugin-registered extra endpoints (registerExtraEndpoint)
+*   *    /admin/api/*                 minimal admin set (instances / config / plugin list)
  */
 const http = require('http');
 const https = require('https');
@@ -31,11 +31,11 @@ const adminUi = require('./admin-ui');
 
 const CORE_VERSION = require('../package.json').version;
 
-/* ---------- 插件配置「合并写入」 ----------
- * 管理端(网页/App)的插件配置表单只回传 configSchema 里声明的字段，schema 之外的字段不在 body 里。
- * 若整体替换，运行期数据会被一起抹掉 —— 2026-09-16 事故：保存「用户体系」插件配置把整张用户表清空
- * （卡密表在另一个文件里，所以幸存 → 表现为"用户全没了但卡还在"）。
- * 语义：普通字段覆盖；值为 null = 删除该键；对象递归合并；数组整体替换。 */
+/** ---------- plugin config "merge-write" ----------
+   * the admin's (web/App) plugin config form returns only fields declared in configSchema; anything outside the schema is absent from the body.
+* A full replace would wipe runtime data too -- 2026-09-16 incident: saving the "user system" plugin config emptied the whole user table
+   * (the card table lives in another file, so it survived -> "all users gone but the cards remain").
+   * semantics: plain fields override; a null value deletes the key; objects merge recursively; arrays replace wholesale. */
 function mergePluginConfig(base, patch) {
   const out = Object.assign({}, (base && typeof base === 'object') ? base : {});
   for (const k of Object.keys(patch || {})) {
@@ -49,11 +49,11 @@ function mergePluginConfig(base, patch) {
 }
 const GEMINI_RE = /^\/v1(?:beta|alpha)?\/models\/(.+):(generateContent|streamGenerateContent|countTokens)$/;
 
-/* ---------- 错误/工具 ---------- */
-/* ★布尔参数解析 (2026-09-19 事故修复)
- * 管理端开关既有传 Boolean 的（App 原生页），也有传字符串的（SDUI 模板 {{input._checked}}）。
- *  **严禁 `!!v`**：`!!"false" === true`（关闭变成打开）、`!!"" === false`（模板解析失败被静默当成关闭）。
- *  返回 null = 值非法 → 调用方必须回 400，绝不猜。 */
+/** ---------- Errors/utilities ---------- */
+/** *boolean parameter parsing (2026-09-19 incident fix)
+   * admin switches arrive both as Booleans (App native pages) and as strings (SDUI templates {{input._checked}}).
+   *  **never use `!!v`**: `!!"false" === true` (off becomes on) and `!!"" === false` (template parse failures silently read as off).
+   *  returning null = an illegal value -> the caller must 400; never guess. */
 function asBool(v) {
   if (v === true || v === 1) return true;
   if (v === false || v === 0) return false;
@@ -83,7 +83,7 @@ function sendError(cfg, format, res, status, message, code) {
     res.end(JSON.stringify(body));
   } catch (_) { try { res.end(); } catch (_) {} }
 }
-/** 从请求体里取模型名 (gemini 走 URL, 其余走 body.model) */
+/** extract the model name from the request (gemini from the URL, everything else from body.model) */
 function modelFromBody(urlInfo, bodyStr) {
   if (urlInfo && urlInfo.model) return String(urlInfo.model);
   try {
@@ -104,7 +104,7 @@ function collectModels(cfg) {
 function modelsResponse(cfg, format) {
   return modelsResponseFrom(collectModels(cfg), format);
 }
-/** 由模型名数组直接构造 /v1/models 响应 (聚合路由用) */
+/** build a /v1/models response straight from a model-name array (for aggregate routing) */
 function modelsResponseFrom(ms, format) {
   if (format === 'gemini') {
     return { models: ms.map(m => ({ name: 'models/' + m, displayName: m, supportedGenerationMethods: ['generateContent', 'streamGenerateContent', 'countTokens'] })) };
@@ -112,7 +112,7 @@ function modelsResponseFrom(ms, format) {
   return { object: 'list', data: ms.map(m => ({ id: m, object: 'model', type: 'model', created: 1700000000, owned_by: 'ai-gateway-core', display_name: m })) };
 }
 
-/* Gay Core: 用户端布局配置校验 (bottomBar/hidden/homeOrder=字符串数组, theme=字符串) */
+/** Gay Core: user-side layout config validation (bottomBar/hidden/homeOrder = string arrays, theme = string) */
 function sanitizeLayout(l) {
   if (!l || typeof l !== 'object') return null;
   const arr = v => Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.length <= 64).slice(0, 32) : undefined;
@@ -124,7 +124,7 @@ function sanitizeLayout(l) {
   if (typeof l.theme === 'string' && l.theme.length <= 64) out.theme = l.theme;
   return out;
 }
-/* MD3 默认主题兜底 (theme-md3 插件文件丢失时 App 仍有默认主题可用) */
+/** MD3 default-theme fallback (the App keeps a default theme even when the theme-md3 plugin files are missing) */
 const FALLBACK_THEME = {
   id: 'theme-md3', name: 'Material Design 3', builtin: true, locked: true,
   dark: { primary: '#D0BCFF', onPrimary: '#381E72', secondary: '#CCC2DC', surface: '#141218', surfaceContainer: '#1D1B20', background: '#141218', onSurface: '#E6E0E9', onSurfaceVariant: '#CAC4D0', outline: '#938F99', error: '#F2B8B5' },
@@ -132,7 +132,7 @@ const FALLBACK_THEME = {
   cssVars: {},
 };
 
-/* ---------- 网关主体 ---------- */
+/** ---------- Gateway core ---------- */
 class Gateway {
   constructor(dir, opts = {}) {
     this.store = new Store(dir);
@@ -145,23 +145,23 @@ class Gateway {
       crypt: { encrypt: v => crypt.encryptText(v, this.store._pass), decrypt: v => crypt.decryptText(v, this.store._pass), maskFields: crypt.maskFields },
       log: (...a) => log('[plugins]', ...a),
     });
-    /* ★2026-09-18 多实例一致性: 把"插件配置被写过"挂到 Store 上 ——
-     *  ctx.setPluginConfig 与 /admin/api/plugin-config/:uid/:pid(绕过 ctx 的那条)都会触发,
-     *  由 PluginManager 递增版本号并把新配置**原地**同步给同插件的其它实例。 */
+/* ★2026-09-18 multi-instance consistency: hang "plugin config was written" on the Store --
+     *  both ctx.setPluginConfig and /admin/api/plugin-config/:uid/:pid (the path bypassing ctx) trigger it,
+     *  the PluginManager bumps the version and push-syncs the new config **in place** to the plugin's other instances. */
     this.store.onPluginConfigWrite = (pid) => { try { this.plugins.bumpCfgRev(pid, null); } catch (_) {} };
     // pool: instances Map<uid, cfg>, servers Map<"http:port",...>, portOwner Map<port,uid>
     this.pool = { instances: new Map(), servers: new Map(), portOwner: new Map(), mainPort: 0, mainTlsPort: 0, mainHost: '0.0.0.0' };
     this.opts = opts;
-    this._gi = { at: 0, idx: null };   // 模型分组索引缓存
+    this._gi = { at: 0, idx: null };   // model group index cache
   }
 
-  /* ---------- 模型分组索引 (缓存 3s, 避免每请求读盘) ---------- */
+  /* ---------- Model group index (3s cache; avoids per-request disk reads) ---------- */
   groupIndex() {
     const now = Date.now();
     if (!this._gi.idx || now - this._gi.at > 3000) {
-      /* ★能力优先: 有 model-pricing 提供方就让它供数, 内核不再点名 model-square。
-       *  分组/价格是**全局**配置(manifest 未写 scope → 存 uid=0 键), 所以这里查 uid=0,
-       *  与旧路径 store.getPluginConfig('model-square', 0) 的口径一致。 */
+      /* *capability first: when a model-pricing provider exists, it supplies the data; the kernel no longer names model-square.
+       *  group/price are **global** config (manifest without scope -> stored under uid=0), so this queries uid=0,
+       *  same convention as the old store.getPluginConfig('model-square', 0). */
       let capSrc = null;
       try { capSrc = this.plugins ? this.plugins.requireCapability(0, 'model-pricing') : null; } catch (_) {}
       this._gi = { at: now, idx: modelgroups.buildIndex(this.store, capSrc) };
@@ -171,9 +171,9 @@ class Gateway {
   invalidateGroupIndex() { this._gi = { at: 0, idx: null }; }
 
   /**
-   * 无前缀(Default)聚合: 汇总所有已启用实例的模型名。
-   * @param {object|null} userKey 卡密(用于按 branches 实例白名单裁剪); 管理员/未登录 = null
-   * @param {object|null} onlyCfg 传入时只收该实例(内部用)
+* Prefix-less (Default) aggregation: pool model names from all enabled instances.
+* @param {object|null} userKey card key (used to trim by the per-branch instance whitelist); admin / anonymous = null
+* @param {object|null} onlyCfg when given, only that instance is included (internal use)
    */
   aggregateModels(userKey) {
     const allowed = (userKey && Array.isArray(userKey.branches) && userKey.branches.length) ? userKey.branches : null;
@@ -187,8 +187,8 @@ class Gateway {
   }
 
   /**
-   * 聚合模式下"参与聚合的实例配置"清单（已启用 + 已按卡密实例白名单裁剪）。
-   * 顺序 = pool 的插入顺序（即 uid 顺序），保证 /v1/models 稳定。
+* In aggregation mode, the list of participating instance configs (enabled + trimmed by the card-key instance whitelist).
+* Order = pool insertion order (i.e. uid order), keeping /v1/models stable.
    */
   aggregateInstanceCfgs(userKey) {
     const allowed = (userKey && Array.isArray(userKey.branches) && userKey.branches.length) ? userKey.branches : null;
@@ -202,16 +202,16 @@ class Gateway {
   }
 
   /**
-   * /v1/models 的 id 列表（2026-09-18 用户要求「以防同名模型覆盖」）：
-   *   同名模型出现在**多个 (实例,渠道)** 时 → id 变成 `实例:渠道:模型名`，客户端可精确指定来源；
-   *   没冲突的保持原名。**原名继续可用**（转发侧照旧解析真名），只是不再列在清单里。
-   * @param {Array} cfgs 参与聚合的实例配置（单实例模式传 [cfg]）
+* id list for /v1/models (2026-09-18 user request "in case same-named models overwrite each other"):
+   *   when a same-named model appears across **multiple (instance, channel)** pairs -> the id becomes `instance:channel:model`, letting clients target a source exactly;
+   *   non-conflicting names keep the original. **The original name keeps working** (forwarding still resolves the real name); it just is no longer listed.
+* @param {Array} cfgs instance configs participating in aggregation (pass [cfg] in single-instance mode)
    */
   modelRefs(cfgs) {
     return modelref.buildRefs((Array.isArray(cfgs) ? cfgs : []).map(c => ({ name: c && c._name, channels: (c && c.channels) || [] })));
   }
 
-  /** 找能提供某模型的其它实例(聚合兜底; 跳过 default 本身) */
+/** Find other instances that can serve a model (aggregation fallback; skips default itself) */
   findInstanceForModel(model, userKey) {    const allowed = (userKey && Array.isArray(userKey.branches) && userKey.branches.length) ? userKey.branches : null;
     for (const [, c] of this.pool.instances) {
       if (!c || c._disabled) continue;
@@ -222,7 +222,7 @@ class Gateway {
     return null;
   }
 
-  /** 按卡密白名单过滤模型名 (models 与 groups 同时存在时取交集; 空 = 不限) */
+/** Filter model names by card-key whitelist (intersection when both models and groups exist; empty = unrestricted) */
   filterModelsFor(list, userKey) {
     if (!userKey) return list;
     const ms = Array.isArray(userKey.models) ? userKey.models : [];
@@ -236,7 +236,7 @@ class Gateway {
     });
   }
 
-  /* ---------- 实例加载 ---------- */
+  /* ---------- Instance loading ---------- */
   loadInstance(uid) {
     const old = this.pool.instances.get(uid);
     let cfg;
@@ -244,7 +244,7 @@ class Gateway {
     if (!cfg) { if (old) { this.pool.instances.delete(uid); this.reconcilePorts(); } return null; }
     const meta = this.store.meta(uid);
     cfg._disabled = !(meta && meta.enabled !== false);
-    cfg._stats = (old && old._stats) || newStats(); // 热重载保留统计
+    cfg._stats = (old && old._stats) || newStats(); // hot reload keeps stats
     this.pool.instances.set(uid, cfg);
     const r = this.plugins.activateInstance(uid, cfg);
     if (!r.ok) logErr('[plugins] uid=' + uid + ' ' + r.blocked);
@@ -252,24 +252,24 @@ class Gateway {
     return cfg;
   }
 
-  /** 重载所有实例(解锁/锁定/换口令后必须做: 内存里的 cfg 是密文或明文, 要重新读盘) */
+/** Reload all instances (required after unlock/lock/passphrase change: in-memory cfg holds ciphertext or plaintext, must re-read disk) */
   reloadAllInstances() {
     for (const meta of this.store.index.instances) this.loadInstance(meta.uid);
     return this.store.index.instances.length;
   }
 
-  /* ---------- 加密口令 / 锁定 (2026-09-18, 「密钥保险箱」插件用) ---------- */
+  /* ---------- Encryption passphrase / lock (2026-09-18; used by the "key vault" plugin) ---------- */
   cryptStatus() { return Object.assign({ ok: true }, this.store.cryptStatus()); }
 
-  /** 解锁：口令只在内存里（不落盘）。
-   *  · 未加密/已解锁时：调用方已用 adminKey 鉴权过，只校验口令即可；
-   *  · **锁定时**：常规鉴权根本过不了（adminKey 自己也是密文）→ 必须传 adminKey，
-   *    用"口令能解出这个 adminKey"来同时证明两样（见 store.verifyAdminKeyWithPass）。 */
+/** Unlock: the passphrase lives only in memory (never written to disk).
+   *  - unencrypted/unlocked: the caller has already authenticated with the adminKey; only the passphrase needs checking;
+   *  - **while locked**: normal auth cannot possibly pass (the adminKey itself is ciphertext) -> the adminKey must be supplied,
+   *    "the passphrase decrypts this adminKey" proves both at once (see store.verifyAdminKeyWithPass). */
   cryptUnlock(pass, adminKey) {
     const p = String(pass == null ? '' : pass).trim();
     if (p.length < 8) return { ok: false, error: '口令至少 8 位' };
-    /* ★已经是"这把口令 + 已解锁"的状态 → 直接返回，**不做重载**
-     *  （否则 App 每次刷新都触发一次全实例重载 = 几千次 scrypt，把网关阻塞到无响应；2026-09-18 实测） */
+    /* *already in "this passphrase + unlocked" state -> return directly, **no reload**
+     *  (otherwise every App refresh triggers an all-instance reload = thousands of scrypt runs, blocking the gateway; measured 2026-09-18) */
     if (this.store._pass === p && !this.store.locked) {
       return { ok: true, noop: true, note: '已解锁（口令未变，无需重载）', status: this.store.cryptStatus() };
     }
@@ -284,7 +284,7 @@ class Gateway {
     return { ok: true, reloaded: n, status: this.store.cryptStatus() };
   }
 
-  /** 锁定：清掉内存口令并重载(把内存里的明文 key 一并清掉)。有密文时转发请求会被 503 拦。 */
+/** Lock: clear the in-memory passphrase and reload (clearing in-memory plaintext keys too). With ciphertext on disk, forwarding is blocked with 503. */
   cryptLock() {
     const had = !!this.store._pass;
     this.store.setPass(null);
@@ -293,13 +293,13 @@ class Gateway {
     return { ok: true, reloaded: n, status: this.store.cryptStatus() };
   }
 
-  /** 首次加密迁移 / 换口令：把盘上敏感字段重写为当前(或新)口令的密文，每个文件先留备份 */
+/** First-time encryption migration / passphrase change: rewrite sensitive fields on disk as ciphertext of the current (or new) passphrase, backing up each file first */
   cryptReencrypt(pass) {
     const cur = this.store._pass;
     const p = String(pass == null ? '' : pass).trim() || cur;
     if (!p) return { ok: false, error: '请先解锁（或提供口令）' };
-    /* ★闸门：同一时间只允许一次加密/换口令。连点按钮会叠加重加密+重载(每次几千次 scrypt)，
-     *  2026-09-18 实测把网关阻塞到完全无响应 —— 宁可拒绝第二次，也不要拖垮整个网关。 */
+    /* *gate: only one encrypt/passphrase-change at a time. Rapid taps stack re-encrypt + reload (thousands of scrypt runs each),
+     *  measured 2026-09-18: it blocked the gateway completely -- prefer rejecting the second attempt over taking the whole gateway down. */
     if (this._cryptBusy) return { ok: false, error: '上一次加密/换口令还在处理中，请等几秒再试（不要连点）' };
     this._cryptBusy = true;
     const t0 = Date.now();
@@ -316,7 +316,7 @@ class Gateway {
     } finally { this._cryptBusy = false; }
   }
 
-  /** 删掉迁移/换口令时留下的明文备份（`.bak-crypt-*`） */
+/** Delete plaintext backups left by migration/passphrase change (`.bak-crypt-*`) */
   cryptCleanBackups() {
     const r = this.store.cleanCryptBackups();
     log('[crypt] 已删除明文备份 ' + r.count + ' 个');
@@ -324,7 +324,7 @@ class Gateway {
   }
 
   loadAll() {
-    // 首次启动: 无实例 → 创建 default + 进入 setup 模式 (§3.3)
+    // first boot: no instances -> create default + enter setup mode (§3.3)
     if (!this.store.index.instances.length) {
       log('[init] 首次启动: 创建 default 实例并进入 setup 模式 (10 分钟内 POST /setup/admin 创建管理员, 仅 localhost)');
       this.store.createInstance('default', { listen: { port: Number(this.opts.port) || 16384, host: '0.0.0.0' } });
@@ -343,7 +343,7 @@ class Gateway {
     this.reconcilePorts();
   }
 
-  /* ---------- 端口管理 (UID 版 pool) ---------- */
+  /* ---------- Port management (UID-based pool) ---------- */
   readTlsCfg(cfg) {
     if (!(cfg.tls && cfg.tls.enable)) return null;
     if (cfg._tlsCache) return cfg._tlsCache;
@@ -422,7 +422,7 @@ class Gateway {
     for (const dd of desired.values()) this.pool.portOwner.set(dd.port, dd.uid);
   }
 
-  /* ---------- 路由: 端口直达 / 主端口 /实例名/ 前缀 / default ---------- */
+  /* ---------- Routing: compat-port direct / main-port /<instance>/ prefix / default ---------- */
   route(req, p) {
     const lp = req.socket && req.socket.localPort;
     if (lp && lp !== this.pool.mainPort && lp !== this.pool.mainTlsPort) {
@@ -454,16 +454,16 @@ class Gateway {
     return { cfg, path: p, uid: defMeta.uid, name: 'default', via: 'default' };
   }
 
-  /* ---------- 主请求分发 ---------- */
-  /* ---------- 请求者身份（按用户隔离统计，2026-09-18） ---------- */
+  /* ---------- Main request dispatch ---------- */
+  /* ---------- Requester identity (per-user stats isolation, 2026-09-18) ---------- */
   /**
-   * 从请求自带的凭证（Bearer 卡密 / ?key= / gatewayKey）解析出"这是哪个用户"。
-   * ★只用于**展示层过滤**，不参与鉴权放行。
-   * 返回三种情况：
-   *   { keyId, name }  —— 认出了卡密用户
-   *   { admin: true }  —— 网关密钥 / 免密部署（等价管理员，看全站）
-   *   { denied: true } —— 带了无效凭证 / 部署要求凭证但没带 → **必须隐藏统计**，
-   *                       绝不能退回全站视图（否则"卡密失效的用户"反而能看到别人的请求）
+* Resolve "which user this is" from credentials carried by the request (Bearer card key / ?key= / gatewayKey).
+* ★For **display-layer filtering only**, never part of auth decisions.
+* Three possible outcomes:
+*   { keyId, name }  -- recognized card-key user
+*   { admin: true }  -- gateway key / keyless deployment (admin-equivalent, sees the whole site)
+*   { denied: true } -- invalid credentials provided / deployment requires credentials but none given -> **stats must be hidden**,
+*                       never fall back to the site-wide view (otherwise a user with an expired card key could see other people's requests)
    */
   viewerScope(cfg, req, query) {
     try {
@@ -485,13 +485,13 @@ class Gateway {
       const u = new URL(req.url, 'http://localhost');
       let p = u.pathname;
 
-      /* ===== setup 模式 (白名单, §3.3) ===== */
+      /* ===== setup mode (whitelist, §3.3) ===== */
       if (this.store.isSetupMode()) {
         if (req.method === 'GET' && (p === '/health' || p === '/setup/status')) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ ok: true, setupMode: true, deadline: this.store.index.setupDeadline, hint: 'POST /setup/admin {adminKey} 创建管理员 (仅 localhost)' }));
         }
-        // GET /admin 放行(页面内的 setup 引导表单调 /setup/admin); API 仍全部拦截
+        // GET /admin passes (the in-page setup wizard calls /setup/admin); all APIs stay blocked
         if (req.method === 'GET' && (p === '/admin' || p === '/admin/')) {
           try {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -504,19 +504,19 @@ class Gateway {
         return res.end(JSON.stringify({ error: 'setup 模式: 请先创建管理员', setup: true, hint: 'POST /setup/admin {adminKey} (仅 localhost)' }));
       }
 
-      /* ===== 多实例路由 ===== */
+      /* ===== multi-instance routing ===== */
       const r = this.route(req, p);
       if (r.error) return sendError(null, 'openai', res, r.status || 404, r.error);
-      let cfg = r.cfg;   /* let: 无前缀聚合路由可能在拿到 body 后切到别的实例 */
+      let cfg = r.cfg;   /* let: prefix-less aggregate routing may switch instances after the body arrives */
       p = r.path;
-      /* ★兼容 RikkaHub 等 App 把余额查询拼到 /v1/credits → 归一到 /credits 顶层路由(2026-09-19) */
+      /* *compat with Apps like RikkaHub appending balance queries to /v1/credits -> normalized onto the /credits top-level route (2026-09-19) */
       if (req.method === 'GET' && p === '/v1/credits') p = '/credits';
 
-      /* ===== 访问来源过滤 (accessGuard: 泄漏公网域名防护) =====
+      /* ===== access-source filter (accessGuard: public-domain leak protection) =====
        *  cfg.accessGuard = { mode:'off'|'app'|'web', exemptPaths:[...], allowUA:[...] }
-       *  mode='app': 只放行 App 客户端(UA 含 allowUA 关键字或带 X-GCUI-* 头), 浏览器 403;
-       *  mode='web': 只放行浏览器; off=不过滤。exemptPaths 永远放行(管理面板等)。
-       *  ★这是弱边界(UA/头可伪造), 防君子不防小人; 真要强就别开公网隧道。 */
+       *  mode='app': App clients only (UA contains an allowUA keyword or carries X-GCUI-* headers); browsers get 403;
+       *  mode='web': browsers only; off = no filtering. exemptPaths always pass (admin panel etc.).
+       *  *this is a soft boundary (UA/headers are forgeable); it stops the honest, not the determined -- don't expose a public tunnel if you need strength. */
       const ag = cfg.accessGuard;
       if (ag && ag.mode && ag.mode !== 'off') {
         const exempt = (ag.exemptPaths || ['/admin', '/health']).some(pp => p === pp || p.startsWith(pp + '/'));
@@ -536,7 +536,7 @@ class Gateway {
       req._uid = r.uid;
       req._branchName = r.name;
 
-      /* 全局卡密分支白名单(插件注册, 防目标实例免密绕过): 卡在任何实例注册过且 branches 非空 → 只能访问白名单实例 */
+      /* global card branch whitelist (plugin-registered; blocks keyless bypass of the target instance): a card registered anywhere with non-empty branches -> whitelist instances only */
       const presented = require('./auth').presentedToken(req, u.searchParams);
       if (presented) {
         const gk = this.plugins.globalKeys.get(presented);
@@ -548,18 +548,18 @@ class Gateway {
       if (cfg.cors && req.method === 'OPTIONS') { res.writeHead(204, corsHeaders(cfg)); return res.end(); }
       const se = (format, res2, status, msg, code) => sendError(cfg, format, res2, status, msg, code);
 
-      /* ===== 健康/状态 ===== */
+      /* ===== health/status ===== */
       if (req.method === 'GET' && p === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, version: CORE_VERSION, uptime: Math.round(process.uptime()) }));
       }
-      /* ★用户端「使用」页(2026-09-18): 直接下发内核 gcui「使用统计」页(与 /admin/ui/usage 同款),
-       *   用户端 App 的「使用」页用 SduiController 渲染它 → 两端一致、改页面不用重编 App。
-       *   ★2026-09-18 按用户隔离: 页面只展示**请求者本人**的统计(scope) —— 以前这里忽略卡密,
-       *   任何人打开都看到全站数据("另一个从没调用过的用户也能看到请求")。 */
+      /* *user-side "Usage" page (2026-09-18): serve the kernel's gcui usage-stats page directly (the same one as /admin/ui/usage),
+       *   the App's "Usage" page renders it via SduiController -> both ends identical; page edits need no app rebuild.
+       *   *2026-09-18 per-user isolation: the page shows only the **requester's** stats (scope) -- it used to ignore key cards,
+       *   so anyone opening it saw site-wide data ("a user who never called could still see requests"). */
       if (req.method === 'GET' && p === '/ui/usage') {
         try {
-          /* ★2026-10-08 管理端语言设置: POST /admin/api/set-lang { lang } → 落盘 i18n prefs[本端 uid] */
+          /* *2026-10-08 admin language setting: POST /admin/api/set-lang { lang } -> persists i18n prefs[uid] */
           if (req.method === 'POST' && u.pathname === '/admin/api/set-lang') {
             let langBody = '';
             req.on('data', c => { langBody += u8(c); if (langBody.length > 1024 * 1024) req.destroy(); });
@@ -579,27 +579,27 @@ class Gateway {
             });
             return;
           }
-          /* ★必须走 adminUi.render(): 它会给页面加 `gcui` 版本字段(App 靠它判"是不是 gcui 页"),
-           *   直接调 buildUsage() 会漏掉 gcui → App 报「不是 gcui 页面」(踩过)。 */
+          /* *must go through adminUi.render(): it stamps the page with the `gcui` version field (the App uses it to detect gcui pages),
+           *   calling buildUsage() directly misses gcui -> the App reports "not a gcui page" (been there). */
           const scope = this.viewerScope(cfg, req, u.searchParams);
           const caps = adminUi.parseCaps(req.headers);
           this.plugins.rememberCaps(cfg._uid, adminUi.capsView(caps));
-          /* ★必须 await: render 对 async 页面返回 Promise(见 admin-ui.render 注释) */
+          /* *must await: render returns a Promise for async pages (see the admin-ui.render comment) */
           const page = (await adminUi.render(this, cfg, 'usage', u.searchParams, this.plugins.adminPages(cfg._uid), { base: '/ui/usage', admin: false, scope: scope, caps })) || {};
 
-          /* ★2026-10-08 管理端语言设置(用户报「找不到设置语言的入口」——两端都没有):
-             管理端内核页此前零语言 UI。治本 = /admin/api/set-lang 端点 + admin-ui.js 语言子页,
-             落盘 i18n prefs[管理端 uid] → 所有内核页 bundle 跟着切(纯服务端, App 零参与)。 */
+          /* *2026-10-08 admin language setting (user report: no way to change language on either end):
+             kernel admin pages previously had zero language UI. The fix = the /admin/api/set-lang endpoint + an admin-ui.js language sub-page,
+             persisting i18n prefs[admin uid] so every kernel page bundle follows (pure server-side, zero App involvement). */
           page.gcui = page.gcui || adminUi.UI_VERSION;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
           return res.end(JSON.stringify(page));
         } catch (e) { return jsonErr(res, '生成页面失败: ' + e.message, 500); }
       }
       if (req.method === 'GET' && p === '/status') {
-        /* ★安全: /status 不鉴权即可读(实例健康信息, 客户端/脚本在用), 但**渠道上游地址(baseUrl)
-         *   与代理地址属于内部信息** —— 未带管理密钥的请求一律打码, 防止局域网里任何人枚举你的上游。
-         *   带管理密钥(x-admin-key / Bearer adminKey / ?adminKey=)仍是原样返回。
-         *   (实例没设 adminKey = 免密管理, 此时谁读都是"管理员", 不打码。) */
+        /* *security: /status is readable without auth (instance health info used by clients/scripts), but channel upstream addresses (baseUrl)
+         *   and proxy addresses are internal** -- requests without the admin key are always masked, so nobody on the LAN can enumerate your upstreams.
+         *   requests carrying the admin key (x-admin-key / Bearer adminKey / ?adminKey=) still get it verbatim.
+         *   (an instance without adminKey = keyless admin; then every reader is "an admin", nothing is masked.) */
         const isAdmin = (() => {
           try { return !!this.authChain.checkAdmin(cfg, req, u.searchParams).ok; } catch (_) { return false; }
         })();
@@ -612,17 +612,17 @@ class Gateway {
           channels: cfg.channels.map(c => ({ name: c.name, type: c.type, baseUrl: hide(c.baseUrl), proxy: c.proxy || null, models: c.models, modelMap: c.modelMap, groups: c.groups || [], default: c.default, delayMs: c.delayMs || 0, useResponses: !!c.useResponses })),
           proxies: Object.entries(cfg.proxies || {}).map(([k, v]) => ({ name: k, type: v.type, host: hide(v.host), port: isAdmin ? v.port : (v.port ? 0 : v.port) })),
           stats: (() => {
-            /* ★default 实例聚合全实例(§45): 跨实例路由的请求计入目标实例, default 自己的
-             *   stats 会漏掉 → 用户端首页"请求趋势"读 /status.stats.hourly, 不聚合就恒 0 不变 */
+            /* *default aggregates all instances (§45): cross-instance routed requests count toward the target instance, so default's own
+             *   stats would miss them -> the user home's "request trend" reads /status.stats.hourly; without aggregation it stays 0 forever */
             const isDef = cfg._name === 'default';
             const targets = isDef ? [...this.pool.instances.values()].filter(x => x) : [cfg];
-            /* ★按用户隔离（2026-09-18）：/status 免鉴权可读，以前**连 stats.recent 一起返回**
-             *   （里面有卡密名 keyName）→ 局域网内任何人不带密钥就能看到"谁在用、什么时候、什么模型"。
-             *   现在：管理员 = 全站；带卡密的普通用户 = 只给自己那份（stats.byKey[<keyId>] + 过滤后的 recent）；
-             *   认不出身份 = 统计为空（宁可不给，也不泄露他人）。 */
+            /* *per-user isolation (2026-09-18): /status is readable without auth and previously returned stats.recent too
+             *   (it contains the key-card name keyName) -> anyone on the LAN without a key could see "who uses it, when, which model".
+             *   now: admin = site-wide; ordinary key-card users = only their own slice (stats.byKey[<keyId>] + filtered recent);
+             *   unrecognized identity = empty stats (prefer giving nothing over leaking others'). */
             const meScope = isAdmin ? null : this.viewerScope(cfg, req, u.searchParams);
             const meKey = (meScope && meScope.keyId) || '';
-            const meAdmin = !!(meScope && meScope.admin);   /* gatewayKey / 免密部署 = 管理员语义 */
+            const meAdmin = !!(meScope && meScope.admin);   /* gatewayKey / keyless deployment = admin semantics */
             const seeAll = isAdmin || meAdmin;
             let gReq = 0, gErr = 0; const allRecent = []; const byChMap = {};
             const addCh = (t, name, v) => {
@@ -634,7 +634,7 @@ class Gateway {
             for (const t of targets) {
               const s = (t && t._stats) || { requests:0, errors:0, byChannel:{}, recent:[] };
               if (meKey) {
-                /* per-key 视图：累计量取 stats.byKey，明细取 recent 里 keyId 相同的那几条 */
+                /* per-key view: totals from stats.byKey, details from the recent entries with the same keyId */
                 const b = (s.byKey || {})[meKey];
                 if (b) {
                   gReq += b.requests || 0; gErr += b.errors || 0;
@@ -643,7 +643,7 @@ class Gateway {
                 for (const r of (s.recent||[])) if (r.keyId === meKey) allRecent.push(isDef ? Object.assign({}, r, { instance: t._name }) : r);
                 continue;
               }
-              if (!seeAll) continue;   /* 非管理员又认不出身份 / 卡密无效 → 不给任何统计 */
+              if (!seeAll) continue;   /* non-admin whose identity cannot be recognized / invalid card -> no stats at all */
               gReq += s.requests || 0; gErr += s.errors || 0;
               for (const [name, v] of Object.entries(s.byChannel || {})) addCh(t, name, v);
               for (const r of (s.recent||[])) allRecent.push(isDef ? Object.assign({}, r, { instance: t._name }) : r);
@@ -665,15 +665,15 @@ class Gateway {
         }));
       }
 
-      /* ===== Gay Core App: GET /api/app/bootstrap (公开, 聚合服务点资料/分支/插件公示/主题/布局) ===== */
+      /* ===== Gay Core App: GET /api/app/bootstrap (public; aggregates site profile/branches/plugin disclosures/theme/layout) ===== */
       if (req.method === 'GET' && p === '/api/app/bootstrap') {
         return this.handleAppBootstrap(cfg, res);
       }
 
-      /* ===== 用户端主题参数 (2026-09-16) =====
-       * 主题参数按端分开存（_theme_user / _theme_admin）。管理端走 /admin/api/plugin-config，
-       * 用户端没有对应入口 → 这里给它一条自己的读写通道（需卡密登录，放在实例上下文里，
-       * 因为 /theme-config 不在 /admin/ 下，进不了 handleAdmin）。 */
+      /* ===== user-side theme params (2026-09-16) =====
+       * theme params are stored per side (_theme_user / _theme_admin). The admin side goes through /admin/api/plugin-config,
+       * the user side has no matching entry -> give it its own read/write channel here (key-card login required, inside the instance context,
+       * because /theme-config is not under /admin/, it never reaches handleAdmin). */
       if (p === '/theme-config') {
         const authR = this.authChain.check(cfg, req, u.searchParams);
         if (!authR.ok) return sendError(cfg, 'openai', res, authR.status || 401, authR.error || 'unauthorized');
@@ -688,14 +688,14 @@ class Gateway {
           for (const t of themes) {
             const inst = this.plugins.installed.get(t.id);
             const schema = (inst && Array.isArray(inst.manifest.configSchema)) ? inst.manifest.configSchema : [];
-            if (!schema.length) continue;   /* 没有可调参数的主题不列出 */
+            if (!schema.length) continue;   /* themes with no tunable params are not listed */
             out.push({ id: t.id, name: t.name, schema: schema, config: this.store.getPluginConfig(t.id, uid, 'user') || {} });
           }
           return jsonT(200, { ok: true, themes: out });
         }
         if (req.method === 'POST') {
           let raw = '';
-          const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
           req.on('data', c => { raw += u8(c); if (raw.length > 1024 * 1024) req.destroy(); });
           req.on('end', () => {
             let body = {};
@@ -714,14 +714,14 @@ class Gateway {
         return jsonT(405, { error: 'Method Not Allowed' });
       }
 
-      /* ===== admin 页面 + API ===== */
+      /* ===== admin pages + API ===== */
       if ((p === '/admin' || p === '/admin/') && req.method === 'GET') {
         try {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'admin.html'), 'utf8'));
         } catch (e) { return jsonErr(res, '管理页面缺失: web/admin.html', 404); }
       }
-      /* 用户中心(登录在页面内, API 各自鉴权) */
+      /* user center (login lives in the page; APIs authenticate individually) */
       if ((p === '/user' || p === '/user/') && req.method === 'GET') {
         try {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -729,16 +729,16 @@ class Gateway {
         } catch (e) { return jsonErr(res, '用户页面缺失: web/user.html', 404); }
       }
       if (req.method === 'GET' && p.startsWith('/admin/assets/')) return this.serveAdminAsset(req, res, p);
-      /* ===== 管理端 SDUI 页面 =====
-       * 走**同一条管理鉴权链**（handleAdmin 内部 checkAdmin）——
-       * 少了这一句，/admin/ui/* 会掉到后面的默认分支变成 404（踩过：带不带密钥都 404）。 */
+      /* ===== admin SDUI pages =====
+       * going through the **same admin auth chain** (checkAdmin inside handleAdmin) --
+       * without this line, /admin/ui/* falls through to the later default branch as 404 (been there: 404 with or without the key). */
       if (p.startsWith('/admin/ui')) {
         return this.handleAdmin(cfg, req, res, u, p, '').catch(e => jsonErr(res, e));
       }
       if (p.startsWith('/admin/api')) {
         if (req.method === 'POST' || req.method === 'DELETE') {
           let adminBody = '';
-          const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
           req.on('data', c => { adminBody += u8(c); if (adminBody.length > 4 * 1024 * 1024) req.destroy(); });
           req.on('end', () => { this.handleAdmin(cfg, req, res, u, p, adminBody).catch(e => jsonErr(res, e)); });
           req.on('error', () => {});
@@ -748,13 +748,13 @@ class Gateway {
         return;
       }
 
-      /* ===== 插件分发 ===== */
+      /* ===== plugin dispatch ===== */
       if (p === '/plugins' || p.startsWith('/plugins/')) {
         if (req.method === 'GET' || req.method === 'HEAD') {
           this.plugins.handle(cfg, req, res, u, p, '').catch(e => jsonErr(res, e));
         } else {
           let pbody = '';
-          const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
           req.on('data', c => { pbody += u8(c); if (pbody.length > 8 * 1024 * 1024) req.destroy(); });
           req.on('end', () => { this.plugins.handle(cfg, req, res, u, p, pbody).catch(e => jsonErr(res, e)); });
           req.on('error', () => {});
@@ -762,20 +762,20 @@ class Gateway {
         return;
       }
 
-      /* ★加密锁定（密钥保险箱, 2026-09-18）：未解锁时渠道 apiKey/卡密表/管理员密钥**全是 AGWENC1 密文**，
-       *  常规鉴权必然失败（卡片查不到 → 一片 401 invalid key）。所以这里对**所有 /v1 上游端点**
-       *  （含 /v1/models 与 /v1beta/*）统一给 503 + 可行动的提示。/api/app/models、/plugins/*、
-       * 全部管理端点与 /auth/* /credits 不受影响 —— 解锁通道必须留着。 */
+      /* *encryption lock (key vault, 2026-09-18): while locked, channel apiKeys/the card table/admin keys are **all AGWENC1 ciphertext**,
+       *  normal auth is guaranteed to fail (cards unreadable -> a wall of 401 invalid key). So for **all /v1 upstream endpoints**
+       *  (including /v1/models and /v1beta/*) uniformly get 503 + an actionable hint. /api/app/models, /plugins/*,
+       * all admin endpoints and /auth/* /credits are unaffected -- the unlock channel must stay open. */
       if (this.store.locked && (p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1beta/'))) {
         return se(p.startsWith('/v1beta') ? 'gemini' : 'openai', res, 503,
           '网关已锁定：渠道密钥处于加密状态，请在 Gay Core「密钥保险箱」里解锁后重试');
       }
 
-      /* ===== 插件注册的扩展端点 (registerExtraEndpoint) ===== */
+      /* ===== plugin-registered extended endpoints (registerExtraEndpoint) ===== */
       const extraKey = req.method.toUpperCase() + ' ' + p;
       const extra = this.plugins.extraEndpoints.get(extraKey);
       if (extra && extra.uid === cfg._uid) {
-        this.plugins.maybeReloadData(extra.pluginId, extra.uid);   /* ★运行数据多实例一致性(2026-09-18) */
+        this.plugins.maybeReloadData(extra.pluginId, extra.uid);   /* *runtime-data multi-instance consistency (2026-09-18) */
         const authR = this.authChain.check(cfg, req, u.searchParams);
         if (!authR.ok) return se('openai', res, authR.status || 401, authR.error || 'invalid key');
         const chunks = [];
@@ -795,10 +795,10 @@ class Gateway {
         return;
       }
 
-      /* ===== 插件顶层路由 (auth 插件: /credits /auth/* 等) ===== */
+      /* ===== plugin top-level routes (auth plugins: /credits /auth/* etc.) ===== */
       const topHit = this.plugins.topRoutes.get(cfg._uid + '|' + req.method.toUpperCase() + ' ' + p);
       if (topHit && topHit.uid === cfg._uid) {
-        this.plugins.maybeReloadData(topHit.pluginId, topHit.uid);   /* ★运行数据多实例一致性(2026-09-18) */
+        this.plugins.maybeReloadData(topHit.pluginId, topHit.uid);   /* *runtime-data multi-instance consistency (2026-09-18) */
         const bodyChunks = [];
         let tsize = 0, taborted = false;
         req.on('data', c => {
@@ -822,20 +822,20 @@ class Gateway {
         return;
       }
 
-      /* ===== 模型列表 ===== */
+      /* ===== model list ===== */
       if (req.method === 'GET' && (p === '/v1/models' || p === '/v1beta/models')) {
         const fmt = p === '/v1beta/models' ? 'gemini' : 'openai';
         const authR = this.authChain.check(cfg, req, u.searchParams);
         if (!authR.ok) return se(fmt, res, authR.status || 401, authR.error || 'invalid key');
-        /* 无前缀(via=default) = 聚合模式: 返回所有实例的模型并集(受卡密实例/分组/模型白名单裁剪);
-         * 带实例前缀(/Abc/v1/models) 仍只返回该实例的模型。 */
+        /* no prefix (via=default) = aggregation mode: the union of all instances' models (clipped by card instance/group/model whitelists);
+ * with an instance prefix (/Abc/v1/models) it still returns only that instance's models. */
         const agg = r.via === 'default' && cfg.aggregate !== false;
-        /* ★id 形态（2026-09-18）：同名冲突的模型用 `实例:渠道:模型名`，其余原名；
-         *   卡密白名单里写原名或复合名都能命中（modelref.filterEntries）。 */
+        /* *id shape (2026-09-18): conflicted names use `instance:channel:model`; others keep the original;
+         *   card whitelists match either the original or the composite name (modelref.filterEntries). */
         const cfgs = agg ? this.aggregateInstanceCfgs(authR.userKey) : [cfg];
         const refs = this.modelRefs(cfgs);
         let ms = modelref.filterEntries(refs.entries, authR.userKey, this.groupIndex()).map(e => e.id);
-        /* 兜底：一个都没算出来(极端情况)时退回旧的按名去重，别让客户端拿到空清单 */
+        /* fallback: if nothing resolved (extreme case), return to the old name-based dedup; never hand the client an empty list */
         if (!ms.length && cfgs.length) {
           const seen = [];
           for (const c of cfgs) for (const m of collectModels(c)) if (!seen.includes(m)) seen.push(m);
@@ -845,13 +845,13 @@ class Gateway {
         return res.end(JSON.stringify(modelsResponseFrom(ms, fmt)));
       }
 
-      /* ===== 免登录: GET /api/app/models (公开模型清单, 供游客浏览站点与模型广场) =====
-       * 只返回 模型名/分组/别名/所属实例 —— 不含 baseUrl / apiKey / 价格等敏感信息。 */
+      /* ===== no-login: GET /api/app/models (public model list for guests browsing the site and model square) =====
+       * returns only model name/group/alias/owning instance -- never baseUrl / apiKey / prices or other secrets. */
       if (req.method === 'GET' && p === '/api/app/models') {
         return this.handlePublicModels(cfg, res);
       }
 
-      /* ===== 转发端点 ===== */
+      /* ===== forwarding endpoints ===== */
       if (req.method !== 'POST') return se('openai', res, 404, 'not found: ' + req.method + ' ' + p);
 
       let clientFormat = null;
@@ -878,7 +878,7 @@ class Gateway {
 
       let bodyStr = '';
       let size = 0, aborted = false;
-      const u8 = utf8();   /* ★跨分块安全解码(2026-09-18)：请求体跨包切断会让 prompt 变乱码 */
+      const u8 = utf8();   /* *chunk-safe decoding (2026-09-18): a body split across packets would garble the prompt */
       req.on('data', c => {
         if (aborted) return;
         size += c.length;
@@ -888,16 +888,16 @@ class Gateway {
       req.on('end', () => {
         if (aborted) return;
         try {
-          /* ★模型引用「实例:渠道:模型」(2026-09-18): 同名冲突时客户端用它精确指定来源。
-           *  解析成功且"该实例有这个渠道、该渠道确实提供这个模型" → 换实例 + 锁定渠道 + 真名进下游;
-           *  解析失败不报错, 当普通模型名照旧处理(最终由路由决定, 可能 503 no channel)。 */
+          /* *model reference "instance:channel:model" (2026-09-18): lets clients pick an exact source on name conflicts.
+*  Resolved and "the instance has this channel and the channel really serves this model" -> switch instance + pin channel + real name goes downstream;
+           *  parse failures are not errors; treat as an ordinary model name (routing decides; may 503 no channel). */
           let wantPlain = modelFromBody(urlInfo, bodyStr);
           if (wantPlain) {
             const ref = modelref.parseRef(wantPlain);
             if (ref) {
               let tgt = null;
               for (const [, c] of this.pool.instances) {
-                if (!c || !modelref.channelMatch(ref.instance, c._name)) continue;   /* 实例名同样容许 空格/连字符/大小写 差异 */
+                if (!c || !modelref.channelMatch(ref.instance, c._name)) continue;   /* instance names tolerate space/hyphen/case differences too */
                 const okBranch = !authR.userKey || !Array.isArray(authR.userKey.branches) || !authR.userKey.branches.length
                   || authR.userKey.branches.includes(c._name);
                 if (!c._disabled && okBranch) tgt = c;
@@ -917,8 +917,8 @@ class Gateway {
                 cfg = tgt;
                 req._uid = tgt._uid;
                 req._branchName = tgt._name;
-                urlInfo.forceChannel = String(hit.name);   /* 锁定渠道(不走轮转/兜底) */
-                urlInfo.modelOverride = ref.model;         /* 计费/日志/分组用真名 */
+                urlInfo.forceChannel = String(hit.name);   /* pin the channel (no rotation/fallback) */
+                urlInfo.modelOverride = ref.model;         /* real name for billing/logs/groups */
                 urlInfo.rawModel = wantPlain;
                 wantPlain = ref.model;
               } else {
@@ -926,7 +926,7 @@ class Gateway {
               }
             }
           }
-          /* ---- 无前缀聚合兜底: default 实例提供不了该模型时, 去其它实例找 ---- */
+          /* ---- prefix-less aggregation fallback: when default cannot serve a model, look at other instances ---- */
           if (r.via === 'default' && cfg.aggregate !== false) {
             const want = wantPlain;
             if (want && !collectModels(cfg).includes(want)) {
@@ -960,7 +960,7 @@ class Gateway {
       return res.end(JSON.stringify({ error: 'setup 仅允许 localhost 调用' }));
     }
     let body = '';
-    const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     req.on('data', c => { body += u8(c); if (body.length > 65536) req.destroy(); });
     req.on('end', () => {
       try {
@@ -983,12 +983,12 @@ class Gateway {
     req.on('error', () => {});
   }
 
-  /* 插件用的网关能力 (findKey/grantQuota 由认证插件 bindGatewayAuthApis 提供) */
+  /* gateway capabilities for plugins (findKey/grantQuota are provided by auth plugins' bindGatewayAuthApis) */
   gatewayApi(cfg) {
     return { uid: cfg._uid, instanceName: cfg._name, store: this.store, gateway: this };
   }
 
-  /* ---------- 审计日志 (Gay Core §14: log/audit-<uid>.jsonl; uid=0 表示全局动作) ---------- */
+  /* ---------- Audit log (Gay Core §14: log/audit-<uid>.jsonl; uid=0 means global actions) ---------- */
   audit(uid, action, detail) {
     try {
       const dir = path.join(this.store.dir, 'log');
@@ -998,15 +998,15 @@ class Gateway {
     } catch (_) {}
   }
 
-  /* ---------- Gay Core: App 启动聚合信息 (公开; 只含公示级字段, 无秘密) ---------- */
-  /* 内部自调：把请求打到**本实例自己的监听端口**（管理端页面里的「探测成功率 / 同步模型 / 查余额」用）
-   * 为什么需要：这些能力在插件里，而插件路由不在 /admin/ 前缀下 —— SDUI 的 adminApi 白名单不放行，
-   * 所以由内核代为调用（仍然带 adminKey，权限不放大）。
-   * 实例未监听（端口 0）或超时 → resolve(null)，调用方按"插件未响应"处理。 */
+  /* ---------- Gay Core: the App's boot aggregate info (public; disclosure-grade fields only, no secrets) ---------- */
+  /* internal self-call: hit **this instance's own listening port** (used by the admin pages' "probe success rate / sync models / check balance")
+   *  why: these capabilities live inside plugins, and plugin routes are not under the /admin/ prefix -- the SDUI adminApi whitelist would not allow them,
+   *  so the kernel proxy-calls them on the plugins' behalf (adminKey still attached; no privilege escalation).
+   *  when the instance is not listening (port 0) or times out -> resolve(null); callers treat it as "plugin did not respond". */
   selfReq(cfg, method, path, body, timeoutMs) {
     return new Promise(resolve => {
-      /* ★改走主端口：以前用 cfg.listen.port，但 ①port=0 的实例直接 null → '插件未启用'
-       *  ②port 撞旧版网关(如 16384) → 连到旧版 → '未发现实例'。主端口+路径前缀对所有实例都通。 */
+      /* *switched to the main port: it used cfg.listen.port, but (1) instances with port=0 gave null -> "plugin not enabled"
+       *  (2) the port collides with the old gateway (e.g. 16384) -> connects to the old one -> "no instance found". Main port + path prefix works for every instance. */
       const port = this.pool.mainPort;
       if (!port) return resolve(null);
       const data = body ? JSON.stringify(body) : null;
@@ -1036,22 +1036,22 @@ class Gateway {
     const list = this.plugins.listForInstance(uid, cfg);
     const enabled = list.filter(x => x.enable);
     const has = id => enabled.some(x => x.id === id);
-    /* 注册配置公示 (secret 字段绝不外泄)
-     * ★2026-10-07 去硬编码: 以前是 has('auth-user') + getPluginConfig('auth-user', uid) ——
-     *   内核必须知道"注册功能由 auth-user 提供"。现在改成问能力 user-registration,
-     *   任何插件提供它都能顶上。★下发的字段形状与旧版逐字段一致(App 的 RegistrationInfo 契约不变)。 */
+    /* registration config disclosure (secret fields never leak)
+* ★2026-10-07 de-hardcoded: previously has('auth-user') + getPluginConfig('auth-user', uid) --
+     *   the kernel had to know "registration is provided by auth-user". Now it asks for the user-registration capability,
+     *   any plugin providing it can take over. *the shipped field shape matches the old version field-for-field (the App's RegistrationInfo contract is unchanged). */
     let registration = null;
     try {
       const regCap = this.plugins ? this.plugins.requireCapability(uid, 'user-registration') : null;
       if (regCap && typeof regCap.info === 'function') registration = regCap.info() || null;
     } catch (_) { registration = null; }
-    /* ★主题插件默认读**用户端**那份（bootstrap 是用户端拿的）；管理端在 plugin-config 里显式要 admin */
+    /* *theme plugins read the **user copy** by default (bootstrap is fetched user-side); the admin side explicitly asks for admin in plugin-config */
     let themes = this.plugins.themesForInstance(uid, cfg, 'user');
-    /* ★声明式兜底(2026-10-07): 内核不再点名 theme-md3 ——
-     *  只要列表里**没有任何默认主题**(manifest.theme.default), 就补内核兜底主题。
-     *  这样把默认主题换成别的插件, 内核不需要改一行。 */
+/* ★Declarative fallback (2026-10-07): the core no longer names theme-md3 --
+     *  whenever the list holds **no default theme** (manifest.theme.default), add the kernel fallback theme.
+     *  this way swapping the default theme to another plugin requires zero kernel changes. */
     if (!themes.some(t => t && (t.isDefault === true))) themes = [FALLBACK_THEME].concat(themes);
-    /* 用户调试模式 (§15): 限定单用户 + 限时自动失效 */
+    /* user debug mode (§15): limited to one user + auto-expiring */
     const ud = cfg.userDebug;
     const userDebug = (ud && ud.uid && Number(ud.until) > Date.now()) ? { forUid: String(ud.uid), until: Number(ud.until) } : null;
     const body = {
@@ -1060,9 +1060,9 @@ class Gateway {
       serverInfo: this.store.getServerInfo(),
       userDebug,
       layout: (cfg.clientLayout && typeof cfg.clientLayout === 'object') ? cfg.clientLayout : null,
-      /* 管理端 SDUI 页面注册点（旧版 App 会忽略该字段，行为完全不变） */
+      /* admin SDUI page registration slot (older Apps ignore this field; behavior identical) */
       adminUi: adminUi.manifest(this.plugins.adminPages(uid)),
-      /* 本实例已注册的能力总表 [{name, pluginId}] —— 插件可据此决定降级/启用某功能 */
+      /* this instance's registered capability table [{name, pluginId}] -- plugins use it to decide degradation/enabling */
       capabilities: this.plugins.listCapabilities(uid),
       branches: this.store.index.instances.filter(mm => mm.enabled !== false).map(mm => ({ name: mm.name, uid: mm.uid })),
       auth: { cardkey: has('auth-cardkey'), user: has('auth-user'), gatewayKey: !!cfg.gatewayKey, registration },
@@ -1071,8 +1071,8 @@ class Gateway {
         id: x.id, name: x.name, version: x.version, author: x.author, description: x.description,
         icon: x.icon, type: x.type, builtin: x.builtin, sha256: x.sha256,
         permissions: x.permissions, provides: x.provides, appUi: x.appUi,
-        /* ★运行期能力清单(2026-10-07): 与静态 provides 分开 —— provides 是"意图声明",
-         *  这里是"当前真注册了什么"。App/插件据此自检"我要的能力有没有提供方"。 */
+        /* *runtime capability list (2026-10-07): separate from static provides -- provides is the "intent declaration",
+         *  this is "what is actually registered right now". Apps/plugins self-check "does my capability have a provider" against it. */
         capabilities: x.capabilities || [],
         userPage: x.userPage, hasAdminPage: x.hasAdminPage,
       })),
@@ -1081,8 +1081,8 @@ class Gateway {
     res.end(JSON.stringify(body));
   }
 
-  /* GET /api/app/models → 免登录公开模型清单 (游客浏览模型广场用)
-   * 安全: 只暴露 模型名/分组/别名/所属实例 —— 不含 baseUrl / apiKey / 价格。 */
+  /* GET /api/app/models -> the login-free public model list (for guests browsing the model square)
+* Security: exposes only model name / group / alias / owning instance -- no baseUrl / apiKey / pricing. */
   handlePublicModels(cfg, res) {
     const gi = this.groupIndex();
     const seen = new Map();
@@ -1118,7 +1118,7 @@ class Gateway {
     res.end(JSON.stringify(body));
   }
 
-  /* GET /admin/assets/<file> → web/assets/ 下的静态资源 (字体/组件库, 无敏感数据, 不鉴权) */
+  /* GET /admin/assets/<file> -> static assets under web/assets/ (fonts/component libs, nothing sensitive, no auth) */
   serveAdminAsset(req, res, p) {
     const rel = decodeURIComponent(p.replace(/^\/admin\/assets\//, '')).replace(/^\/+/, '');
     const base = path.join(__dirname, '..', 'web', 'assets');
@@ -1130,7 +1130,7 @@ class Gateway {
     res.end(fs.readFileSync(fp));
   }
 
-  /* ---- 插件市场索引 (全局, data/market-indexes.json) ---- */
+  /* ---- Plugin market indexes (global, data/market-indexes.json) ---- */
   marketIndexes() {
     try {
       const j = JSON.parse(fs.readFileSync(path.join(this.store.dir, 'market-indexes.json'), 'utf8'));
@@ -1144,34 +1144,34 @@ class Gateway {
     fs.renameSync(tmp, fp);
   }
 
-  /* ---------- admin API 最小集 ---------- */
+  /* ---------- minimal admin API ---------- */
   async handleAdmin(cfg, req, res, u, p, body) {
     const authR = this.authChain.checkAdmin(cfg, req, u.searchParams);
     if (!authR.ok) return sendError(cfg, 'openai', res, authR.status || 401, authR.error || 'unauthorized');
     const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', ...corsHeaders(cfg) }); res.end(JSON.stringify(obj)); };
     const j = () => { try { return JSON.parse(body || '{}'); } catch (_) { return null; } };
 
-    /* ===== 管理端 SDUI 页面（gcui JSON, 2026-09-15）=====
-     * App 的管理端内核页从这里拉页面；渲染/加载失败时 App 会自动回退到原生页。
-     * 只读 GET：页面里的写操作走 App 的 adminApi 动作回打 /admin/api/**，仍然过 checkAdmin。 */
+    /* ===== Admin SDUI pages (gcui JSON, 2026-09-15) =====
+     * the App admin's kernel pages pull from here; on render/load failure the App automatically falls back to the native page.
+     * read-only GET: in-page writes go back through the App's adminApi actions to /admin/api/**, still passing checkAdmin. */
     if (p.startsWith('/admin/ui/') && req.method === 'GET') {
       const name = p.slice('/admin/ui/'.length).replace(/[^a-zA-Z0-9-]/g, '');
-      /* ★能力协商(2026-10-07): 按 App 上报的 X-GCUI-* 头裁剪页面(网页端不带头 → 不裁剪) */
+      /* *capability negotiation (2026-10-07): trim pages per the App's X-GCUI-* headers (no headers on web -> no trimming) */
       const caps = adminUi.parseCaps(req.headers);
-      /* ★先记录本次请求的能力 —— ★存的是 **capsView 视图**(带 hasComponent/hasIcon 方法),
-       *  因为插件页 render 的第4参数与 ctx.clientCaps() 读的就是它。
-       *  (内核出口的 negotiate 用的是原始 caps, 两套各司其职; 踩过: 存原始 caps 会让插件报
+      /* *record this request's capabilities first -- what is stored is the **capsView** (with hasComponent/hasIcon methods),
+       *  because the 4th render argument of plugin pages and ctx.clientCaps() read exactly this.
+       *  (the kernel's outbound negotiate uses the raw caps; the two serve different roles. Been there: storing raw caps made plugins report
        *   "caps.hasComponent is not a function"。) */
       this.plugins.rememberCaps(cfg._uid, adminUi.capsView(caps));
-      /* ★必须 await：渠道页要等插件（探测成功率）返回后才成形 */
+      /* *must await: the channels page takes shape only after the plugin (probe success rates) returns */
       const page = await adminUi.render(this, cfg, name, u.searchParams, this.plugins.adminPages(cfg._uid), { base: '/admin/ui/' + name, admin: true, caps });
       if (!page) return json(404, { error: '没有这个管理端页面: ' + name });
       return json(200, page);
     }
 
     if (p === '/admin' || p === '/admin/api/status') {
-      /* ★default 实例概览也显示全实例聚合(§45): 跨实例路由的请求计入目标实例,
-         default 自己的计数会漏掉它们, 概览里 default 用聚合避免"没统上"误判 */
+      /* *the default instance overview shows the all-instance aggregate too (§45): cross-instance requests count toward the target,
+ default's own counters miss them, so default's overview aggregates to avoid a false "not counted" read */
       let totalReq = 0, totalErr = 0;
       for (const [, ic] of this.pool.instances) { const s = ic && ic._stats; if (s) { totalReq += s.requests || 0; totalErr += s.errors || 0; } }
       return json(200, {
@@ -1191,15 +1191,15 @@ class Gateway {
     }
 
     let m;
-    /* ---- Gay Core: 实例完整统计 (含 recent/byChannel/时间序列, 供图表用) ---- */
+    /* ---- Gay Core: full instance stats (recent/byChannel/time series, for charts) ---- */
     if ((m = /^\/admin\/api\/stats\/(\d+)$/.exec(p)) && req.method === 'GET') {
       const uidS = Number(m[1]);
       const ic = this.pool.instances.get(uidS);
       if (!ic) return json(404, { error: '实例未运行或不存在' });
-      /* ★default 实例默认聚合所有实例数据(2026-09-18): 跨实例路由(§35 复合引用)把请求计入
-       *   目标实例(req._uid=tgt._uid), 导致从 default 的统计页看不到这些请求(用户曾误判
-       *   "流量没过 core"). 查询 default 时聚合全部运行中实例的 recent/byChannel/hourly/计数,
-       *   并在 recent 每条补 instance 字段区分来源; 非 default 实例行为不变. */
+      /* *default aggregates all instance data by default (2026-09-18): cross-instance routing (§35 composite refs) counts requests toward
+       *   target instance (req._uid=tgt._uid), so default's stats page could not see those requests (users misdiagnosed it as
+       *   "traffic bypassed core"). Querying default aggregates recent/byChannel/hourly/counters across all running instances,
+       *   and stamp each recent entry with an instance field for provenance; non-default instances behave unchanged. */
       const idxEntry = this.store.index.instances.find(x => x.uid === uidS);
       const isDefault = !!(idxEntry && idxEntry.name === 'default');
       const targets = isDefault ? [...this.pool.instances.values()].filter(x => x) : [ic];
@@ -1249,7 +1249,7 @@ class Gateway {
         aggregated: isDefault,
       });
     }
-    /* ---- Gay Core: 审计日志读取 (最近 limit 条, 默认 50) ---- */
+    /* ---- Gay Core: audit log reads (latest limit entries, default 50) ---- */
     if ((m = /^\/admin\/api\/audit\/(\d+)$/.exec(p)) && req.method === 'GET') {
       const uid3 = Number(m[1]);
       const limit = Math.min(Number(u.searchParams.get('limit')) || 50, 500);
@@ -1258,9 +1258,9 @@ class Gateway {
       try {
         lines = fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).slice(-limit).map(l => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
       } catch (_) {}
-      return json(200, { ok: true, uid: uid3, entries: lines.reverse() }); // 新→旧
+      return json(200, { ok: true, uid: uid3, entries: lines.reverse() }); // newest first
     }
-    /* ---- Gay Core: 服务点资料 (全局, 存 instances.json) ---- */
+    /* ---- Gay Core: site profile (global, stored in instances.json) ---- */
     if (p === '/admin/api/server-info') {
       if (req.method === 'GET') return json(200, { ok: true, serverInfo: this.store.getServerInfo() });
       if (req.method === 'POST') {
@@ -1272,24 +1272,24 @@ class Gateway {
       }
     }
     /* POST /admin/api/plugin-call {plugin, path, method, body}
-     * —— 内核代调**插件**的管理端点（用户/卡密/模型同步/探测/余额/代理）。
-     * 为什么需要：这些端点在 /plugins/<id>/admin/* 下，不在 SDUI 的 adminApi 白名单(/admin/)内。
-     * ★2026-10-07 深度改造: 原来是一张写死 9 个插件名的常量表 PLUGIN_CALL_OK ——
-     *   内核因此**必须知道每个插件叫什么**, 装第 10 个插件想代调就得改内核源码 + 重启。
-     *   现在改成**声明式**: 插件在自己的 manifest.json 里声明 `"adminApi": ["/admin/keys"]`,
-     *   内核只按声明放行, 永不按插件名判断(插件自报家门, 内核不认名字)。
-     * 安全：①插件必须在 manifest 显式声明可代调 ②只放行其声明的 /admin/ 子路径前缀
-     *   ③仍然带 adminKey（权限不放大）④声明为空/未声明 → 一律 403。 */
+* -- the core calls **plugin** admin endpoints on their behalf (users / card keys / model sync / probe / balance / proxy).
+     * why: these endpoints live under /plugins/<id>/admin/*, outside the SDUI adminApi whitelist (/admin/).
+* ★2026-10-07 deep refactor: it used to be a constant table PLUGIN_CALL_OK hard-coding 9 plugin names --
+     *   the kernel therefore **had to know every plugin's name**; adding a 10th plugin meant kernel source edits + restart.
+     *   now **declarative**: a plugin declares `"adminApi": ["/admin/keys"]` in its own manifest.json,
+     *   the kernel grants only per declarations, never judging by plugin name (plugins self-identify; the kernel ignores names).
+     * security: (1) a plugin must explicitly declare proxy-callability in its manifest (2) only its declared /admin/ sub-path prefixes pass
+     *   (3) still carries adminKey (no privilege escalation) (4) empty/undeclared -> always 403. */
     if (p === '/admin/api/plugin-call' && req.method === 'POST') {
       const d = j() || {};
       const pid = String(d.plugin || '');
-      /* 声明式查表: manifest.adminApi (数组)。兼容旧内置插件: 未声明但属于历史白名单的,
-       * 由各自的 manifest 补上声明 —— 内核不再保留任何插件名常量。 */
+      /* declarative lookup: manifest.adminApi (array). Legacy built-in compat: undeclared but on the historical whitelist,
+       * each manifest adds its own declaration -- the kernel no longer holds any plugin-name constants. */
       const decl = this.plugins.adminApiDecl(pid, cfg._uid);
       if (!decl) return json(403, { error: '不允许代调该插件: ' + pid + '（未在 manifest 声明 adminApi）' });
       const sub = String(d.path || '');
       if (sub.indexOf('/admin/') !== 0) return json(403, { error: '只允许代调插件的 /admin/ 端点' });
-      /* 路径也要落在声明范围内: decl 是前缀数组, 空数组 = 声明了但禁止(等价 403) */
+      /* paths must stay inside the declared scope: decl is a prefix array; an empty array = declared but forbidden (equivalent to 403) */
       if (!decl.some(pre => sub === pre || sub.indexOf(pre.replace(/\/$/, '') + '/') === 0 || sub.indexOf(pre) === 0)) {
         return json(403, { error: '该插件未声明可代调此路径: ' + sub });
       }
@@ -1301,10 +1301,10 @@ class Gateway {
         prefix + '/plugins/' + pid + sub, d.body || null, 10000,
       );
       if (r == null) return json(502, { error: '插件没有响应（未启用，或该实例未运行）' });
-      /* ★归一化 error：插件的错误响应可能是 OpenAI 风格 {error:{message,type,code}} 或 {error:'字符串'}。
-       *  App 的 SduiController.adminApi 用 .asString 取 error —— 遇到 JsonObject 会抛
-       *  UnsupportedOperationException("JsonObject") → 管理端只显示 "JsonObject" 三个字。
-       *  这里统一拍平成字符串，App 就能正确显示错误信息了。 */
+      /* *normalize error: a plugin's error response may be OpenAI-style {error:{message,type,code}} or {error:'string'}.
+       *  the App's SduiController.adminApi reads error via .asString -- a JsonObject makes it throw
+       *  UnsupportedOperationException("JsonObject") -> the admin page would display just the word "JsonObject".
+       *  flattened to strings here so the App can display error messages correctly. */
       const flat = Object.assign({ ok: true }, r);
       if (flat.error && typeof flat.error === 'object') {
         flat.error = flat.error.message || flat.error.error || JSON.stringify(flat.error);
@@ -1315,8 +1315,8 @@ class Gateway {
       return json(200, flat);
     }
     /* POST /admin/api/notice {op:'add'|'edit'|'delete', idx?, body?, target?, timed?}
-     * —— 公告存在 serverInfo.announcement 这**一个字符串**里（一行一条，格式与 App 的 Notices.kt 一致）。
-     * 服务端负责解析 → 改写 → 回存，避免 App 端拼字符串出错。 */
+* -- notices live in that **single string** serverInfo.announcement (one per line, format matches the App's Notices.kt).
+     * the server parses -> rewrites -> saves, avoiding string-assembly bugs on the App side. */
     if (p === '/admin/api/notice' && req.method === 'POST') {
       const d = j() || {};
       const op = String(d.op || '');
@@ -1348,10 +1348,10 @@ class Gateway {
       this.audit(0, 'notice.' + op, { count: list.length });
       return json(200, { ok: true, toast: '公告已更新（共 ' + list.length + ' 条）' });
     }
-    /* ---- Gay Core: 修改管理密钥 (2026-09-16) ----
-     * 安全设计: ①本请求本身已过 checkAdmin(带的就是当前密钥) ②仍要求 body 再给一次当前密钥
-     *   (二次确认, 防"手滑改完把自己锁在外面") ③新密钥 ≥8 位且不能与当前相同。
-     * ★改完后 App 必须同步更新本地保存的密钥(客户端已实现), 否则下次进不来管理端。 */
+    /* ---- Gay Core: change the admin key (2026-09-16) ----
+     * security design: (1) this request already passed checkAdmin (carrying the current key) (2) the body must still re-supply the current key
+     *   (double confirmation, so a slip does not lock you out) (3) the new key is >=8 chars and different from the current one.
+     * *after the change the App must update its locally stored key too (already implemented client-side), or the admin panel locks out next time. */
     if (p === '/admin/api/settings/admin-key' && req.method === 'POST') {
       const data = j() || {};
       const oldKey = String(data.oldKey || '');
@@ -1366,7 +1366,7 @@ class Gateway {
       this.audit(cfg._uid, 'adminKey.change', {});
       return json(200, { ok: true, toast: '管理密钥已修改（请记牢新密钥）' });
     }
-    /* ---- Gay Core: 插件市场测试模式 (§10: 未开启时禁止自定义插件来源) ---- */
+    /* ---- Gay Core: plugin market test mode (§10: custom sources forbidden while off) ---- */
     if (p === '/admin/api/market/test-mode') {
       if (req.method === 'GET') return json(200, { ok: true, testMode: !!this.store.index.marketTestMode });
       if (req.method === 'POST') {
@@ -1377,7 +1377,7 @@ class Gateway {
         return json(200, { ok: true, testMode: !!this.store.index.marketTestMode });
       }
     }
-    /* ---- Gay Core: 用户端默认布局 + 用户调试模式 (每实例; 调试模式限单用户+限时, §15) ---- */
+    /* ---- Gay Core: user-side default layout + user debug mode (per instance; debug mode is single-user + time-boxed, §15) ---- */
     if ((m = /^\/admin\/api\/client-config\/(\d+)$/.exec(p))) {
       const uid2 = Number(m[1]);
       if (!this.store.meta(uid2)) return json(404, { error: '实例不存在 uid=' + uid2 });
@@ -1393,7 +1393,7 @@ class Gateway {
         if (data.userDebug !== undefined) {
           const ud = data.userDebug;
           if (ud && ud.uid && Number(ud.minutes) > 0) {
-            c.userDebug = { uid: String(ud.uid), until: Date.now() + Math.min(Number(ud.minutes), 1440) * 60000 }; // 上限 24h
+            c.userDebug = { uid: String(ud.uid), until: Date.now() + Math.min(Number(ud.minutes), 1440) * 60000 }; // capped at 24h
             this.audit(uid2, 'userDebug.on', { forUid: c.userDebug.uid, minutes: Number(ud.minutes) });
           } else {
             c.userDebug = null;
@@ -1405,13 +1405,13 @@ class Gateway {
         return json(200, { ok: true, uid: uid2, layout: c.clientLayout || null, userDebug: c.userDebug || null });
       }
     }
-    // GET /admin/api/instance/:uid → 完整视图(配置打码+插件配置)
+    // GET /admin/api/instance/:uid -> full view (masked config + plugin configs)
     if ((m = /^\/admin\/api\/instance\/(\d+)$/.exec(p)) && req.method === 'GET') {
       const full = this.store.instanceFull(Number(m[1]));
       if (!full) return json(404, { error: '实例不存在' });
       return json(200, { ok: true, ...full });
     }
-    // GET /admin/api/config/:uid (打码) / POST 保存并热重载
+    // GET /admin/api/config/:uid (masked) / POST saves and hot-reloads
     if ((m = /^\/admin\/api\/config\/(\d+)$/.exec(p))) {
       const uid = Number(m[1]);
       if (!this.store.meta(uid)) return json(404, { error: '实例不存在 uid=' + uid });
@@ -1424,7 +1424,7 @@ class Gateway {
       if (req.method === 'POST') {
         const data = j();
         if (!data || typeof data !== 'object') return json(400, { error: 'bad json' });
-        // 打码值原样回填(不覆盖真实密钥)
+        // masked values are backfilled verbatim (never overwriting real keys)
         const old = this.store.loadInstance(uid);
         const merged = this.unmaskMerge(data, old);
         this.store.saveInstance(uid, merged);
@@ -1432,13 +1432,13 @@ class Gateway {
         return json(200, { ok: true, uid });
       }
     }
-    // GET/POST /admin/api/plugin-enable → 全局插件启用表 {id, enable} / {all:true, enable}
+    // GET/POST /admin/api/plugin-enable -> the global plugin enablement table {id, enable} / {all:true, enable}
     if (p === '/admin/api/plugin-enable') {
       if (req.method === 'GET') return json(200, { ok: true, plugins: this.store.pluginEnableList({}) });
       if (req.method === 'POST') {
         const b = j() || {};
         let list = this.store.pluginEnableList({});
-        /* 首次: 从第一个实例播种, 保证"全部插件"都在表里 */
+        /* first run: seed from the first instance so "all plugins" appear in the table */
         if (!list.length) {
           const metas = this.store.index.instances || [];
           if (metas.length) {
@@ -1463,7 +1463,7 @@ class Gateway {
         return json(200, { ok: true, plugins: list });
       }
     }
-    // POST /admin/api/instance 新建 {name, listen?, gatewayKey?...}
+    // POST /admin/api/instance creates {name, listen?, gatewayKey?...}
     if (p === '/admin/api/instance' && req.method === 'POST') {
       const data = j();
       if (!data || !data.name) return json(400, { error: '需要 name' });
@@ -1474,16 +1474,16 @@ class Gateway {
       } catch (e) { return json(400, { error: e.message }); }
     }
     /* POST /admin/api/instance/:uid/basic {name, port, host, adminKey}
-     * —— 实例接入参数（对齐旧版 App 的「编辑实例」表单：名称 / 端口 / 监听地址 / adminKey）
-     * 扁平参数：App 的 form 组件打包出来就是一层对象，这里直接收，别要求嵌套。
-     * ★改**当前实例**的端口会让管理端失联（App 连的还是旧端口）—— 页面侧必须警告。 */
+* -- instance onboarding parameters (mirrors the old App's "edit instance" form: name / port / listen address / adminKey)
+     * flat params: the App's form component packs a single-level object; accept it as-is, do not demand nesting.
+* ★Changing the **current instance's** port cuts the admin side off (the App still dials the old port) -- the page must warn. */
     if ((m = /^\/admin\/api\/instance\/(\d+)\/basic$/.exec(p)) && req.method === 'POST') {
       const uid = Number(m[1]);
       const data = j() || {};
       const meta = this.store.meta(uid);
       if (!meta) return json(404, { error: '实例不存在' });
       const changed = [];
-      /* 端口先校验（避免只改了一半） */
+      /* validate the port first (avoid half-applied changes) */
       let port = 0;
       if (data.port !== undefined && String(data.port).trim() !== '') {
         port = Number(data.port);
@@ -1510,18 +1510,18 @@ class Gateway {
       }
       if (!changed.length) return json(200, { ok: true, toast: '没有改动' });
       this.store.saveInstance(uid, c);
-      /* 重新加载实例（端口变了必须重监听） */
-      try { this.removeInstance(uid); } catch (_) { /* 未运行也没关系 */ }
+      /* reload the instance (a changed port must be re-bound) */
+      try { this.removeInstance(uid); } catch (_) { /* not running is fine too */ }
       this.loadInstance(uid);
       this.audit(uid, 'instance.basic', { changed });
       return json(200, { ok: true, toast: '已保存：' + changed.join('、') });
     }
-    /* POST /admin/api/instance/:uid/channel —— 新增（origName 空）或编辑渠道
+    /* POST /admin/api/instance/:uid/channel -- add (empty origName) or edit a channel
      * body: {origName?, name, type, baseUrl, apiKey, models, modelMap, proxy, delayMs,
      *        isDefault, useResponses, insecure}
-     * ★服务端直接改"配置里的那个渠道对象"（原生版曾踩过：改了游离对象 → 保存永远无效）。
-     * 字段语义与原生一致：apiKey 留空 = 不改；models 逗号/换行分隔；modelMap 接受 JSON 或
-     * "对外名=上游名" 每行一条；isDefault 勾上会把其它渠道的 default 清掉。 */
+     * *the server edits "the channel object in the config" directly (the native version was bitten: editing a detached object -> saves never applied).
+     * field semantics match native: an empty apiKey = no change; models split by comma/newline; modelMap accepts JSON or
+     * "public name = upstream name", one per line; checking isDefault clears default from the other channels. */
     if ((m = /^\/admin\/api\/instance\/(\d+)\/channel$/.exec(p)) && req.method === 'POST') {
       const uid = Number(m[1]);
       const data = j() || {};
@@ -1582,13 +1582,13 @@ class Gateway {
       ch.default = bool(data.isDefault);
       if (ch.default) for (const x of c.channels) if (x !== ch) x.default = false;
       this.store.saveInstance(uid, c);
-      try { this.removeInstance(uid); } catch (_) { /* 未运行也无妨 */ }
+      try { this.removeInstance(uid); } catch (_) { /* fine if not running */ }
       this.loadInstance(uid);
       this.audit(uid, origName ? 'channel.update' : 'channel.add', { name: name });
       return json(200, { ok: true, toast: (origName ? '已保存渠道 ' : '已新增渠道 ') + name });
     }
-    /* DELETE /admin/api/instance/:uid/channel {name} —— 删除渠道
-     * ★name 放在 **body** 里而不是 query：渠道名可能是中文/空格，App 直接拼 URL 会报非法地址。 */
+    /* DELETE /admin/api/instance/:uid/channel {name} -- delete a channel
+     * *name goes in the **body**, not the query: channel names may contain CJK/spaces, and a naively built URL is rejected as invalid by the App. */
     if ((m = /^\/admin\/api\/instance\/(\d+)\/channel$/.exec(p)) && req.method === 'DELETE') {
       const uid = Number(m[1]);
       const data = j() || {};
@@ -1600,13 +1600,13 @@ class Gateway {
       c.channels = (c.channels || []).filter(x => !(x && String(x.name) === name));
       if (c.channels.length === before) return json(404, { error: '找不到渠道: ' + name });
       this.store.saveInstance(uid, c);
-      try { this.removeInstance(uid); } catch (_) { /* 未运行也无妨 */ }
+      try { this.removeInstance(uid); } catch (_) { /* fine if not running */ }
       this.loadInstance(uid);
       this.audit(uid, 'channel.remove', { name: name });
       return json(200, { ok: true, toast: '已删除渠道 ' + name });
     }
     /* POST /admin/api/instance/:uid/channel-action {action:'probe'|'sync'|'balance', channel?}
-     * 内核代调插件端点（权限不放大：仍然带 adminKey，且只允许这三个白名单动作） */
+     * the kernel proxy-calls plugin endpoints (no privilege escalation: adminKey still attached, and only these three whitelisted actions) */
     if ((m = /^\/admin\/api\/instance\/(\d+)\/channel-action$/.exec(p)) && req.method === 'POST') {
       const uid = Number(m[1]);
       const data = j() || {};
@@ -1622,7 +1622,7 @@ class Gateway {
       else return json(400, { error: '未知动作: ' + act });
       if (r == null) return json(502, { error: '插件没有响应（可能未启用，或该实例未运行）' });
       const toast = r.toast || (act === 'probe' ? '探测已执行' : (act === 'sync' ? '模型同步已执行' : '余额查询完成'));
-      /* ★同 plugin-call：归一化 error/toast（selfReq 的响应可能含 OpenAI 风格 {error:{message}}） */
+      /* *same as plugin-call: normalize error/toast (selfReq responses may carry OpenAI-style {error:{message}}) */
       const flat = Object.assign({ ok: true }, r, { toast: toast });
       if (flat.error && typeof flat.error === 'object') flat.error = flat.error.message || flat.error.error || JSON.stringify(flat.error);
       if (flat.toast && typeof flat.toast === 'object') flat.toast = flat.toast.message || JSON.stringify(flat.toast);
@@ -1649,11 +1649,11 @@ class Gateway {
         return json(200, { ok: true, enable: en });
       } catch (e) { return json(400, { error: e.message }); }
     }
-    /* POST /admin/api/instance/batch {enable, uids?} —— 实例启停（服务端一次循环搞定，
-     * 避免 App 端逐个发请求）。uids 给定时只处理选中的那几个；不给 = 全部。 */
+    /* POST /admin/api/instance/batch {enable, uids?} -- instance start/stop (one server-side loop handles it,
+     * avoiding per-item requests from the App). When uids is given, only those are processed; omitted = all. */
     if (p === '/admin/api/instance/batch' && req.method === 'POST') {
       const data = j() || {};
-      /* 同 asBool：批量启停一旦被静默当成 false = 全实例停服，必须严格校验 */
+      /* same as asBool: bulk enable/disable silently read as false = an outage for every instance; validate strictly */
       const enB = asBool(data.enable);
       if (enB === null) return json(400, { error: 'enable 必须是布尔值（收到 ' + JSON.stringify(data.enable === undefined ? null : data.enable) + '）' });
       const wanted = Array.isArray(data.uids) && data.uids.length
@@ -1691,16 +1691,16 @@ class Gateway {
         return json(200, { ok: true });
       } catch (e) { return json(400, { error: e.message }); }
     }
-    // GET /admin/api/plugins/:uid → 插件列表
+    // GET /admin/api/plugins/:uid -> plugin list
     if ((m = /^\/admin\/api\/plugins\/(\d+)$/.exec(p)) && req.method === 'GET') {
       const uid = Number(m[1]);
       const c = this.pool.instances.get(uid) || this.store.loadInstance(uid);
       if (!c) return json(404, { error: '实例不存在' });
       return json(200, { ok: true, plugins: this.plugins.listForInstance(uid, c) });
     }
-    /* ===== 密钥保险箱：加密口令 (2026-09-18) =====
-     * 口令**不落盘**（不写 .agwkey）—— 只存进程内存，重启即回到锁定态，由 App 自动解锁。
-     * 这组端点供插件页 / 调试 / 命令行使用；插件内部走 ctx.gateway.crypt*（同一份实现）。 */
+    /* ===== Key vault: encryption passphrase (2026-09-18) =====
+* The passphrase **never touches disk** (no .agwkey written) -- process memory only; a restart returns to locked state and the App unlocks automatically.
+     * these endpoints serve plugin pages / debugging / CLI; inside plugins use ctx.gateway.crypt* (the same implementation). */
     if (p === '/admin/api/crypt/status' && req.method === 'GET') return json(200, this.cryptStatus());
     if (p === '/admin/api/crypt/unlock' && req.method === 'POST') {
       const r = this.cryptUnlock((j() || {}).pass);
@@ -1713,13 +1713,13 @@ class Gateway {
       return json(r.ok ? 200 : 400, r);
     }
 
-    // GET /admin/api/plugin-config/:uid/:pid → {schema, config} / POST 保存配置并热重载该插件
+    // GET /admin/api/plugin-config/:uid/:pid -> {schema, config} / POST saves config and hot-reloads the plugin
     if ((m = /^\/admin\/api\/plugin-config\/(\d+)\/([a-z0-9][a-z0-9-]*)$/.exec(p))) {
       const uid = Number(m[1]), pid = m[2];
       const c = this.pool.instances.get(uid) || this.store.loadInstance(uid);
       if (!c) return json(404, { error: '实例不存在' });
       if (req.method === 'GET') {
-        /* scope=admin 时读**管理端那份**主题参数（主题插件按端分开存；其它插件忽略该参数） */
+        /* with scope=admin read the **admin copy** of theme params (theme plugins store per side; other plugins ignore this arg) */
         const scope = String(u.searchParams.get('scope') || 'admin');
         const r = this.plugins.configSchema(uid, pid, c, scope);
         if (!r) return json(404, { error: '插件不存在或未安装' });
@@ -1728,16 +1728,16 @@ class Gateway {
       if (req.method === 'POST') {
         const body = j();
         if (!body || typeof body !== 'object' || Array.isArray(body)) return json(400, { error: 'body 必须是配置对象' });
-        /* ★管理端 API 默认写**管理端那份**（主题插件按端分开存；其它插件忽略 scope）。
-         *  这样 App 侧不用传 scope 就天然读写自己那一份。 */
+        /* *admin APIs write the **admin copy** by default (theme plugins store per side; other plugins ignore scope).
+         *  so the App side reads/writes its own copy naturally without passing scope. */
         const scope = String(u.searchParams.get('scope') || body.__scope || 'admin');
         delete body.__scope;
-        /* ★合并写入, 不要整体替换: 表单只带 schema 字段, 替换会抹掉 schema 之外的运行期数据
-         *  (auth-user 的 users/groups、其它插件的运行数据)。详见 mergePluginConfig() 注释。 */
+        /* *merge on write, never wholesale replace: forms submit only schema fields; replacing would wipe runtime data outside the schema
+         *  (auth-user's users/groups, other plugins' runtime data). See the mergePluginConfig() comment. */
         const prevCfg = this.store.getPluginConfig(pid, uid, scope === 'admin' ? 'admin' : undefined) || {};
         const mergedCfg = mergePluginConfig(prevCfg, body);
         this.store.setPluginConfig(pid, uid, mergedCfg, scope === 'admin' ? 'admin' : undefined);
-        // 单插件热重载(若该实例已启用此插件)
+        // hot-reload a single plugin (when this instance has it enabled)
         const pc = this.store.pluginEnableList(c).find(x => x && x.id === pid && x.enable);
         const inst = this.plugins.installed.get(pid);
         if (pc && inst) {
@@ -1749,30 +1749,30 @@ class Gateway {
       return json(405, { error: 'Method Not Allowed' });
     }
 
-    /* ===== 插件市场 ===== */
-    // GET /admin/api/market/indexes → 索引列表
+    /* ===== Plugin market ===== */
+    // GET /admin/api/market/indexes -> index list
     if (p === '/admin/api/market/indexes' && req.method === 'GET') {
       return json(200, { ok: true, indexes: this.marketIndexes() });
     }
-    // POST /admin/api/market/indexes {url} 添加索引
+    // POST /admin/api/market/indexes {url} adds an index
     if (p === '/admin/api/market/indexes' && req.method === 'POST') {
       if (!this.store.index.marketTestMode) return json(403, { error: '未启用「测试模式」, 禁止添加自定义插件来源' });
       const body = j(); const url = String((body && body.url) || '').trim();
-      if (!/^https?:\/\//.test(url)) return json(400, { error: '索引地址必须是 http(s):// URL' });
+      if (!/^https?:\/\//.test(url)) return json(400, { error: 'index URL must be an http(s):// URL' });
       const list = this.marketIndexes();
       if (list.includes(url)) return json(409, { error: '索引已存在' });
       list.push(url); this.saveMarketIndexes(list);
       this.audit(0, 'market.index.add', { url });
       return json(200, { ok: true, indexes: list });
     }
-    // POST /admin/api/market/indexes-delete {url} 删除索引
+    // POST /admin/api/market/indexes-delete {url} deletes an index
     if (p === '/admin/api/market/indexes-delete' && req.method === 'POST') {
       const body = j(); const url = String((body && body.url) || '').trim();
       const list = this.marketIndexes().filter(x => x !== url);
       this.saveMarketIndexes(list);
       return json(200, { ok: true, indexes: list });
     }
-    // GET /admin/api/market/plugins?proxy= → 聚合各索引的插件列表(标注安装状态)
+    // GET /admin/api/market/plugins?proxy= -> aggregate each index's plugin list (with install status)
     if (p === '/admin/api/market/plugins' && req.method === 'GET') {
       const proxy = u.searchParams.get('proxy') || null;
       const indexes = this.marketIndexes();
@@ -1800,19 +1800,19 @@ class Gateway {
       }
       return json(200, { ok: true, plugins: out });
     }
-    // POST /admin/api/market/install {url, sha256?, proxy?} 安装插件包(tar.gz)
+    // POST /admin/api/market/install {url, sha256?, proxy?} installs a plugin package (.tar.gz)
     if (p === '/admin/api/market/install' && req.method === 'POST') {
-      /* Gay Core §10: 未启用测试模式时禁止自定义插件来源 */
+      /* Gay Core §10: custom plugin sources are forbidden unless test mode is on */
       if (!this.store.index.marketTestMode) return json(403, { error: '未启用「测试模式」, 禁止添加自定义插件来源 (管理端 API /admin/api/market/test-mode 开启)' });
       const body = j(); const url = String((body && body.url) || '').trim();
-      if (!/^https?:\/\//.test(url)) return json(400, { error: '下载地址必须是 http(s):// URL' });
+      if (!/^https?:\/\//.test(url)) return json(400, { error: 'download URL must be an http(s):// URL' });
       try {
         const r = await this.plugins.installFromUrl(url, body.sha256 || null, body.proxy || null);
         this.audit(0, 'plugin.install', { id: r.id, version: r.manifest.version, sha256: r.sha256, url });
         return json(200, { ok: true, id: r.id, name: r.manifest.name || r.id, version: r.manifest.version, sha256: r.sha256, hint: '已安装(未启用), 到插件页打开开关启用' });
       } catch (e) { return json(400, { error: e.message }); }
     }
-    // POST /admin/api/market/uninstall {id} 卸载(内置插件拒绝)
+    // POST /admin/api/market/uninstall {id} uninstalls (built-ins refuse)
     if (p === '/admin/api/market/uninstall' && req.method === 'POST') {
       const body = j(); const id = String((body && body.id) || '').trim();
       const inst = this.plugins.installed.get(id);
@@ -1825,7 +1825,7 @@ class Gateway {
     return json(404, { error: '未知管理接口: ' + p });
   }
 
-  /* 打码值回填: "****"/"(已加密)" 的敏感字段保留旧值 */
+  /* masked backfill: sensitive fields reading "****"/"(encrypted)" keep their old values */
   unmaskMerge(newCfg, oldCfg) {
     const isMasked = v => typeof v === 'string' && (v === '(已加密)' || /^\S{0,4}\*{4}/.test(v));
     const merge = (n, o, key) => {
@@ -1835,8 +1835,8 @@ class Gateway {
         return JSON.parse(JSON.stringify(n));
       }
       if (n && typeof n === 'object') {
-        /* ★从旧对象出发合并(旧字段保留), 新键覆盖 —— 之前 out 从空对象开始,
-         *  POST {accessGuard:{...}} 会把整个实例配置替换成只剩 accessGuard (2026-09-14 数据丢失事故) */
+        /* *merge starting from the old object (old fields kept), new keys win -- previously out started from {},
+         *  POSTing {accessGuard:{...}} would replace the whole instance config with only accessGuard (2026-09-14 data-loss incident) */
         const out = (o && typeof o === 'object' && !Array.isArray(o)) ? Object.assign({}, o) : {};
         for (const k of Object.keys(n)) out[k] = merge(n[k], o ? o[k] : undefined, k);
         return out;
@@ -1844,15 +1844,15 @@ class Gateway {
       return n;
     };
     const patched = merge(newCfg, oldCfg || {}, null);
-    /* 旧配置打底 + 新键覆盖: 新配置没提供的顶层键全部保留 */
+    /* old config as base + new keys on top: every top-level key the new config omits is preserved */
     return Object.assign(JSON.parse(JSON.stringify(oldCfg || {})), patched);
   }
 
-  /* ---------- 启停 ---------- */
+  /* ---------- Start / stop ---------- */
   async start() {
     this.loadAll();
-    /* ★使用统计历史(2026-09-18): 读盘 + 起 60s 定时 flush(只有变化的桶才追加写盘)。
-     *  必须在 loadAll 之后 —— 数据目录那时才确定；写盘量极低(见 usage-history.js)。 */
+    /* *usage-stats history (2026-09-18): read from disk + a 60s flush timer (only changed buckets append to disk).
+*  Must run after loadAll -- only then is the data directory known; disk writes are minimal (see usage-history.js). */
     try {
       usageHist.init(this.store.dir);
       log('[usage] 统计历史已加载 桶=' + usageHist._stats().buckets + ' 存量行=' + usageHist._stats().lines);
@@ -1864,7 +1864,7 @@ class Gateway {
   close() {
     for (const [, srv] of this.pool.servers) { try { srv.server.close(); } catch (_) {} }
     try { this.plugins.flushAll(); } catch (_) {}
-    /* ★退出前落盘「使用统计」内存桶 —— 否则最后 60s 的请求记录会随进程一起消失 */
+/* ★Flush in-memory "usage stats" buckets before exit -- otherwise the last 60s of request records vanish with the process */
     try { usageHist.flush(); } catch (_) {}
   }
 }

@@ -49,7 +49,7 @@ body{background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)
 .permrow{display:flex;align-items:center;gap:8px}
 .card{background:var(--md-sys-color-surface-container);border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--gc-radius-card,16px);padding:16px;margin-bottom:14px}
 .card h3{font-size:15px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
-/* Compose 主题: 卡片风格 (gc-card-style) */
+/*/* Compose theme: card style (gc-card-style) */
 body[data-card-style="filled"] .card{background:var(--md-sys-color-surface-container-high);border-color:transparent}
 body[data-card-style="elevated"] .card{background:var(--md-sys-color-surface);border-color:transparent;box-shadow:0 2px 8px #0004}
 body[data-card-style="tonal"] .card{background:color-mix(in srgb,var(--md-sys-color-surface),var(--md-sys-color-primary) 10%);border-color:transparent}
@@ -119,7 +119,7 @@ iframe.plugin-frame{width:100%;border:none;border-radius:14px;background:var(--m
 </div>
 
 <div class="main">
-  <!-- 游客提示条 -->
+  <!-- Guest notice bar -->
   <div id="guestBar" class="card" style="display:none;align-items:center;gap:10px">
     <div style="flex:1;min-width:0">
       <div style="font-weight:600;font-size:14px">未登录 · 游客浏览</div>
@@ -128,7 +128,7 @@ iframe.plugin-frame{width:100%;border:none;border-radius:14px;background:var(--m
     <button class="btn btn-fill btn-sm" id="btnGuestLogin">登录</button>
   </div>
 
-  <!-- 登录 -->
+  <!-- Login -->
   <div id="loginBox">
     <div class="card">
       <h3>登录</h3>
@@ -164,7 +164,7 @@ iframe.plugin-frame{width:100%;border:none;border-radius:14px;background:var(--m
     </div>
   </div>
 
-  <!-- 已登录 -->
+  <!-- Logged in -->
   <div id="appBox" hidden>
     <div class="card">
       <div class="row" style="margin-bottom:4px">
@@ -257,7 +257,7 @@ iframe.plugin-frame{width:100%;border:none;border-radius:14px;background:var(--m
   </div>
 </div>
 
-<!-- 访问权限多选面板 (从屏幕下侧弹入) -->
+<!--<!-- access permissions multi-select panel (slides in from the bottom of the screen) -->
 <div id="sheetScrim" class="sheet-scrim"></div>
 <div id="userThemeSheet" class="sheet">
   <div class="mtitle">颜色模式</div>
@@ -304,9 +304,9 @@ iframe.plugin-frame{width:100%;border:none;border-radius:14px;background:var(--m
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(m,e){const t=$('toast');t.textContent=m;t.className='on'+(e?' err':'');clearTimeout(t._tm);t._tm=setTimeout(()=>t.className='',2400)}
-/* 代币展示: 符号与汇率由服务点自定义 (serverInfo.currencySymbol / currencyRate) */
+/*/* token display: symbol and rate are site-configured (serverInfo.currencySymbol / currencyRate) */
 var CUR={sym:'¥',rate:1};
-/* 应用 bootstrap 主题: 颜色令牌(dark/light) + cssVars(圆角/描边/卡片风格) */
+/*/* apply the bootstrap theme: color tokens (dark/light) + cssVars (radius/outline/card style) */
 function applyTheme(b){
   try {
     if (!b || !b.themes || !b.themes.length) return;
@@ -325,7 +325,7 @@ function applyTheme(b){
 function fmtTok(n){n=Number(n)||0;var scaled=(CUR.rate&&CUR.rate!==1);var u=scaled?(n*CUR.rate):n;
   var b=(u>=1e8)?((u/1e8).toFixed(2)+'亿'):(u>=1e4?((u/1e4).toFixed(2)+'万'):(scaled?String(Number(u.toFixed(2))):String(u)));
   return CUR.sym+b}
-/* 分支感知: 页面在 /<branch>/user 时 API 自动带前缀 */
+/*/* branch awareness: when the page is at /<branch>/user, APIs automatically carry the prefix */
 const BASE = location.pathname.replace(/\/user\/?$/, '/').replace(/^\/+/, '/');
 const apiBase = BASE; // '/user' → '/' ; '/bs2/user' → '/bs2/'
 
@@ -342,7 +342,7 @@ async function api(p, opts={}){
   return j;
 }
 
-/* ---------- 登录 ---------- */
+/*/* ---------- Login ---------- */
 let regCfg = null, captchaToken = '';
 function switchLoginTab(which){
   $('tabKey').classList.toggle('on', which==='key');
@@ -390,7 +390,7 @@ $('btnAcctLogin').onclick = async ()=>{
     toast('欢迎, '+uid); enter();
   } catch(e){ toast(e.message, true); }
 };
-/* 卡密改名 (自助, mykeys-update 支持 name) — 用 data 属性传值, 不靠 DOM 查询 */
+/* Card-key rename (self-service, mykeys-update supports name) -- passes values via data attributes, no DOM queries */
 async function renameKey(el){
   const key = el.dataset.key, cur = el.dataset.name || '';
   const nn = prompt('新的卡名:', cur);
@@ -399,7 +399,7 @@ async function renameKey(el){
   catch(e){ toast(e.message, true); }
 }
 $('btnLogout').onclick = ()=>{ token=''; meInfo=null; localStorage.removeItem('agw_user_token'); enterGuest(); };
-/* 主卡泄漏恢复: 凭用户名+密码轮换主卡(旧卡立即失效) */
+/*/* leaked primary-card recovery: rotate the card with username+password (the old card dies immediately) */
 $('lnkRotate').onclick = async (e)=>{
   e.preventDefault();
   const uid=$('la_uid').value.trim(), pw=$('la_pw').value;
@@ -413,7 +413,7 @@ $('lnkRotate').onclick = async (e)=>{
   } catch(err){ toast(err.message, true); }
 };
 
-/* 注册 */
+/*/* Registration */
 $('btnSendCode').onclick = async ()=>{
   const email = $('rg_email').value.trim();
   if (!email) return toast('请填写邮箱', true);
@@ -439,7 +439,7 @@ $('btnRegister').onclick = async ()=>{
   }catch(e){ toast(e.message, true); }
 };
 
-/* 账号设置 */
+/*/* Account settings */
 $('btnSettings').onclick = ()=>{
   const box = $('acctSettings'); box.hidden = !box.hidden;
   if (!box.hidden && meInfo){ $('as_nick').value = meInfo.nickname || ''; $('as_avatar').value = meInfo.avatar || ''; }
@@ -459,20 +459,20 @@ $('btnChangePw').onclick = async ()=>{
   }catch(e){ toast(e.message, true); }
 };
 
-/* ---------- 主界面 ---------- */
+/*/* ---------- Main UI ---------- */
 async function enter(){
   $('loginBox').hidden = true; $('appBox').hidden = false;
   $('guestBar').style.display = 'none';
-  /* ★必须用 style.display: .btn 的 CSS 是 display:inline-flex, 会覆盖 [hidden] 的 UA 样式 */
+  /* *must use style.display: .btn's CSS is display:inline-flex, which overrides [hidden]'s UA style */
   $('btnSettings').style.display = ''; $('btnLogout').style.display = '';
   $('btnSettings').hidden = false; $('btnLogout').hidden = false;
   $('tabKeys').hidden = false;
   $('topSub').textContent = '用户中心';
-  /* 先拉 bootstrap 更新代币符号/汇率, 再渲染额度 —— 否则额度用旧 CUR 显示¥(loadNotices 更新得太晚) */
+  /* Fetch bootstrap first to refresh the token symbol/rate, then render quota -- otherwise quota renders with the stale CUR as ¥ (loadNotices updates too late) */
   try { const b = await fetch(apiBase+'api/app/bootstrap').then(r=>r.json()); if (b&&b.serverInfo){CUR.sym=b.serverInfo.currencySymbol||CUR.sym;CUR.rate=Number(b.serverInfo.currencyRate)||CUR.rate;} applyTheme(b); } catch(_){}
   loadHome().then(loadNotices); loadModels(); loadKeys(); loadPlugins();
 }
-/* ---- 游客模式: 未登录也能看首页与模型广场 ---- */
+/*/* ---- guest mode: the home page and model square stay visible without login ---- */
 async function enterGuest(){
   $('loginBox').hidden = true; $('appBox').hidden = false;
   $('guestBar').style.display = 'flex';
@@ -486,11 +486,11 @@ function showTab(t){
   for (const pg of ['home','models','keys','plugins']) $('page-'+pg).hidden = (pg !== t);
 }
 async function loadPublicHome(){
-  /* 清除登录态残留: 用户信息/卡号/账号设置/退出按钮 */
+  /* Clear login-state leftovers: user info / card number / account settings / logout button */
   $('uName').textContent = '游客';
   $('uAvatar').textContent = '?';
   $('uKey').textContent = '';
-  meInfo = null;   /* 防御: 退出/游客态下不留登录信息 */
+  meInfo = null;   /* Defense: no login info left behind in logout/guest state */
   $('btnSettings').style.display = 'none'; $('btnSettings').hidden = true;
   $('acctSettings').hidden = true;
   $('btnLogout').style.display = 'none'; $('btnLogout').hidden = true;
@@ -544,7 +544,7 @@ async function loadHome(){
       +(c.models&&c.models.length?'<div class="kv"><span class="k">限定模型</span><span class="v">'+esc(c.models.join(', '))+'</span></div>':'');
     $('uKey').textContent = token.slice(0,10)+'…';
   } catch(e){ $('quotaArea').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
-  /* 加载请求趋势和活动流 */
+  /* load the request trend and activity stream */
   loadUStats();
   try {
     const m = await api('auth/me');
@@ -562,7 +562,7 @@ async function loadHome(){
   }
   return true;
 }
-/* ---------- 请求趋势 & 活动流 ---------- */
+/*/* ---------- Request trend & activity stream ---------- */
 let statsTimer = null;
 async function loadStats(){
   try{
@@ -574,7 +574,7 @@ async function loadStats(){
   if(statsTimer) clearTimeout(statsTimer);
   statsTimer = setTimeout(loadStats, 15000);
 }
-/* 登录用户 / 游客 共用同一实现（/status 是公开端点） */
+/*/* logged-in users and guests share the same implementation (/status is a public endpoint) */
 function loadUStats(){ return loadStats(); }
 function loadGuestStats(){ return loadStats(); }
 function renderSpark(hourly){
@@ -617,12 +617,12 @@ function renderFeed(recent){
   }).join('');
 }
 
-/* ---------- 公告（与 App 端同一套行约定） ----------
- * 服务端只有单个 announcement 字符串，一行一条：
- *   内容                  → 全站
- *   [时间] 内容           → 时间线
- *   @uid 内容             → 定向，只给该用户看
- *   [时间] @uid 内容      → 定向时间线
+/*/* ---------- Notices (the same line convention as the App side) ----------
+   * the server holds a single announcement string, one entry per line:
+ *   content              -> site-wide
+ *   [time] content       -> timeline
+ *   @uid content         -> targeted, visible to that user only
+ *   [time] @uid content  -> targeted timeline
  */
 function parseNotices(raw){
   const out = [];
@@ -659,13 +659,13 @@ async function loadNotices(){
 }
 
 let allModels = [];
-/* ---- 模型广场: 按 分组 / 提供商 / 用户分组 筛选 ----
- * 数据来自 model-square 插件 (GET /plugins/model-square/data/square) */
+/*/* ---- model square: filter by group / provider / user group ----
+   * data comes from the model-square plugin (GET /plugins/model-square/data/square) */
 let mData = null;
 const mFilter = { group:'', provider:'', ugroup:'' };
 async function loadModels(){
   if (!token){
-    /* 游客: 走免登录公开接口 /api/app/models */
+    /* guests: use the login-free public endpoint /api/app/models */
     try {
       const r = await fetch(apiBase+'api/app/models').then(x=>x.json());
       const ms = (r.models||[]).map(m=>Object.assign({}, m, { channel: m.channel || (m.channels||[])[0] || '', groups: m.groups||[] }));
@@ -681,7 +681,7 @@ async function loadModels(){
     renderChips();
     renderModels();
   } catch(e){
-    /* 插件没装/没启用时退回旧的 /v1/models 平铺列表 */
+    /* fall back to the old flat /v1/models list when the plugin is missing/disabled */
     try {
       const r2 = await api('v1/models');
       mData = { models: (r2.data||[]).map(m=>({name:m.id||m.name, group:'', channel:'', type:'', upstream:'', groups:[]})), groups:[], providers:[], ugroups:[], myGroup:'' };
@@ -744,7 +744,7 @@ function renderModels(){
 }
 $('modelQ').addEventListener('input', renderModels);
 
-/* ---- 模型详情 (底部弹层; 数据走 model-square /data/detail, 游客/零额度卡都可用) ---- */
+/*/* ---- model details (bottom sheet; data via model-square /data/detail, usable by guests and zero-quota cards) ---- */
 function closeDetailSheet(){ $('sheetScrim').classList.remove('show'); $('detailSheet').classList.remove('show'); }
 $('dsClose').onclick = closeDetailSheet;
 async function openDetail(name){
@@ -754,7 +754,7 @@ async function openDetail(name){
     const r = await api('plugins/model-square/data/detail?model='+encodeURIComponent(name));
     drawDetail(r.model);
   } catch(e){
-    /* 插件没装/旧版: 用列表页已有数据渲染简化详情 */
+    /* plugin absent/old: render a simplified detail from data already on the list page */
     const m = (mData && mData.models || []).find(x=>x.name===name);
     if (m) drawDetailLocal(m); else { $('dsBody').innerHTML = '<div class="empty">'+esc(e.message)+'</div>'; }
   }
@@ -845,12 +845,12 @@ $('keyList').addEventListener('click', async e=>{
     catch(e2){ toast(e2.message, true); }
   }
 });
-/* ===================== 卡密「访问权限」多选面板 =====================
- * 从屏幕下侧弹入; 三种模式(不限 / 按分组 / 按模型); 选项来自 /auth/access-options
- * (服务端已按父卡白名单裁剪 —— 子卡不可能比父卡宽)。 */
+/*/* ===================== key card "access permissions" multi-select panel =====================
+   * slides in from the bottom; three modes (unrestricted / by group / by model); options come from /auth/access-options
+ * (already trimmed server-side by the parent whitelist -- a child card can never be broader than its parent). */
 let permOpts = null;          // { groups, models:[{name,group}], instances }
 let permDraft = { mode:'all', groups:[], models:[] };
-let permTarget = null;        // null = 正在编辑「发子卡」表单; 否则=编辑已有子卡
+letlet permTarget = null;        // null = editing the "issue sub-card" form; otherwise editing an existing sub-card
 let permCreateCb = null;
 
 function permText(d){

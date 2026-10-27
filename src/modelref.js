@@ -1,46 +1,46 @@
 'use strict';
-/* modelref.js — 「实例:渠道:模型」模型引用（2026-09-18 用户提出）
+/* modelref.js -- "instance:channel:model" model references (user-requested 2026-09-18)
  *
- * 为什么需要: `/v1/models` 是**全站按模型名去重**的清单 —— 同名模型（例如 deepseek-v4-pro
- *   在 default/fake、DeepSeek/DeepSeek Official、SenseNova-Router/SenseNova Router 各有一份）
- *   只列一条，客户端**无法指定"要哪个来源"**，转发时只能由内核按 "default 优先 / 其余实例先到先得"
- *   去猜 → 用户报「以防同名模型覆盖」。
+ * Why it exists: `/v1/models` is a **site-wide, deduplicated-by-model-name** list -- same-named models (e.g. deepseek-v4-pro
+ *   present on default/fake, DeepSeek/DeepSeek Official, and SenseNova-Router/SenseNova Router alike)
+ *   appear as one entry, so the client **cannot specify "which source I want"**; when forwarding, the core can only guess by "default first / other instances first-come-first-served",
+ *   which users reported as "same-named models overwriting each other".
  *
- * 方案（用户 2026-09-18 拍板 = 方案 B）: **只有同名冲突的模型**才把 id 变成 `实例:渠道:模型名`，
- *   其余保持原名；**原名继续可用**（向后兼容，老客户端与已发卡密白名单都不受影响）。
+   * scheme (user decision 2026-09-18 = plan B): **only name-conflicted models** get the id `instance:channel:model`,
+ *   the rest keep their original names; **original names keep working** (backward compatible -- old clients and issued card-key whitelists are unaffected).
  *
- * 分隔符用 ':' —— RFC 3986 允许 path 段里出现 ':'，所以 Gemini 的
- *   `/v1beta/models/<ref>:generateContent` 也能用（内核那边把正则的 `[^:]+` 改成贪婪 `.+`，
- *   由**最后一个**冒号切出方法名）。模型名自己含 ':' 也安全: 解析时只取前两段当实例/渠道，
- *   剩下**全部**拼回模型名。
+ * The separator is ':' -- RFC 3986 allows ':' inside path segments, so Gemini's
+ *   `/v1beta/models/<ref>:generateContent` still works (the core changed its regex from `[^:]+` to greedy `.+`,
+ *   splitting the method name at the **last** colon). A model name containing ':' is also safe: parsing takes only the first two segments as instance/channel,
+ *   and re-joins **everything** remaining into the model name.
  */
 
 const SEP = ':';
 
-/** 实例/渠道名 → 对外 token：**空白统一换成连字符**（2026-09-18 用户要求）
+/** instance/channel name -> public token: **whitespace uniformly replaced with hyphens** (2026-09-18 user request)
  *  `DeepSeek Official` → `DeepSeek-Official`、`MotoMoto 2` → `MotoMoto-2`。
- *  为什么: 空格在 URL / 命令行 / 各种客户端里最容易被吃掉或编码错，连字符最省心。
- *  ★模型名**不做**替换（它要原样发给上游）。 */
+   *  why: spaces get eaten or mis-encoded most easily in URLs / command lines / various clients; hyphens are the least troublesome.
+   *  *the model name is **never** replaced (it must go upstream verbatim). */
 function tokenize(s) {
   return String(s == null ? '' : s).trim().replace(/\s+/g, '-');
 }
 
-/** 拼引用（对外 id）。任一段为空 → 返回 ''（调用方视为"没有引用"） */
+/** join a reference (public id). Any empty segment -> returns '' (callers read that as "no reference") */
 function makeRef(instance, channel, model) {
   const p = [tokenize(instance), tokenize(channel), String(model == null ? '' : model)];
   if (!p[0] || !p[1] || !p[2]) return '';
   return p.join(SEP);
 }
 
-/** 拼引用（保留原始空白，内部排查/日志用） */
+/** join a reference (original whitespace preserved; for internal troubleshooting/logging) */
 function makeRefRaw(instance, channel, model) {
   const p = [instance, channel, model].map(x => String(x == null ? '' : x));
   if (!p[0] || !p[1] || !p[2]) return '';
   return p.join(SEP);
 }
 
-/** 拆引用: 前两段 = 实例/渠道, 其余全部 = 模型名。
- *  返回 null 表示"这不是一个合法的三段引用"(调用方就当普通模型名处理)。 */
+/** split a reference: the first two segments = instance/channel; everything after = the model name.
+   *  returning null = "not a legal three-segment reference" (callers treat it as an ordinary model name). */
 function parseRef(s) {
   const t = String(s == null ? '' : s);
   const i = t.indexOf(SEP);
@@ -50,9 +50,9 @@ function parseRef(s) {
   return { instance: t.slice(0, i), channel: t.slice(i + 1, j), model: t.slice(j + 1) };
 }
 
-/** 实例/渠道名宽松比对：精确 → 忽略大小写 → **空白 / 下划线 / 连字符 视为等价**
- *  （客户端可能把 `DeepSeek Official` 写成 `DeepSeek-Official`、`DeepSeek_Official` 或 `deepseekofficial`）
- *  ★只有精确匹配失败才回退，避免"名字本来就带连字符"的正常渠道被误判。 */
+/** lenient instance/channel name comparison: exact -> case-insensitive -> **spaces / underscores / hyphens treated as equal**
+   *  (clients may write `DeepSeek Official` as `DeepSeek-Official`, `DeepSeek_Official`, or `deepseekofficial`)
+   *  *fall back only when exact matching fails, so normal channels whose names legitimately contain hyphens are not misjudged. */
 function channelMatch(wantCh, chName) {
   const a = String(wantCh == null ? '' : wantCh);
   const b = String(chName == null ? '' : chName);
@@ -63,25 +63,25 @@ function channelMatch(wantCh, chName) {
 }
 
 /**
- * 由「实例清单」算出 /v1/models 的 id 列表。
- * @param {Array} instances [{ name, channels: [{ name, models: [], modelMap: {} }] }]（调用方已按卡密实例白名单裁剪、已排序）
+   * computes /v1/models's id list from the "instance list".
+   * @param {Array} instances [{ name, channels: [{ name, models: [], modelMap: {} }] }] (already clipped by card instance whitelists and sorted by the caller)
  * @returns {{ entries: Array, conflicts: Array }}
- *   entries: [{ id, plain, instance, channel, model, composite }] —— id 为对外暴露的名字
- *   conflicts: 同名冲突的**原始模型名**列表（便于日志/排查）
- * ★token 冲突保护：如果"换连字符之后"会和**同实例里另一个渠道名**（或另一个实例名）撞名，
- *   那些名字就退回原始写法 —— 宁可留空格，也不能让两个不同的渠道映射到同一个 id。
+ *   entries: [{ id, plain, instance, channel, model, composite }] -- id is the externally exposed name
+ *   conflicts: list of **original model names** that collide (handy for logs/debugging)
+   * *token-conflict protection: if the hyphen-swapped form would collide with **another channel name in the same instance** (or another instance name),
+ *   those names revert to the original spelling -- better to keep a space than let two different channels map to one id.
  */
 function buildRefs(instances) {
   const list = Array.isArray(instances) ? instances : [];
-  /* 1) token 冲突检测（实例级 + 同实例内渠道级） */
-  const instTok = new Map();                        // token → 原始名（多个原始名撞同一 token 时标记为 null）
+  /* 1) token conflict detection (instance-level + channel-level within an instance) */
+  const instTok = new Map();                        // token -> original name (marked null when several originals collide on one token)
   for (const inst of list) {
     if (!inst || !inst.name) continue;
     const t = tokenize(inst.name);
     if (instTok.has(t) && instTok.get(t) !== inst.name) instTok.set(t, null);
     else if (!instTok.has(t)) instTok.set(t, inst.name);
   }
-  const chTok = new Map();                          // "实例token\u0000渠道token" → 原始名 或 null
+  const chTok = new Map();                          // "instanceToken\u0000channelToken" -> original name or null
   for (const inst of list) {
     if (!inst || !inst.name) continue;
     for (const ch of (Array.isArray(inst.channels) ? inst.channels : [])) {
@@ -97,8 +97,8 @@ function buildRefs(instances) {
     return (chTok.get(k) === cName ? tokenize(cName) : String(cName));
   };
 
-  /* 2) 收集 (实例, 渠道, 模型) 三元组 */
-  const occ = [];                       // 按遍历顺序
+  /* 2) collect the (instance, channel, model) triples */
+  const occ = [];                       // in traversal order
   const seen = new Set();
   for (const inst of list) {
     if (!inst || !inst.name) continue;
@@ -134,8 +134,8 @@ function buildRefs(instances) {
   return { entries, conflicts };
 }
 
-/** 按卡密白名单过滤 entries：白名单里写**原名**或**复合名**都能命中（向后兼容）；
- *  分组白名单一律用**原名**去查分组。 */
+/** filter entries by the card whitelist: whitelists match **original** or **composite** names (backward compatible);
+   *  group whitelists always look up groups by the **original name**. */
 function filterEntries(entries, userKey, groupIndex) {
   const list = Array.isArray(entries) ? entries : [];
   if (!userKey) return list;

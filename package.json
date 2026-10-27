@@ -1,7 +1,7 @@
 {
   "name": "ai-gateway-core",
   "version": "0.7.1",
-  "description": "精简内核 + 插件生态的 AI 网关 (OpenAI/Claude/Gemini/Responses 互转, 多实例, UID 存储)",
+  "description": "Lean kernel + plugin ecosystem AI gateway (OpenAI/Claude/Gemini/Responses conversion, multi-instance, UID storage)",
   "license": "AGPL-3.0-only",
   "main": "src/index.js",
   "bin": {

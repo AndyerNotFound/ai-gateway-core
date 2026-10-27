@@ -63,7 +63,7 @@ tr:last-child td{border-bottom:none}
 .tblwrap{overflow-x:auto}
 .pbar{height:5px;border-radius:3px;background:var(--md-sys-color-surface-variant);overflow:hidden;min-width:60px}
 .pbar i{display:block;height:100%;background:var(--md-sys-color-primary);border-radius:3px}
-/* 窄屏: 表格转卡片式(每卡一行数据, 字段竖排带标签) */
+/*/* narrow screens: tables become cards (one row of data per card, fields stacked with labels) */
 @media(max-width:680px){
   .tblwrap table,.tblwrap tbody,.tblwrap tr,.tblwrap td{display:block;width:100%}
   .tblwrap thead{display:none}
@@ -140,8 +140,8 @@ async function api(p, opts={}){
   return j;
 }
 function isExpired(k){ if(!k.expiresAt) return false; const t=Date.parse(k.expiresAt); return !isNaN(t) && t < Date.now(); }
-/* 卡密来源: admin=管理员分发 / auto=建号或注册自动发 / user=用户自助子卡
- * 老数据没有 by: 「是主卡且绑定了用户」推断为自动发的 */
+/*/* card origins: admin = issued by an admin / auto = auto-issued on account creation or registration / user = a user's self-made sub-card
+   * old data has no by: inferred as auto-issued when "it is a primary card bound to a user" */
 function keySource(k){
   if (k.by) return k.by;
   return (k.isMain && k.uid) ? 'auto' : 'admin';
@@ -191,11 +191,11 @@ async function load(){
   } catch(e){ $('tbody').innerHTML='<tr><td colspan="7" class="empty">'+esc(e.message)+'</td></tr>'; }
 }
 function cp(k){ (navigator.clipboard?navigator.clipboard.writeText(k):Promise.reject()).then(()=>toast('已复制')).catch(()=>{prompt('手动复制:',k)}); }
-/* ===================== 访问权限（分组 / 模型 / 实例 多选） =====================
- * 分组由「模型分组 / 快速分组」定义；实例决定能访问哪些 /<实例名>/ 路径。
- * 选项来自 GET /admin/options（服务端按当前实例与可用范围给出）。 */
+/*/* ===================== Access permissions (group / model / instance multi-select) =====================
+   * groups are defined by "model groups / quick groups"; instances decide which /<instance>/ paths are reachable.
+   * options come from GET /admin/options (the server provides them for the current instance and reachable scope). */
 let pOpts = null;
-let pTarget = null;                     // null = 正在编辑「发卡」表单
+letlet pTarget = null;                     // null = editing the "issue card" form
 let pDraft = { mode:'all', groups:[], models:[], branches:[] };
 function permText(k){
   const g = k.groups||[], m = k.models||[], b = k.branches||[];
@@ -214,7 +214,7 @@ async function openPerm(key){
     try { pOpts = await api('/admin/options'); } catch(e){ toast('读取可勾选清单失败: '+e.message, true); return; }
   }
   if (key){
-    /* 拉当前卡的权限作为初始值 */
+    /* fetch the current card's permissions as the initial value */
     try {
       const r = await api('/admin/keys');
       const k = (r.keys||[]).find(x=>x.key===key);

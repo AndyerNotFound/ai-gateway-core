@@ -120,7 +120,7 @@ async function api(p,opts={}){
   const r=await fetch(BASE+p,opts); const j=await r.json().catch(()=>null);
   if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j;
 }
-/* auth-cardkey 的卡密操作 (同网关, 跨插件) */
+/*/* auth-cardkey's card operations (same gateway, cross-plugin) */
 const CK = '/plugins/auth-cardkey';
 async function ckApi(p,opts={}){
   if(opts.body&&typeof opts.body==='object'){opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});opts.body=JSON.stringify(opts.body);}
@@ -128,7 +128,7 @@ async function ckApi(p,opts={}){
   if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j;
 }
 
-/* ---- 用户分组 ---- */
+/*/* ---- User groups ---- */
 let GRPS = { groups: [], defaultGroup: '', counts: {} };
 let fltGroup = '';
 async function loadGroups(){
@@ -198,7 +198,7 @@ async function toggleKeys(row, u){
 $('list').addEventListener('click', async e=>{
   const btn=e.target.closest('button'); if(!btn) return;
   const row=e.target.closest('.urow');
-  /* 卡操作 */
+  /* card operations */
   if(btn.dataset.quota){ const v=prompt('新的额度 (0=零额度, -1=不限):'); if(v===null) return;
     try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.quota,quotaTokens:Number(v)||0}}); toast('已改额度'); load(); }catch(e2){ toast(e2.message,true);} return; }
   if(btn.dataset.ktoggle){ try{ await ckApi('/admin/keys-update',{method:'POST',body:{key:btn.dataset.ktoggle,enable:btn.dataset.en!=='true'}}); toast('已切换'); load(); }catch(e2){ toast(e2.message,true);} return; }
@@ -227,10 +227,10 @@ $('list').addEventListener('click', async e=>{
     const msg=prompt('推送给 '+uid+' 的通知内容（只对该用户显示）:\n\n⚠️ 定向通知写在公告串里，能读 bootstrap 的人可见，别发敏感内容。');
     if(msg===null||!msg.trim()) return;
     try{
-      /* 同源 cookie 里就带着 adminKey（web 面板进入时设置的），不需要额外头 */
+      /* the same-origin cookie already carries the adminKey (set when entering the web panel); no extra header needed */
       const si=await fetch('/admin/api/server-info').then(r=>r.json());
       const info=(si&&si.serverInfo)||{};
-      /* 行约定: 一行一条; "[时间] 内容"=时间线; "@uid 内容"=定向 —— 见 App 端 Notices.js */
+      /* line convention: one per line; "[time] content" = timeline; "@uid content" = targeted -- see the App's Notices.js */
       const stamp=new Date().toISOString().slice(0,16).replace('T',' ');
       const line='['+stamp+'] @'+uid+' '+msg.trim().split('\n').join(' ');
       const next=(info.announcement?info.announcement.trim()+String.fromCharCode(10):'')+line;

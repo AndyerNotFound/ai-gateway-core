@@ -1,13 +1,13 @@
 'use strict';
-/* legacy-import 插件: 把旧版 ai-gateway 的实例配置 (config.<名>.json)
- * 转换并导入为 ai-gateway-core 实例。
+/** the legacy-import plugin: converts old ai-gateway instance configs (config.<name>.json)
+   * converts and imports as an ai-gateway-core instance.
  *
- * 转换后返回一份可直接 POST /admin/api/instance 创建的配置对象;
- * 创建动作由管理页 (pages/admin.html) 调用内核的 /admin/api/instance 完成
- * (插件 ctx 不暴露 createInstance, 复用现有管理 API 更稳)。
+   * returns a config object that can be POSTed straight to /admin/api/instance to create the instance;
+   * the create action goes through the kernel's /admin/api/instance from the admin page (pages/admin.html)
+   * (the plugin ctx does not expose createInstance; reusing the existing admin API is safer).
  *
- * 旧配置若是 AGWENC1 加密的, 用 core 的 src/crypt.js 解密:
- *   密码优先用请求体里的 pass, 留空则读 ~/.ai-gateway/.agwkey (loadPass)。
+   * when the old config is AGWENC1-encrypted, decrypt it with core's src/crypt.js:
+ *   The passphrase prefers the request body's pass; when empty it falls back to ~/.ai-gateway/.agwkey (loadPass).
  */
 const path = require('path');
 const os = require('os');
@@ -15,7 +15,7 @@ const net = require('net');
 
 const CRYPT = path.join(__dirname, '..', '..', 'src', 'crypt.js');
 
-/* 旧版 ai-gateway 渠道字段 → core 保留字段白名单 */
+/** old ai-gateway channel fields -> core's keep-field whitelist */
 const CH_FIELDS = ['name', 'type', 'baseUrl', 'apiKey', 'default', 'proxy', 'insecure',
   'models', 'modelMap', 'delayMs', 'addUsage', 'anthropicVersion', 'useResponses'];
 
@@ -23,7 +23,7 @@ function tryRequireCrypt() {
   try { return require(CRYPT); } catch (_) { return null; }
 }
 
-/* 端口占用检测 (本机): 能连上 = 已被监听 */
+/** port-occupation detection (localhost): connectable = already bound */
 function portInUse(port) {
   return new Promise(resolve => {
     if (!port || port <= 0) return resolve(false);
@@ -36,13 +36,13 @@ function portInUse(port) {
   });
 }
 
-/* 解密 + 解析旧配置文本 */
+/** decrypt + parse the old config text */
 function parseOldConfig(text, pass) {
   const t = String(text || '').trim();
   if (!t) throw new Error('配置内容为空');
-  // 明文 JSON?
+  // plaintext JSON?
   if (t.startsWith('{') || t.startsWith('[')) {
-    try { return JSON.parse(t); } catch (_) { /* 可能是单行加密, 继续 */ }
+    try { return JSON.parse(t); } catch (_) { /* may be single-line encrypted; continue */ }
   }
   const crypt = tryRequireCrypt();
   if (!crypt) throw new Error('配置是加密的(AGWENC1) 但内核 crypt 模块不可用');
@@ -57,7 +57,7 @@ function parseOldConfig(text, pass) {
   catch (_) { throw new Error('解密成功但内容不是合法 JSON (密码可能不对)'); }
 }
 
-/* 旧配置 → core 实例配置 */
+/** old config -> core instance config */
 function convert(old, opts, usedPorts) {
   opts = opts || {};
   const name = String(opts.name || old._name || old.name || 'imported').trim();
@@ -76,7 +76,7 @@ function convert(old, opts, usedPorts) {
   const channels = (old.channels || []).map(ch => {
     const o = {};
     for (const k of CH_FIELDS) if (ch[k] !== undefined) o[k] = ch[k];
-    // 渠道 proxy 引用必须在 proxies 里存在, 否则置 null 避免悬挂引用
+    // a channel's proxy reference must exist in proxies, otherwise null it out to avoid dangling references
     if (o.proxy && !(old.proxies && old.proxies[o.proxy])) o.proxy = null;
     return o;
   });
@@ -98,7 +98,7 @@ function convert(old, opts, usedPorts) {
     port: port || '前缀路由(/' + name + '/)',
     adminKey: !!cfg.adminKey,
     gatewayKey: !!cfg.gatewayKey,
-    skipped: [], // 旧版有但 core 不用的字段
+    skipped: [], // fields the old version had but core does not use
   };
   if (old.apiKeys && old.apiKeys.length) summary.skipped.push('apiKeys(' + old.apiKeys.length + ', 旧版多用户密钥 → 用卡密系统)');
   if (old.users && old.users.length) summary.skipped.push('users(' + old.users.length + ', 旧版用户 → 用用户体系插件)');
@@ -131,7 +131,7 @@ module.exports = {
       let r;
       try { r = convert(old, { name: j.name, keepPort: j.keepPort }, usedPorts()); }
       catch (e) { return send(res, 400, { ok: false, error: e.message }); }
-      // 异步检测保留端口的占用 (旧版 ai-gateway 可能仍在跑)
+      // asynchronously detect occupation of the reserved port (the old ai-gateway may still be running)
       const port = r.config.listen.port;
       if (port > 0) {
         portInUse(port).then(busy => {

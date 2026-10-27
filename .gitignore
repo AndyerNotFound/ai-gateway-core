@@ -1,4 +1,4 @@
-# 运行时数据(含加密密钥/用户数据,禁止入库)
+# Runtime data (encrypted keys / user data; never commit)
 data/
 plugins-config/
 plugins-data/

@@ -1,28 +1,28 @@
 'use strict';
-/* billing 插件 — 动态计费 (2026-09-17)
+/* billing plugin -- dynamic billing (2026-09-17)
  *
- * 定位：**只算账，不扣账**。额度仍在 auth-cardkey 手里（它是唯一的扣款出口）。
- *  本插件通过内核的 `billing` hook 算出「这次该扣多少加权额度」（charged），
- *  内核把它交给 auth-cardkey 的 onUsage；没装本插件时 charged=null → 内核按老口径
- *  (input+output) 扣 —— 所以装上/卸下本插件都不会让已发卡密的扣费算法突变。
+   * positioning: **compute the bill only, never deduct**. Quota stays with auth-cardkey (the sole deduction outlet).
+   *  this plugin computes "how much weighted quota to deduct" (charged) via the kernel's `billing` hook,
+   *  the kernel hands it to auth-cardkey's onUsage; without this plugin charged=null -> the kernel bills via the legacy convention
+ *  (input+output) -- so installing or removing this plugin never suddenly changes the billing math for issued card keys.
  *
- * 数据来源（★只有一份真相，不另存副本）：
- *   · 模型价格 / 模型级规则 → model-square 的 modelMeta（键 "实例|渠道|模型"）
- *   · 用户分组 → auth-user 的 users[].group
- *   · 全局规则 / 用户组折扣 / 上游成本表 → 本插件自己的数据文件
+   * data sources (*a single source of truth; no extra copies):
+ *   - Model prices / model-level rules -> model-square's modelMeta (key "instance|channel|model")
+ *   - User groups -> auth-user's users[].group
+ *   - Global rules / user-group discounts / upstream cost table -> this plugin's own data files
  *
- * 端点：
- *   GET  /admin/status                总览（规则数/最近结算/利润）
- *   GET  /admin/rules                 全局规则读写
- *   POST /admin/rules                 规则增删改（action: add/update/delete/move/toggle）
- *   GET  /admin/cost                  上游成本表
- *   POST /admin/cost                  成本表读写
- *   GET  /admin/profit?days=7         利润报表（按模型/渠道聚合）
- *   POST /admin/simulate              试算（不扣费，管理端预览"这次会扣多少"）
- *   GET  /admin/model-price?model=&channel=  查某模型当前生效的价格与命中规则
+   * endpoints:
+ *   GET  /admin/status                overview (rule count / latest settlements / profit)
+ *   GET  /admin/rules                 global rules read/write
+ *   POST /admin/rules                 rule add/update/delete (action: add/update/delete/move/toggle)
+ *   GET  /admin/cost                  upstream cost table
+ *   POST /admin/cost                  cost table read/write
+ *   GET  /admin/profit?days=7         profit report (aggregated by model/channel)
+ *   POST /admin/simulate              dry run (no charging; lets admins preview "how much this would cost")
+ *   GET  /admin/model-price?model=&channel=  a model's currently effective price and the rule that matched
  *
- * 为什么规则要"标签式"：管理员配的是「什么时候触发 → 触发什么」，不是写代码。
- * 想让规则更灵活时可用 when.k='expr' 写受限表达式（自研解析器，**绝不用 eval**）。
+   * why rules are "tag-style": admins configure "when triggered -> what happens", not code.
+   * for more flexible rules, when.k='expr' accepts restricted expressions (custom parser; **never eval**).
  */
 const path = require('path');
 const fs = require('fs');
@@ -33,8 +33,8 @@ function jsonRes(res, code, o) {
   res.end(JSON.stringify(o));
 }
 
-/* ==================== 内置规则模板（"触发 → 效果"标签的取值表） ====================
- * 前端(网页/App)用它渲染下拉，不必硬编码第二份。 */
+/** ==================== built-in rule templates (value tables for the "trigger -> effect" tags) ====================
+   * frontends (web/App) render dropdowns from it instead of hardcoding a second copy. */
 const TRIGGERS = [
   { k: 'model', label: '按模型名', ops: ['eq', 'ne', 'in', 'nin'], vType: 'text', hint: '如 deepseek-chat，多个用逗号' },
   { k: 'group', label: '按模型分组', ops: ['eq', 'ne', 'in', 'nin'], vType: 'text', hint: '模型广场里的分组名' },
@@ -59,36 +59,36 @@ const EFFECTS = [
 module.exports = {
   activate(ctx) {
     const cfg = ctx.config;
-    /* 数据（dataScope=global → plugins-data/_global/billing.json）：
-     *   rules        全局规则（对所有模型生效，模型级规则在其后叠加）
-     *   cost         上游成本表：{ "模型名": { in, out, cacheRead, cacheWrite } }（元/1M）
-     *   ugroupDiscount { "分组名": 0.8 }
-     *   weightMode   true=价格按"权重"；false=按"元/1M tokens"并用 moneyPerToken 换算
+    /* data (dataScope=global -> plugins-data/_global/billing.json):
+     *   rules        global rules (apply to all models; model-level rules layer on top)
+     *   cost         upstream cost table: { "model": { in, out, cacheRead, cacheWrite } } (per 1M)
+     *   ugroupDiscount { "group name": 0.8 }
+     *   weightMode   true = prices are "weights"; false = "per 1M tokens" converted via moneyPerToken
      */
     const D = () => { const d = ctx.data.all() || {}; return d; };
     const rulesOf = () => { const r = D().rules; return Array.isArray(r) ? r : []; };
     const costOf = () => { const c = D().cost; return (c && typeof c === 'object') ? c : {}; };
-    /* ★管理端写入（规则/设置/成本表）低频且重要 —— 写完立即落盘，不等 30s 定时器：
-     * 2026-09-17 之前只标 dirty，落盘要等周期 flush 或优雅退出，中途 kill -9 会丢刚存的规则。 */
+    /* ★Admin-side writes (rules/settings/cost table) are infrequent but important -- flush to disk immediately, do not wait for the 30s timer:
+     * before 2026-09-17 it only marked dirty; persistence waited for the periodic flush or a graceful exit, and kill -9 mid-way lost fresh rules. */
     const setData = (k, v) => { ctx.data.set(k, v); if (ctx.data.flush) ctx.data.flush(); };
     const ledgerDir = path.join(ctx.dataDir, 'ledger');
     try { fs.mkdirSync(ledgerDir, { recursive: true }); } catch (_) {}
 
     const money = () => Number(D().moneyPerToken) || 0;
-    const weightMode = () => D().weightMode !== false;   // 默认 true（权重模式，老卡零迁移）
-    /* ★计费基数开关 (2026-09-19)：true = 权重模式按 1Mi tokens(2²⁰=1048576) 扣费，
-     * false(默认) = 按 1M tokens(10⁶)。只影响权重模式的扣费分母；
-     * 金额模式保持「元/1M tokens」行业口径不变（见 engine.compute）。 */
+    const weightMode = () => D().weightMode !== false;   // default true (weight mode; zero migration for old cards)
+    /* ★Billing-base switch (2026-09-19): true = weight mode charges per 1Mi tokens (2^20 = 1048576),
+     * false (default) = per 1M tokens (10^6). Affects only the weight-mode billing denominator;
+     * money mode keeps the industry "per 1M tokens" convention unchanged (see engine.compute). */
     const miBase = () => D().miBase === true;
     const ugroupDiscount = () => D().ugroupDiscount || {};
 
-    /* ==================== 数据源：模型价格/规则 ====================
-     * ★2026-10-07 深度改造: 这里原来写死 ctx.getPluginConfig('model-square', 0) ——
-     *   把"谁是价格提供方"当成了内核事实。现在改成**能力查询**:
-     *   任何插件 provideCapability('model-pricing', {...}) 都能成为价格源, 本插件不需要知道它叫什么。
-     *   能力缺席(没装提供方) → msConfig() 返回 null → 走原降级路径(按老口径扣费), 不抛错。 */
+    /* ==================== Data sources: model prices/rules ====================
+     * ★2026-10-07 deep refactor: this used to hard-code ctx.getPluginConfig('model-square', 0) --
+     *   treating "who provides prices" as a kernel fact. Now it is a **capability query**:
+     *   any plugin calling provideCapability('model-pricing', {...}) becomes a price source; this plugin never needs its name.
+     *   capability absent (no provider) -> msConfig() returns null -> the original degradation path (legacy-convention billing), no throw. */
     let _msCache = null, _msAt = 0, _msRev = -1;
-    /** 能力对象(每次取, 因为插件可能热重载/后注册); 没提供方 → null */
+    /** the capability object (fetched each time; plugins may hot-reload/register later); no provider -> null */
     const msCap = () => {
       try { return (typeof ctx.requireCapability === 'function') ? ctx.requireCapability('model-pricing') : null; }
       catch (_) { return null; }
@@ -97,7 +97,7 @@ module.exports = {
       const now = Date.now();
       const cap = msCap();
       if (!cap) { _msCache = null; return null; }
-      /* 能力自带版本号 → 配置变了立刻失效(比 15s TTL 更准); 拿不到版本号就退回 TTL */
+      /* capabilities carry a version -> instant invalidation on change (more precise than the 15s TTL); fall back to TTL when absent */
       let rev = -1;
       try { rev = (typeof cap.rev === 'function') ? cap.rev() : -1; } catch (_) { rev = -1; }
       if (_msCache && now - _msAt < 15000 && (rev === -1 || rev === _msRev)) return _msCache;
@@ -110,16 +110,16 @@ module.exports = {
       return _msCache;
     };
 
-    /** 取某 实例/渠道/模型 的 meta（找不到别名也认：客户端可能用 alias 当模型名） */
+    /** fetch meta for an instance/channel/model (aliases count too: clients may pass an alias as the model name) */
     const metaFor = (inst, ch, model) => {
       const ms = msConfig();
       if (!ms || !ms.modelMeta) return null;
       const mm = ms.modelMeta;
-      /* 1) 精确命中：实例|渠道|模型 */
+      /* 1) exact hit: instance|channel|model */
       const direct = mm[[String(inst || ''), String(ch), String(model)].join('|')];
       if (direct) return direct;
       const i = String(inst || ''), c = String(ch), m = String(model);
-      /* 2) 别名回查：同实例同渠道里 alias === 模型名 */
+      /* 2) alias lookup: alias === model name within the same instance+channel */
       if (c) {
         const pre = i + '|' + c + '|';
         for (const k of Object.keys(mm)) {
@@ -128,24 +128,24 @@ module.exports = {
           if (v && v.alias && String(v.alias) === m) return v;
         }
       }
-      /* 3) ★渠道为空（管理端试算/查价预览）或精确渠道没命中时：
-       *    按「模型名/别名」全局搜索第一条匹配 —— 售价通常按模型统一定，
-       *    管理员预览"这个模型会扣多少"不该被渠道名卡住。
-       *    优先选有 price 的；都没有就返回第一个匹配（拿 group/rules 也用得上）。 */
+      /* 3) *channel empty (admin trial/price preview) or the exact channel missed:
+       *    search globally by model name/alias for the first match -- pricing is usually defined per model,
+       *    an admin previewing "what would this model deduct" should not be stuck on channel names.
+       *    prefer entries with a price; if none, return the first match (group/rules lookups use it too). */
       let fallback = null;
       for (const k of Object.keys(mm)) {
         const parts = k.split('|');
         const km = parts.slice(2).join('|');           // 模型名本身可能含 |
         const v = mm[k];
         if (km === m || (v && v.alias && String(v.alias) === m)) {
-          if (v && v.price) return v;                 // 有价格的最优先
+          if (v && v.price) return v;                 // priced entries win first
           if (!fallback) fallback = v;
         }
       }
       return fallback;
     };
 
-    /** 用户分组 —— ★2026-10-07 同样改为能力查询: 任何插件提供 'user-groups' 即可 */
+    /** User groups -- ★2026-10-07 also switched to capability lookup: any plugin providing 'user-groups' works */
     let _auCache = null, _auAt = 0;
     const auConfig = () => {
       const now = Date.now();
@@ -171,14 +171,14 @@ module.exports = {
       return (u && (u.group || u.groups && u.groups[0])) || au.defaultGroup || '';
     };
 
-    /* ==================== 结算 ==================== */
-    /* 内核在 logDone 时调它；返回 { charged, detail } 或 null（null = 按老口径） */
-    /* ★未定价的模型禁止调用（2026-09-18 用户要求「没定价不给调用」）。
-     *  用内核已有的 onChatAuth 预检钩子（在「选渠道 / 转发上游」之前触发，返回 {status,message} 即拒绝），
-     *  所以**不需要改内核、也不用重启网关**（插件热重载即可生效）。
-     *  判定：按模型名全局查价（metaFor 会优先返回"有 price"的那条）；查不到 price 且没有 perCall → 403。
-     *  ⚠price 字段全 0 也算「已定价」= 明确免费，照常放行。
-     *  开关：插件设置 blockUnpriced=false 可关（默认开）。 */
+    /* ==================== Settlement ==================== */
+    /* the kernel calls it in logDone; returns { charged, detail } or null (null = legacy convention) */
+    /* *unpriced models are blocked from calls (2026-09-18 user request "unpriced means no calls").
+     *  the kernel's existing onChatAuth precheck hook (fires before "pick channel / forward upstream"; returning {status,message} rejects),
+     *  so **no kernel changes and no gateway restart** are needed (a plugin hot-reload applies it).
+     *  the test: look the price up globally by model name (metaFor prefers an entry "with a price"); no price and no perCall -> 403.
+     *  note: an all-zero price still counts as "priced" = explicitly free; pass it through as usual.
+     *  switch: a plugin setting blockUnpriced=false turns it off (on by default). */
     ctx.hook('onChatAuth', ({ model, cfg }) => {
       if (D().blockUnpriced === false) return null;
       if (!model) return null;
@@ -188,13 +188,13 @@ module.exports = {
       if (priced) return null;
       return { status: 403, message: '模型「' + model + '」未定价，已禁止调用（请先在模型广场给该模型配置价格）' };
     });
-    /* ★预授权估算 (2026-09-18)：内核在「冻结额度」前问一句「这次大约要多少额度」。
-     *  返回**额度单位**的预估 —— 与结算刻意用同一把尺子（同一个 engine.compute、
-     *  同一份价格/规则/折扣/按次配置），否则就又变成「同一份数据两套单位」。
-     *  用法：认证插件（auth-cardkey）估好 token 数后交给内核的 estimateCharge 回调，
-     *  这里只负责「token → 额度」的换算；**不写账本**（估算不是真实用量）。
-     *  返回 null = 这次估不出来（模型没配价/没规则命中）→ 调用方回退老口径（token 数），
-     *  与「没配过价的模型按 1 token = 1 额度结算」严格对齐。 */
+    /* *pre-auth estimate (2026-09-18): the kernel asks "roughly how much quota will this take" before freezing.
+     *  Returns the estimate in **quota units** -- deliberately the same yardstick as settlement (the same engine.compute,
+     *  the same price/rule/discount/per-call config), otherwise the same data ends up with two unit systems again.
+     *  usage: the auth plugin (auth-cardkey) estimates tokens and hands them to the kernel's estimateCharge callback,
+     *  this only converts "token -> quota"; it **never writes the ledger** (an estimate is not real usage).
+     *  returning null = no estimate this time (model unpriced / no rule hit) -> the caller falls back to the legacy convention (token count),
+     *  strictly aligned with "unpriced models settle at 1 token = 1 quota". */
     ctx.hook('onQuotaEstimate', ({ model, inst, ch, input, output, uid, cfg }) => {
       try {
         if (!model) return null;
@@ -245,9 +245,9 @@ module.exports = {
             chargePrecision: D().chargePrecision,
           },
         });
-        if (!res) return null;   // 没配价、没规则 → 交回内核（老口径，零迁移）
+        if (!res) return null;   // no price, no rule hit -> hand back to the kernel (legacy convention, zero migration)
 
-        /* 成本核算：写入明细（异步、失败不影响转发） */
+        /* Cost accounting: append to the detail ledger (async; failures never affect forwarding) */
         recordLedger(usage, res, { inst, ch, uk, ug });
         return { charged: res.charged, detail: res.detail };
       } catch (e) {
@@ -256,9 +256,9 @@ module.exports = {
       }
     });
 
-    /* ---------- 明细账（JSONL，按天分文件）----------
-     * ★保留期：**默认永久保留**（`ledgerKeepDays` = 0）；设 >0 才按天滚动删除。
-     *   2026-09-18 用户定：「账单不能丢」→ 默认 0（实测每天仅 5~10KB，永久也就几 MB）。 */
+    /* ---------- Detail ledger (JSONL, one file per day) ----------
+     * *retention: **kept forever by default** (`ledgerKeepDays` = 0); a >0 value enables daily rolling deletion.
+     *   2026-09-18 user decision: "bills must never be lost" -> default 0 (measured 5-10KB/day; a few MB even forever). */
     const ledgerFile = () => path.join(ledgerDir, new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.jsonl');
     function recordLedger(usage, res, info) {
       try {
@@ -283,11 +283,11 @@ module.exports = {
           keyName: info.uk ? (info.uk.name || String(info.uk.key || '').slice(0, 12)) : '',
         };
         fs.appendFile(ledgerFile(), JSON.stringify(row) + '\n', () => {});
-      } catch (_) { /* 账本写失败不影响转发 */ }
+      } catch (_) { /* ledger write failures never affect forwarding */ }
     }
-    /* 明细账清理：keepDays=0（默认）→ **不删**（永久保留）；>0 才滚动删除。
-     * ★必须走 ctx.cron 定时执行：以前只在 activate 里清一次，那样网关长期不重启就永不清理
-     *  （与 usage-history 2026-09-18 修的"只启动时压实"是同族缺陷）。 */
+    /* detail ledger cleanup: keepDays=0 (default) -> **never delete** (kept forever); >0 enables rolling deletion.
+     * *must run via ctx.cron on a schedule: cleaning only in activate meant it never ran again on a long-lived gateway
+     *  (same defect family as the "compact only at startup" issue fixed in usage-history on 2026-09-18). */
     ctx.cron(6 * 3600 * 1000, () => {
       try {
         const keep = Number(D().ledgerKeepDays) || 0;
@@ -318,7 +318,7 @@ module.exports = {
       return out;
     };
 
-    /* ==================== 管理端点 ==================== */
+    /* ==================== Admin endpoints ==================== */
     const adminOnly = (p, res) => {
       const a = p.authAdmin();
       if (!a.ok) { jsonRes(res, a.status || 401, { error: a.error || 'unauthorized' }); return false; }
@@ -344,12 +344,12 @@ module.exports = {
         ugroupDiscount: Object.keys(ugroupDiscount()).length, costModels: Object.keys(costOf()).length,
         today: { requests: sum.n, chargedTokens: Math.round(sum.charged), costMoney: Number(sum.cost.toFixed(6)) },
         ledger: D().ledger !== false,
-        ledgerKeepDays: Number(D().ledgerKeepDays) || 0,   /* 0 = 永久保留 */
+        ledgerKeepDays: Number(D().ledgerKeepDays) || 0,   /* 0 = keep forever */
         triggers: TRIGGERS, effects: EFFECTS,
       });
     });
 
-    /* ---- 全局规则 ---- */
+    /* ---- Global rules ---- */
     ctx.registerRoute('GET', '/admin/rules', (req, res, p) => {
       if (!adminOnly(p, res)) return;
       jsonRes(res, 200, { ok: true, rules: rulesOf(), triggers: TRIGGERS, effects: EFFECTS, weightMode: weightMode(), moneyPerToken: money(), miBase: miBase(), ugroupDiscount: ugroupDiscount() });
@@ -379,7 +379,7 @@ module.exports = {
             v: Number((e && e.v)) || 0,
           })) : [],
         };
-        /* ★校验：表达式类条件先试算一次，写错了当场拒绝（不能让坏规则进库，否则每请求都算错） */
+        /* *validation: expression conditions are trial-evaluated once; a broken one is rejected on the spot (a bad rule in the store would mis-evaluate every request) */
         for (const c of o.when) {
           if (c.k === 'expr') {
             try { engine.evalExpr(c.v, { ctxLen: 1, hour: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2, minute: 0, day: 1, weekday: 1, perCall: 0, priceIn: 1, priceOut: 1 }); }
@@ -415,7 +415,7 @@ module.exports = {
       } else if (act === 'clear') {
         list.length = 0;
       } else if (act === 'settings') {
-        /* 全局设置（权重模式/汇率/折扣表/记账开关） */
+        /* Global settings (weight mode / FX rates / discount tables / ledger switch) */
         if (j.weightMode !== undefined) setData('weightMode', !!j.weightMode);
         if (j.moneyPerToken !== undefined) setData('moneyPerToken', Math.max(0, Number(j.moneyPerToken) || 0));
         if (j.ugroupDiscount && typeof j.ugroupDiscount === 'object') {
@@ -428,7 +428,7 @@ module.exports = {
         }
         if (j.ledger !== undefined) setData('ledger', !!j.ledger);
         if (j.miBase !== undefined) setData('miBase', !!j.miBase);   /* ★计费基数：true=1Mi(2²⁰) / false=1M(10⁶) */
-        /* 明细账保留天数：0 = 永久（默认）；上限 10 年防手滑 */
+        /* detail ledger retention days: 0 = forever (default); capped at 10 years against slips */
         if (j.ledgerKeepDays !== undefined) setData('ledgerKeepDays', Math.max(0, Math.min(3650, Number(j.ledgerKeepDays) || 0)));
         if (j.chargePrecision !== undefined) setData('chargePrecision', Math.max(0, Math.min(6, Number(j.chargePrecision) || 0)));
         if (j.blockUnpriced !== undefined) setData('blockUnpriced', !!j.blockUnpriced);   /* ★未定价模型是否禁调用（默认开） */
@@ -437,12 +437,12 @@ module.exports = {
         return jsonRes(res, 400, { error: '未知操作: ' + act });
       }
       setData('rules', list);
-      /* 回读校验（写完必须能读回，否则静默失败会很难查） */
+      /* read-back verification (a write must be readable, or silent failures become untraceable) */
       const back = rulesOf();
       jsonRes(res, 200, { ok: true, count: back.length, rules: back });
     });
 
-    /* ---- 上游成本表（元/1M tokens） ---- */
+    /* ---- upstream cost table (per 1M tokens) ---- */
     ctx.registerRoute('GET', '/admin/cost', (req, res, p) => {
       if (!adminOnly(p, res)) return;
       jsonRes(res, 200, { ok: true, cost: costOf() });
@@ -459,7 +459,7 @@ module.exports = {
         return jsonRes(res, 200, { ok: true, cost: costOf() });
       }
       if (act === 'import') {
-        /* 批量导入：{ items: { "模型": {in,out,...} } } 或 [{model,in,out}] */
+        /* bulk import: { items: { "model": {in,out,...} } } or [{model,in,out}] */
         const src = j.items || {};
         let n = 0;
         const arr = Array.isArray(src) ? src : Object.keys(src).map(k => Object.assign({ model: k }, src[k]));
@@ -485,7 +485,7 @@ module.exports = {
       jsonRes(res, 200, { ok: true, cost: costOf() });
     });
 
-    /* ---- 利润报表 ---- */
+    /* ---- Profit report ---- */
     ctx.registerRoute('GET', '/admin/profit', (req, res, p) => {
       if (!adminOnly(p, res)) return;
       const days = Number(p.query.days) || 1;
@@ -528,7 +528,7 @@ module.exports = {
       });
     });
 
-    /* ---- 试算（管理端预览"这条请求会扣多少"，不扣费） ---- */
+    /* ---- trial calculation (admin preview of "what would this request deduct"; nothing is charged) ---- */
     ctx.registerRoute('POST', '/admin/simulate', (req, res, p) => {
       if (!adminOnly(p, res)) return;
       const j = p.body || {};
@@ -558,7 +558,7 @@ module.exports = {
       });
     });
 
-    /* ---- 查某模型当前生效的价格与命中规则 ---- */
+    /* ---- look up a model's currently effective price and matched rules ---- */
     ctx.registerRoute('GET', '/admin/model-price', (req, res, p) => {
       if (!adminOnly(p, res)) return;
       const model = String(p.query.model || ''), ch = String(p.query.channel || ''), inst = String(p.query.instance || ctx.instanceName || '');
@@ -572,7 +572,7 @@ module.exports = {
       });
     });
 
-    /* ==================== 管理端 SDUI 页面（插件贡献，App 原生渲染，零 WebView） ==================== */
+    /* ==================== Admin SDUI pages (plugin-contributed, native App rendering, zero WebView) ==================== */
     const G = {
       txt: (text, style, color) => { const o = { type: 'text', text }; if (style) o.style = style; if (color) o.color = color; return o; },
       kv: (label, value) => ({ type: 'kv', label, value }),
@@ -585,7 +585,7 @@ module.exports = {
     const fmt = (v, d) => (v == null || v === '' || isNaN(Number(v))) ? '—' : (Math.round(Number(v) * Math.pow(10, d == null ? 2 : d)) / Math.pow(10, d == null ? 2 : d)).toString();
     const call = (sub, body) => ({ type: 'adminApi', method: 'POST', path: '/admin/api/plugin-call', body: { plugin: 'billing', path: sub, method: 'POST', body: body } });
 
-    /* 规则一行 → gcui */
+    /* rule line -> gcui */
     const ruleRow = (r, i) => {
       const whenTxt = (r.when || []).map(c => c.k === 'expr' ? ('(' + c.v + ')') : (c.k + ' ' + c.op + ' ' + (Array.isArray(c.v) ? c.v.join('~') : c.v))).join(' 且 ') || '无条件';
       const thenTxt = (r.then || []).map(e => e.k === 'price' ? ('单价 ' + e.field + '=' + e.v) : e.k === 'mult' ? ('×' + e.v) : e.k === 'free' ? '免费' : e.k === 'perCall' ? ('按次 ' + e.v) : e.k).join('，');

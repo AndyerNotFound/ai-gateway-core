@@ -1,15 +1,15 @@
 'use strict';
-/* i18n/lib.js —— 多语言公共库。
- * 任何插件 require('../i18n/lib') 后:  const { bundle } = require('../i18n/lib');
- *   const { lang, t } = bundle(ctx, uk);   // 每次页面渲染取一次, 之后 t() 闭包复用
- *   t('剩余额度')           → 按该用户语言返回译文, 没有译文回退中文原文
- *   t('我的卡密 ({0})', 3)  → {0} 位置参数替换
+/* i18n/lib.js -- shared multilingual library.
+ * After any plugin does require('../i18n/lib'):  const { bundle } = require('../i18n/lib');
+ *   const { lang, t } = bundle(ctx, uk);   // fetch once per page render, then reuse t() through the closure
+ *   t('剩余额度')           -> returns the translation for that user's language, falling back to the Chinese original when none exists
+ *   t('我的卡密 ({0})', 3)  -> {0} positional substitution
  *
- * ★容错铁律: 本库绝不抛错 —— i18n 插件不在、配置坏了、读盘失败 → 一律回退中文原文。
- *   (auth-user 是 type:auth 插件, 激活失败会 fail-closed 阻断全部插件, 必须保守。)
+ * ★Iron rule of fault tolerance: this library never throws -- missing i18n plugin, broken config, disk failure -> always fall back to the Chinese original.
+ *   (auth-user is a type:auth plugin; a failed activation fail-closed blocks all plugins, so stay conservative.)
  *
- * ★性能: 内核 getPluginConfig 每次现读磁盘文件, 所以 bundle() 每次页面渲染只读一次,
- *   之后同一次渲染里的所有 t() 调用都复用这一份配置 —— 绝不每条字符串读一次盘。 */
+ * ★Performance: the core's getPluginConfig reads the disk file fresh on every call, so bundle() reads once per page render,
+ *   and every t() in the same render reuses that single config read -- never one disk read per string. */
 
 const LANGS = ['zh-CN', 'en', 'zh-TW'];
 
@@ -21,12 +21,12 @@ function bundle(ctx, uk) {
     const f = uk ? String(uk.uid || uk.key || '') : '';
     lang = (f && o.prefs && o.prefs[f]) || o.defaultLang || 'zh-CN';
     if (lang === 'zh-CN') {
-      dict = null;                      /* 简中 = 键即原文, 不查表 */
+      dict = null;                      /* zh-CN = the key is the original text, no table lookup */
     } else {
       dict = (o.dict && o.dict[lang]) || null;
       if (!dict || typeof dict !== 'object') dict = null;
     }
-  } catch (_) { /* 回退 zh-CN */ }
+  } catch (_) { /* fall back to zh-CN */ }
   const fmt = (s, args) => (args && args.length
     ? String(s).replace(/\{(\d+)\}/g, (_, i) => (args[i] === undefined || args[i] === null ? '' : String(args[i])))
     : s);

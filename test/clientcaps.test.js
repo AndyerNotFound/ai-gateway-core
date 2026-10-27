@@ -1,5 +1,5 @@
 'use strict';
-/* 插件自检能力验证 (2026-10-07): ctx.clientCaps() / render 第4参数 / capsView */
+/** plugin self-check capability tests (2026-10-07): ctx.clientCaps() / render's 4th arg / capsView */
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
@@ -72,7 +72,7 @@ T('能力按实例隔离', () => {
 
 console.log('\n[插件页 render 第4参数]');
 T('★registerAdminUi 的 render 能拿到 caps 作为第4参数', () => {
-  /* 模拟插件注册一页, 检查内核注入 */
+  /* simulate a plugin registering one page; check the kernel injection */
   pm._adminUiPages.set('1/demo/page', {
     id: 'page', title: 'Demo', pluginId: 'demo', uid: 1, menu: true,
     render: (gw, cfg, q, caps) => ({ gotCaps: !!caps, canChart: caps ? caps.hasComponent('chart') : null }),

@@ -1,8 +1,8 @@
 'use strict';
-/* auth-adminkey - 让实例的 adminKey 也能当用户密钥用
- * 用途: 管理员不必再给自己单独发一张卡, 一个账号就能进用户端。
- * 安全: 开启后 adminKey 会随 Authorization / x-api-key 头流动, 相当于多一条泄露通道,
- *       只建议在自己的设备上开。
+/** auth-adminkey - lets an instance's adminKey double as a user key
+   * purpose: admins no longer issue themselves a separate card; one account reaches the user side.
+   * security: once on, the adminKey flows in Authorization / x-api-key headers -- one more leak channel,
+ *       Recommended only on your own devices.
  */
 module.exports.activate = (ctx) => {
   ctx.registerAuth({
@@ -18,7 +18,7 @@ module.exports.activate = (ctx) => {
           key: token,
           name: '管理员',
           uid: 'uadmin',   /* ★给管理员一个真实 uid —— 否则 /auth/profile 因 uid 为空直接跳过(静默失败) */
-          quotaTokens: -1,   /* -1 = 不限额度 */
+          quotaTokens: -1,   /* -1 = unlimited quota */
           usedTokens: 0,
           models: [],
           branches: [],

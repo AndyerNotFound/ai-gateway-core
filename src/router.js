@@ -1,8 +1,8 @@
 'use strict';
-/* router.js - 渠道路由 + 故障切换 + 重试 (内核职责, 文档 §2.1)
+/** router.js - channel routing + failover + retry (kernel responsibility, doc §2.1)
  * pickChannels(modelMap→models→default→round-robin) + buildRequestForChannel + upstreamRequest
- * + handleChat(多渠道尝试/connRetry 同渠道重试/HTML 冒充检测/RETRYABLE 切换)
- * 可拆功能(卡密白名单/redact/替换/thinkingSummary/记录)全部走 hooks 注入, 内核只做转发。
+   * + handleChat (multi-channel attempts / connRetry same-channel retries / HTML-faked-success detection / RETRYABLE switching)
+   * detachable features (card whitelists/redact/replacement/thinkingSummary/recording) are all injected via hooks; the kernel only forwards.
  */
 const http = require('http');
 const https = require('https');
@@ -20,11 +20,11 @@ const {
   makeWriter, makeResponsesWriter, SSEDecoder, UpstreamStreamParser, ResponsesStreamParser,
 } = C;
 
-/* ★HTTP 响应头值只能是 Latin-1。渠道名可能是中文(如 "Guili公益")，直接写进
- *  X-AI-Gateway-Channel 会让 res.writeHead() 抛 ERR_INVALID_CHAR；而这里原本用
- *  `catch (_) { return; }` 把异常吞掉了 → 该请求既不回客户端、也不读上游响应，
- *  永久悬挂(2026-09-18 实测：App 一直转圈、日志无一行错误)。统一做百分号编码保证
- *  ASCII 安全，前端可 decodeURIComponent() 还原。 */
+/** *HTTP header values must be Latin-1. A channel name may contain CJK (e.g. a Chinese relay's name); writing it directly
+   *  X-AI-Gateway-Channel makes res.writeHead() throw ERR_INVALID_CHAR; this code used to
+   *  swallow the throw with `catch (_) { return; }` -> the request neither answered the client nor read the upstream response,
+   *  hanging forever (measured 2026-09-18: the App spun endlessly with zero error lines in the log). Percent-encoding uniformly guarantees
+   *  ASCII-safe; the frontend can restore it with decodeURIComponent(). */
 function hdrName(s) {
   const t = String(s == null ? '' : s);
   let out = '';
@@ -44,23 +44,23 @@ const CORE_VERSION = require('../package.json').version;
 const TO_CANON = { openai: openaiToCanonical, claude: claudeToCanonical, gemini: geminiToCanonical };
 const UP_RESP = { openai: openaiRespToCanonical, claude: claudeRespToCanonical, gemini: geminiRespToCanonical };
 const BUILD_BODY = { openai: canonicalToOpenAIBody, claude: canonicalToClaudeBody, gemini: canonicalToGeminiBody };
-// 可重试的上游错误: 鉴权失败(换 key 重试)/限流/服务端错误/超时
+//// retryable upstream errors: auth failure (retry with another key)/rate limit/server error/timeout
 const RETRYABLE = new Set([401, 403, 408, 409, 425, 429, 500, 502, 503, 504, 529]);
 
-/* ---- 转发 hooks: 全部由插件注册, 内核默认空操作 (文档 §7) ----
- * onRequestBody(body, ctx)→body        请求体过滤 (redact/replace.out 插件)
- * onChatAuth(info)→null|{status,message} 授权检查 (卡密白名单插件)
- * onQuotaEstimate(info)→number|null    预授权估算: token → 额度 (billing 插件; null=估不出来)
- * needConvert(cfg, ch)→bool            强制走 canonical 中枢 (thinkingSummary 插件)
- * wrapWriter(writer, ctx)→writer       流式 writer 包装 (thinkingSummary 插件)
- * processCanonicalResp(cresp, ctx)     非流式 canonical 后处理 (异步)
- * onResponseEvent(ev, ctx)→?false      SSE 事件级处理, 返回 false 丢弃 (replace.inc 插件)
- * onResponseLine(line, ctx)→line       直通模式行级处理
- * onResponseBody(out, ctx)             非流式响应体处理
- * sanitizeText(s, ctx)→s               错误消息脱敏
- * onUsage({input,output,cacheRead,cacheWrite,charged,detail,model}, ctx)  用量统计/扣费 (卡密插件)
- * billing(usage, ctx)→number|{charged,detail}|null   动态计费 (billing 插件; null=按老口径 input+output)
- * onChatDone(rec, ctx)                 请求完成 (record 插件)
+/** ---- forwarding hooks: all registered by plugins; the kernel defaults to no-ops (doc §7) ----
+   * onRequestBody(body, ctx) -> body        request-body filtering (redact/replace.out plugins)
+   * onChatAuth(info) -> null|{status,message} authorization check (card-whitelist plugins)
+   * onQuotaEstimate(info) -> number|null    pre-auth estimate: tokens -> quota (billing plugin; null = no estimate)
+   * needConvert(cfg, ch) -> bool            force the canonical hub (thinkingSummary plugin)
+   * wrapWriter(writer, ctx) -> writer       streaming writer wrapping (thinkingSummary plugin)
+   * processCanonicalResp(cresp, ctx)     non-streaming canonical post-processing (async)
+   * onResponseEvent(ev, ctx) -> ?false      SSE event-level handling; return false to drop (replace.inc plugin)
+   * onResponseLine(line, ctx) -> line       passthrough-mode line-level handling
+   * onResponseBody(out, ctx)             non-streaming response body handling
+   * sanitizeText(s, ctx) -> s               error message redaction
+   * onUsage({input,output,cacheRead,cacheWrite,charged,detail,model}, ctx)  usage accounting/billing (card plugins)
+   * billing(usage, ctx) -> number|{charged,detail}|null   dynamic billing (billing plugin; null = legacy input+output convention)
+   * onChatDone(rec, ctx)                 request complete (record plugin)
  */
 const NO_HOOKS = {
   onRequestBody: (body) => body,
@@ -72,9 +72,9 @@ const NO_HOOKS = {
 };
 function normHooks(h) { return h ? Object.assign({}, NO_HOOKS, h) : NO_HOOKS; }
 
-/* 用量写回 (含缓存字段) —— usageCapture 是**所有结算路径**的唯一来源。
- * 以前 4 处结算点各写 input/output 两行, 加一个字段要改 4 个地方且容易漏；
- * 统一走这里, 缓存字段(deepseek/claude/gemini 各有各的名字, 见 canonical.pickCache)才不会漏采。 */
+/** Usage write-back (cache fields included) -- usageCapture is the **single source** for every settlement path.
+   * the 4 settlement sites each wrote their own input/output pair; adding a field meant 4 edits and easy misses;
+   * everything funnels through here so cache fields (deepseek/claude/gemini each name their own; see canonical.pickCache) are never missed. */
 function putUsage(cap, u) {
   cap.input = (u && u.input) || 0;
   cap.output = (u && u.output) || 0;
@@ -82,7 +82,7 @@ function putUsage(cap, u) {
   cap.cacheWrite = (u && u.cacheWrite) || 0;
 }
 
-// OpenAI 渠道是否用 Responses API 上游 (渠道级 useResponses 覆盖全局 cfg.upstreamResponses)
+//// whether OpenAI channels use the Responses API upstream (channel-level useResponses overrides global cfg.upstreamResponses)
 function chUsesResponses(cfg, ch) {
   if (ch.type !== 'openai') return false;
   return ch.useResponses !== undefined ? !!ch.useResponses : !!cfg.upstreamResponses;
@@ -90,9 +90,9 @@ function chUsesResponses(cfg, ch) {
 
 function pickChannels(cfg, model, preferChannel) {
   const chs = cfg.channels || [];
-  /* ★模型引用「实例:渠道:模型」里点名了渠道时，只在**该渠道**里找（2026-09-18）。
-   *  点名了却提供不了该模型 → 返回空候选（上层报 503），**绝不偷偷换到别的渠道** ——
-   *  否则"精确指定来源"就失去意义了。 */
+  /* *when a model reference "instance:channel:model" names a channel, search **that channel only** (2026-09-18).
+*  Named but cannot serve the model -> return empty candidates (upper layer answers 503), **never silently switch to another channel** --
+   *  otherwise "target a source exactly" loses its point. */
   let pool = chs;
   if (preferChannel) {
     pool = chs.filter(ch => ch && ch.name && modelref.channelMatch(preferChannel, ch.name));
@@ -100,20 +100,20 @@ function pickChannels(cfg, model, preferChannel) {
   }
   const candidates = [];
   if (model) {
-    // 1) modelMap 精确命中
+    // 1) exact hit in modelMap
     for (const ch of pool) {
       if (ch.modelMap && Object.prototype.hasOwnProperty.call(ch.modelMap, model)) {
         candidates.push({ ch, upstreamModel: String(ch.modelMap[model]) });
       }
     }
-    // 2) models 列表命中 (避免和 modelMap 重复加入同一渠道)
+    // 2) hit in the models list (avoids adding the same channel twice via modelMap)
     if (!candidates.length) {
       for (const ch of pool) {
         if (ch.models && ch.models.includes(model)) candidates.push({ ch, upstreamModel: model });
       }
     }
   }
-  // 3) 没有任何精确命中 → 用 default 渠道 (可多个) 或全部渠道兜底
+// 3) No exact hit at all -> fall back to default channels (may be several) or all channels
   if (!candidates.length) {
     if (preferChannel) return [];
     const defs = chs.filter(c => c.default);
@@ -121,7 +121,7 @@ function pickChannels(cfg, model, preferChannel) {
     for (const ch of pool2) candidates.push({ ch, upstreamModel: model || '' });
   }
   if (!candidates.length) return [];
-  // round-robin: 用 model 做 key 的计数器决定起始偏移
+// round-robin: a per-model counter decides the starting offset
   if (!cfg._rr) cfg._rr = {};
   const key = model || '__nomodel__';
   cfg._rr[key] = ((cfg._rr[key] || 0) + 1) % candidates.length;
@@ -129,7 +129,7 @@ function pickChannels(cfg, model, preferChannel) {
   return candidates.slice(rot).concat(candidates.slice(0, rot));
 }
 
-// 向后兼容: 返回第一个候选
+//// backward compatibility: return the first candidate
 function pickChannel(cfg, model, preferChannel) {
   const cs = pickChannels(cfg, model, preferChannel);
   return cs.length ? cs[0] : null;
@@ -170,17 +170,17 @@ function upstreamRequest(cfg, ch, urlStr, headers, bodyBuf, cb, method, agentsOv
   return req;
 }
 
-/* ================= 成功率探测(probe) =================
- * cfg.probe = { enable:false, intervalMin:10, mode:'models'|'chat' }; 渠道级: ch.probe=true
- * mode=models 免费探活; mode=chat 花token; 结果在 cfg._stats.probe */
+/** ================= Success-rate probing (probe) =================
+   * cfg.probe = { enable:false, intervalMin:10, mode:'models'|'chat' }; channel-level: ch.probe=true
+   * mode=models probes for free; mode=chat spends tokens; results in cfg._stats.probe */
 
 function buildRequestForChannel(cfg, ch, clientFormat, clientApi, canonical, body, urlInfo, req, opts = {}) {
-  // forceConvert(如思考链精简插件要求)时, 即使同格式也走 canonical 转换路径(否则直通管道会绕过插件);
-  // 客户端 API(chat/responses) 与上游 API(chat/responses) 不一致时也必须走转换中枢
+// On forceConvert (e.g. demanded by a thinking-trim plugin), take the canonical conversion path even for the same format (otherwise the passthrough pipe bypasses the plugin);
+// Mismatched client API (chat/responses) vs upstream API (chat/responses) must also go through the conversion hub
   const upApi = chUsesResponses(cfg, ch) ? 'responses' : 'chat';
   const direct = clientFormat === ch.type && clientApi === upApi && !opts.forceConvert;
   const stream = canonical.stream;
-  const upstreamModel = canonical.model; // 已被调用方改写为该渠道的上游模型名
+const upstreamModel = canonical.model; // already rewritten by the caller to the channel's upstream model name
   let url, headers = {}, bodyBuf;
   if (direct) {
     if (ch.type === 'openai') {
@@ -221,22 +221,22 @@ function buildRequestForChannel(cfg, ch, clientFormat, clientApi, canonical, bod
 }
 
 
-/* ================= ★流收尾保护 (2026-09-18) =================
- * 用户报「有时候很久等不到模型返回结束正文的参数」「思考开始/结束不太正常」。
- * 实测：上游中转站会长时间静默，或干脆不给结束标记；内核 idle 超时(默认 180s)一到就掐断
- * 连接 —— 客户端于是"永远转圈"。这里给下游补三档保护（**只对真 SSE 生效**）：
- *   ① 上游静默 >= beatSec → 向下游写 SSE 注释心跳（不改内容，只保连接/防中间层超时）；
- *   ② 上游异常中断 → 先补一个规范的结束事件，再关流（客户端能正常收尾）；
- *   ③ 上游正常结束但没给结束标记(finish_reason/[DONE]) → 同样补上（客户端靠它知道"说完了"）。
- * 配置：cfg.streamGuard = false 关闭；{ beatSec } 调心跳阈值（默认 15 秒）。
- * 注：注释行(`: ...`)是所有 SSE 客户端都会忽略的，不会污染正文。 */
+/** ================= *Stream finalization protection (2026-09-18) =================
+   * users report "sometimes waiting ages for the model's final content params" and "thinking start/end behaving oddly".
+   * verified: upstream relays stay silent for long stretches, or never send an end marker; once the kernel idle timeout (default 180s) fires it cuts off
+* connection -- so the client "spins forever". Three tiers of downstream protection here (**only for real SSE**):
+*   (1) Upstream silent >= beatSec -> write an SSE comment heartbeat downstream (content unchanged; keeps the connection alive / defeats middle-layer timeouts);
+*   (2) Upstream aborts abnormally -> emit a proper terminal event before closing the stream (the client can finish cleanly);
+*   (3) Upstream ends normally but omits the terminal marker (finish_reason/[DONE]) -> add it too (the client relies on it to know "the answer is complete").
+   * config: cfg.streamGuard = false disables it; { beatSec } tunes the heartbeat threshold (default 15s).
+   * note: comment lines (`: ...`) are ignored by every SSE client; content stays clean. */
 function streamGuardOpt(cfg) {
   const sg = (cfg && cfg.streamGuard);
   if (sg === false || (sg && sg.enable === false)) return { enable: false, beatSec: 15 };
   return { enable: true, beatSec: Math.max(3, Number(sg && sg.beatSec) || 15) };
 }
 
-/* 直通路径的"规范收尾"（按客户端格式写） */
+/** the passthrough path's "canonical finalization" (written in the client's format) */
 function writeTerminalSSE(res, clientFormat, clientApi) {
   if (clientFormat === 'openai') {
     if (clientApi === 'responses') {
@@ -253,14 +253,14 @@ function writeTerminalSSE(res, clientFormat, clientApi) {
   }
 }
 
-/* ===== 上游"参数不受支持"自适应降级 (2026-10-01) =====
- * 背景：部分上游对不认识的参数会直接拒绝 —— 有的回 400（body 里点名 Unsupported parameter(s): X），
- *       有的回 200 却在流里塞 {"error":{... internal_server_error ...}}。
- * ★铁律：**默认一律原样转发，绝不预先剥参** —— 上游支持时这个能力必须照常生效。
- *   只有"真的被上游拒了"之后，才把该参数记进**本进程内存**的渠道级名单，剔除后重试一次；
- *   名单不落盘 → 网关重启即忘，上游哪天支持了会自动恢复传参，不会变成永久禁用。 */
-const PARAM_REJECT = new Map();      /* key='uid|实例|渠道' → Set<参数名> */
-/* 流内报错时无从得知是哪个参数被拒 → 用这份"可疑名单"做一次性降级试探（同样只在失败后才用） */
+/** ===== upstream "unsupported parameter" adaptive downgrade (2026-10-01) =====
+* Background: some upstreams reject unknown parameters outright -- some answer 400 (body naming Unsupported parameter(s): X),
+*       others answer 200 but stuff {"error":{... internal_server_error ...}} into the stream.
+* ★Iron rule: **forward everything verbatim by default, never pre-strip parameters** -- when the upstream supports a feature it must keep working.
+*   Only after "the upstream really rejected it" does the parameter land on an **in-process-memory** channel-level list, stripped once for a single retry;
+*   the list never touches disk -> forgotten on gateway restart; once the upstream adds support, forwarding resumes automatically -- never a permanent ban. */
+const PARAM_REJECT = new Map();      /* key='uid|instance|channel' -> Set<param name> */
+/** an in-stream error reveals nothing about which parameter was rejected -> this "suspect list" powers a one-shot downgrade probe (also used only after a failure) */
 const FALLBACK_SUSPECT = ['thinking_token_budget', 'thinking_budget', 'thinking_budget_tokens'];
 function rejectKeyOf(cfg, ch) { return String(cfg._uid) + '|' + cfg._name + '|' + (ch && ch.name); }
 function rejectedOf(cfg, ch) {
@@ -269,13 +269,13 @@ function rejectedOf(cfg, ch) {
   if (!s) { s = new Set(); PARAM_REJECT.set(k, s); }
   return s;
 }
-/* 从上游错误文本里提取被点名的参数（兼容 "Unsupported parameter(s): `a`, `b`" 等写法） */
+/** extract the named parameters from upstream error text (handles forms like "Unsupported parameter(s): `a`, `b`") */
 function parseRejectedParams(txt) {
   const m = /unsupported parameter\(?s?\)?\s*[:：]\s*([^\n]{1,300})/i.exec(String(txt || ''));
   if (!m) return [];
   return m[1].split(/[^A-Za-z0-9_]+/).filter(n => n.length > 1 && n.length < 60);
 }
-/* 剔除该渠道"已被上游拒过"的参数；没有可剔的 → 原样返回（零拷贝） */
+/** strip the params "this channel already had rejected"; nothing to strip -> return as-is (zero copy) */
 function bodyWithoutRejected(cfg, ch, body) {
   const rej = PARAM_REJECT.get(rejectKeyOf(cfg, ch));
   if (!rej || !rej.size || !body || typeof body !== 'object') return body;
@@ -286,7 +286,7 @@ function bodyWithoutRejected(cfg, ch, body) {
   for (const k of rej) delete out[k];
   return out;
 }
-/* 首条 SSE data 事件是不是"错误事件"（严格解析 JSON，避免正文里出现 error 字样被误判） */
+/** whether the first SSE data event is an "error event" (strict JSON parsing, so the word error appearing in content is not misjudged) */
 function firstEventIsStreamError(s) {
   const m = /(?:^|\n)data:\s*([^\n]+)/.exec(String(s || ''));
   if (!m) return false;
@@ -300,15 +300,15 @@ function firstEventIsStreamError(s) {
 
 function makeStreamGuard(res, isSse, opt, ctx, chName, endFn) {
   if (!opt.enable || !isSse) return { touch() {}, stop() {}, abort() {}, finish() {}, disarm() {} };
-  let last = Date.now(), beats = 0, stopped = false, disarmed = false;   /* disarmed: 上层已接管(降级重试)，禁止再补"结束事件" */
-  let sawData = false, atLineEnd = true;   /* ★边界保护(2026-09-18)：见下方两处注释 */
-  const tm = setInterval(() => {                       /* 心跳检测（注释行，客户端会忽略） */
+let last = Date.now(), beats = 0, stopped = false, disarmed = false;   /* disarmed: the upper layer took over (downgrade retry); no more terminal events may be appended */
+let sawData = false, atLineEnd = true;   /* ★edge protection (2026-09-18): see the two comments below */
+const tm = setInterval(() => {                       /* heartbeat check (a comment line; clients ignore it) */
     if (stopped) return;
     const idle = Date.now() - last;
     if (idle < opt.beatSec * 1000) return;
-    /* ★边界保护 1：上游一个事件可能被 TCP 分成两包。若在"半行"里插注释行，会把
-     *  `data: {"半截…: keep-alive 15s` 拼成同一行 → 客户端该事件 JSON 解析失败（**丢事件**）。
-     *  所以只在**上一个分块以换行结尾**（= 处于行边界）时才发心跳，否则等下一轮再试。 */
+    /* *boundary guard 1: one upstream event may arrive split across two TCP packets. Injecting a comment line into a "half line" would
+     *  `data: {"half...: keep-alive 15s` glued into one line -> the client's JSON parse of that event fails (**event lost**).
+     *  so the heartbeat is sent only when the **previous chunk ended with a newline** (= at a line boundary); otherwise wait for the next round. */
     if (!atLineEnd) return;
     try { res.write(': keep-alive ' + Math.round(idle / 1000) + 's\n\n'); } catch (_) {}
     if (!beats) log('[stream] 上游静默 ' + Math.round(idle / 1000) + 's → 已向下游发心跳', ctx.logMeta, 'ch=' + chName);
@@ -317,10 +317,10 @@ function makeStreamGuard(res, isSse, opt, ctx, chName, endFn) {
   if (tm.unref) tm.unref();
   const stop = () => { stopped = true; try { clearInterval(tm); } catch (_) {} };
   const fire = (why) => {
-    /* ★已由上层接管（参数降级重试）→ 绝不能补结束事件，否则客户端先收到一个"假成功"收尾 */
+    /* *already taken over by an upper layer (param-downgrade retry) -> never append an end event, or the client gets a "fake success" finale first */
     if (disarmed) return;
-    /* ★边界保护 2：上游**一个字节都没产出**就断了 → **不补结束事件**，保持"失败"语义。
-     *  否则客户端会把"什么都没收到"显示成"正常结束的空回答"，把真失败伪装成成功。 */
+    /* *boundary guard 2: the upstream broke off **without producing a single byte** -> **do not append an end event**; preserve the "failure" semantics.
+     *  otherwise the client displays "received nothing" as a normal, empty answer -- dressing a real failure up as success. */
     if (!sawData) { log('[stream] ' + why + ' → 上游未产出任何数据，不补结束事件（保持失败语义）', ctx.logMeta, 'ch=' + chName); return; }
     log('[stream] ' + why + ' → 已向客户端补结束事件', ctx.logMeta, 'ch=' + chName);
     try { endFn(); } catch (e) { logErr('[stream] 补结束事件失败:', e.message); }
@@ -333,13 +333,13 @@ function makeStreamGuard(res, isSse, opt, ctx, chName, endFn) {
     stop,
     abort(err) { stop(); fire('上游中断(' + ((err && err.message) || err || '未知') + ')'); },
     finish(hasMarker) { stop(); if (!hasMarker) fire('上游结束但没给结束标记'); },
-    /* ★disarm(2026-10-01)：上层判定"这条流不作数"（要降级重试）时调用 —— 之后 fire() 全部静默，
-     *  避免把真失败收尾成"正常结束"。 */
+/* ★disarm (2026-10-01): called when the upper layer decides "this stream does not count" (downgrade retry) -- from then on fire() stays fully silent,
+     *  so a real failure is never finalized as a "normal end". */
     disarm() { disarmed = true; stop(); },
   };
 }
 
-// 处理上游成功响应(2xx): 直通或跨格式转换. hook 化版(原 handleChat 提取).
+//// handle a successful upstream response (2xx): passthrough or cross-format conversion. The hook-based version (extracted from the original handleChat).
 function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, body, urlInfo, req, res, upRes, built, ctx, retryHook, hooks) {
   const { direct, stream, upApi } = built;
   const { usageCapture, stats } = ctx;
@@ -348,12 +348,12 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
   if (direct) {
     const ct = upRes.headers['content-type'] || (stream ? 'text/event-stream' : 'application/json');
     try {
-      /* ★参数降级重试会在同一个 res 上二次进入（首段守卫发现流内错误）→ 报头已发过就跳过，不能重发 */
+      /* *param-downgrade retry re-enters on the same res (the head guard saw an in-stream error) -> skip headers if already sent; never resend */
       if (!res.headersSent) res.writeHead(upRes.statusCode, { 'Content-Type': ct, 'X-AI-Gateway-Channel': hdrName(ch.name), 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' });
     } catch (e) {
-      /* ★绝不能静默 return：报头下发失败(典型：渠道名含非 ASCII)时，客户端收不到任何
-       *  东西、上游响应也无人读取，这个请求会永久悬挂(2026-09-18 实测)。这里改为
-       *  明确报错 + 释放上游连接。 */
+      /* *never return silently: when writing headers fails (typically a non-ASCII channel name), the client receives nothing
+       *  and nobody reads the upstream response -- the request hangs forever (observed 2026-09-18). This now
+       *  error clearly + release the upstream connection. */
       logErr('[resp] 响应头下发失败, 已中断该请求:', e.message);
       try {
         if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end('{"error":{"message":"gateway: 响应头下发失败","type":"gateway_error"}}'); }
@@ -362,13 +362,13 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
       try { upRes.resume(); } catch (_) {}
       return;
     }
-    /* ================= ★首段守卫 + 流内错误降级 (2026-10-01) =================
-     * 上游可能"HTTP 200 却在流里先回一条错误事件"（实测 NVIDIA NIM 中转会回
+    /* ================= *Head guard + in-stream error downgrade (2026-10-01) =================
+     * upstreams may return "HTTP 200 but send an error event first inside the stream" (verified: NVIDIA NIM relays send
      *   data: {"error":{"message":"Internal server error","type":"internal_server_error","code":500}}
-     * 老行为：原样透传，再补一个 finish_reason:"stop" → 把真失败伪装成正常结束。
-     * 新行为：在**向客户端写出任何字节之前**先缓冲首个 SSE 事件 ——
-     *   ① 是错误事件 → 本条流作废（g.disarm() 不补结束事件），剔除"可疑参数"后重试本渠道；
-     *   ② 是正常内容 → 立即放行，之后按老逻辑直通（已写出内容后绝不中途换台）。 */
+* Old behavior: pass through verbatim, then append finish_reason:"stop" -- disguising real failures as normal ends.
+* New behavior: buffer the first SSE event **before any byte is written to the client** --
+     *   (1) an error event -> this stream is void (g.disarm() skips the end event); strip the "suspect params" and retry the channel;
+     *   (2) normal content -> release immediately, then passthrough as before (never switch channels mid-stream once bytes went out). */
     let headPassed = false, streamBad = false;
     const upstreamBad = (why) => {
       if (streamBad) return;
@@ -381,7 +381,7 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
         log('UPERR-STREAM', ctx.logMeta, '上游在流内报错(' + why + ') → 已降级重试', 'ch=' + ch.name);
         return;
       }
-      /* 无法降级 → 明确告知失败（不再伪装成"正常结束"的空回答） */
+      /* cannot degrade -> report the failure clearly (no more blank answers posing as a normal end) */
       log('UPERR-STREAM', ctx.logMeta, '上游在流内报错且无可降级参数(' + why + ')', 'ch=' + ch.name);
       stats.errors++;
       recordReq(502, ch.name, 0, 0);
@@ -399,18 +399,18 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
     if (stream) {
       const parser = isResponsesUp ? new ResponsesStreamParser(() => {}) : new UpstreamStreamParser(ch.type, () => {});
       const dec = new SSEDecoder((data) => { try { if (data !== '[DONE]') parser.handle(JSON.parse(data)); } catch (_) {} });
-      const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       const g = makeStreamGuard(res, /text\/event-stream/i.test(String(ct)), streamGuardOpt(cfg), ctx, ch.name,
         () => writeTerminalSSE(res, clientFormat, clientApi));
-      ctx._parser = parser; ctx._guard = g;   /* ★交给兜底结算：中断时把已解析到的用量记上 */
+      ctx._parser = parser; ctx._guard = g;   /* *handed to fallback settlement: record whatever usage was parsed when interrupted */
       upRes.on('data', c => { try { const s2 = u8(c); g.touch(s2); dec.push(s2); } catch (_) {} });
       upRes.on('end', () => {
         dec.end(); parser.finish(); putUsage(usageCapture, parser.usage);
-        if (streamBad) return;                      /* ★已交给降级重试，别再收尾 */
+        if (streamBad) return;                      /* *handed to the downgrade retry; do not finalize again */
         g.finish(!!parser.finishReason);
         ctx.logDone(upRes.statusCode);
       });
-      /* ★收尾丢失的形态不止一种：error / aborted / 连接没结束就 close —— 全部要结算 */
+      /* *finalization can be lost in more ways than one: error / aborted / close without end -- all must settle */
       upRes.on('error', (e) => { if (streamBad) return; g.abort(e); try { res.end(); } catch (_) {} if (ctx.abort) ctx.abort(e); });
       upRes.on('aborted', () => { if (streamBad) return; if (ctx.abort) ctx.abort('aborted'); });
       upRes.on('close', () => { if (streamBad) return; if (!upRes.complete && ctx.abort) ctx.abort('上游连接未完成即关闭'); });
@@ -426,13 +426,13 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
       upRes.on('close', () => { if (!upRes.complete && ctx.abort) ctx.abort('上游连接未完成即关闭(非流式)'); });
     }
     if (hooks.onResponseLine) {
-      // 直通模式行级处理(保持原始 SSE 结构; 按行匹配, 跨行规则不生效)
+      // passthrough-mode line-level handling (keeps raw SSE structure; per-line matching; cross-line rules do not apply)
       let buf = '';
-      const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       upRes.on('data', c => {
         try {
           buf += u8(c);
-          if (!headPassed) {                       /* ★首段守卫：先攒够首个事件再决定是否放行 */
+          if (!headPassed) {                       /* *head guard: buffer the first event before deciding whether to release */
             if (firstEventIsStreamError(buf)) { upstreamBad('stream-error-first-event'); return; }
             if (buf.length < 4096 && !/\n\n/.test(buf)) return;
             headPassed = true;
@@ -447,7 +447,7 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
     } else if (!stream) {
       upRes.pipe(res);
     } else {
-      /* ★direct+stream 且无行级 hook：自行转发（同样过首段守卫，并负责 res.end()） */
+      /* *direct+stream with no row-level hook: forward it yourself (through the same head guard, and own res.end()) */
       let buf = '';
       const u8 = utf8();
       upRes.on('data', c => {
@@ -469,7 +469,7 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
     return;
   }
 
-  // 跨格式转换
+// Cross-format conversion
   if (stream) {
     const isArrayStream = clientFormat === 'gemini' && !urlInfo.altSse;
     try {
@@ -479,9 +479,9 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
         'X-AI-Gateway-Channel': hdrName(ch.name), 'Access-Control-Allow-Origin': '*',
       });
     } catch (e) {
-      /* ★绝不能静默 return：报头下发失败(典型：渠道名含非 ASCII)时，客户端收不到任何
-       *  东西、上游响应也无人读取，这个请求会永久悬挂(2026-09-18 实测)。这里改为
-       *  明确报错 + 释放上游连接。 */
+      /* *never return silently: when writing headers fails (typically a non-ASCII channel name), the client receives nothing
+       *  and nobody reads the upstream response -- the request hangs forever (observed 2026-09-18). This now
+       *  error clearly + release the upstream connection. */
       logErr('[resp] 响应头下发失败, 已中断该请求:', e.message);
       try {
         if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end('{"error":{"message":"gateway: 响应头下发失败","type":"gateway_error"}}'); }
@@ -505,14 +505,14 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
       if (data === '[DONE]') { parser.finish(); return; }
       try { parser.handle(JSON.parse(data)); } catch (e) { logErr('bad SSE data (first 200 chars):', String(data).slice(0, 200)); }
     });
-    const u8 = utf8();   /* ★跨分块安全解码(2026-09-18) */
+          const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     const g = makeStreamGuard(res, !isArrayStream, streamGuardOpt(cfg), ctx, ch.name,
       () => { if (!writerEnded) onEv({ type: 'end', finish_reason: 'stop' }); });   /* 收尾交回 writer（各格式事件不同） */
-    ctx._parser = parser; ctx._guard = g;   /* ★交给兜底结算 */
+    ctx._parser = parser; ctx._guard = g;   /* *handed to fallback settlement */
     upRes.on('data', c => { try { const s2 = u8(c); g.touch(s2); dec.push(s2); } catch (_) {} });
     upRes.on('end', () => {
       dec.end(); parser.finish();
-      g.finish(true);                                  /* 转换路径由 parser.finish() 发 end 事件，视为已有标记 */
+      g.finish(true);                                  /* on the conversion path parser.finish() emits end; treat the marker as present */
       putUsage(usageCapture, parser.usage);
       ctx.logDone(200);
     });
@@ -526,7 +526,7 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
       const txt = Buffer.concat(chunks).toString('utf8');
       const j = safeParse(txt);
       if (!j) {
-        // 上游 200 但正文不是 JSON(HTML 错误页等, content-type 也可能伪装成 json): 可重试
+        // upstream 200 with a non-JSON body (HTML error pages etc.; content-type may even fake json): retryable
         const why = 'upstream returned non-JSON: ' + hooks.sanitizeText(txt.slice(0, 200), ctx);
         if (retryHook && retryHook(why)) return;
         stats.errors++;
@@ -553,34 +553,34 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
   }
 }
 
-/* 主转发入口: 客户端 chat/messages/generateContent/responses → 渠道路由 → 上游
+/** the main forwarding entry: client chat/messages/generateContent/responses -> channel routing -> upstream
  * clientFormat: 'openai'|'claude'|'gemini'; clientApi: 'chat'|'responses'
- * urlInfo: {model?, stream?, altSse?, userKey?}  (userKey 由认证插件挂在 checkAuth 返回值里, 内核不解释)
- * hooks: 见 NO_HOOKS; sendError: core 注入的格式化错误输出 */
+   * urlInfo: {model?, stream?, altSse?, userKey?}  (userKey is attached by auth plugins to the checkAuth return value; the kernel does not interpret it)
+   * hooks: see NO_HOOKS; sendError: core-injected formatted error output */
 function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, hooks, sendError) {
   hooks = normHooks(hooks);
   const stats = cfg._stats;
-  /* ★按用户隔离统计（2026-09-18）：卡密身份 = 绑定用户 uid 或卡密哈希（见 util.keyIdOf）。
-   *   它同时进：① recent 每条记录（页面按用户过滤）；② stats.byKey[<keyId>]（按用户累计）；
-   *   ③ usage-history 的 per-key 桶（按用户的历史曲线）。免密请求 keyId='' → 只进实例级账本。 */
+  /* *per-user stats isolation (2026-09-18): the card identity = the bound user's uid or the card hash (see util.keyIdOf).
+   *   it feeds both: (1) each recent record (pages filter per user); (2) stats.byKey[<keyId>] (per-user totals);
+   *   (3) usage-history's per-key buckets (per-user history curves). Keyless requests with keyId='' -> instance-level ledger only. */
   const keyId = keyIdOf(urlInfo.userKey);
   const keyName = keyNameOf(urlInfo.userKey);
   let body;
   try { body = JSON.parse(bodyStr || '{}'); } catch (e) { return sendError(clientFormat, res, 400, 'invalid JSON body: ' + e.message); }
   if (!body || typeof body !== 'object') return sendError(clientFormat, res, 400, 'request body must be a JSON object');
 
-  // hook: 请求体过滤 (redact/replace.out 插件)
+// hook: request-body filtering (redact/replace.out plugins)
   try { body = hooks.onRequestBody(body, { cfg, urlInfo, clientFormat, clientApi }) || body; }
   catch (e) { logErr('[hooks] onRequestBody:', e.message); }
 
   const canonical = (clientApi === 'responses') ? responsesToCanonical(body, urlInfo.model) : TO_CANON[clientFormat](body, urlInfo.model);
-  /* ★模型引用（实例:渠道:模型）在 core 里已解析：这里把 canonical.model 换回**真名** ——
-   *  计费(billing 按 渠道+模型名 查价)、分组鉴权、日志统计一律用真名；原始字符串留在 rawModel 备查。 */
+/* ★The model reference (instance:channel:model) was already resolved in core: swap canonical.model back to the **real name** --
+*  billing (price lookup by channel+model name), group auth, and log stats all use the real name; the raw string stays in rawModel for reference. */
   if (urlInfo.modelOverride) { canonical.rawModel = canonical.model; canonical.model = String(urlInfo.modelOverride); }
-  if (urlInfo.stream) canonical.stream = true; // gemini: 流式标志在 URL 路径里
+if (urlInfo.stream) canonical.stream = true; // gemini: the stream flag rides in the URL path
   if (!canonical.model) return sendError(clientFormat, res, 400, 'missing "model"');
 
-  // hook: 授权检查 (卡密白名单: 模型/分支)
+// hook: authorization check (card-key whitelist: models/branches)
   const authDecision = hooks.onChatAuth({ userKey: urlInfo.userKey, model: canonical.model, instance: cfg._name, uid: cfg._uid, cfg, body, canonical });
   if (authDecision && (authDecision.status || authDecision.message))
     return sendError(clientFormat, res, authDecision.status || 403, authDecision.message || 'forbidden');
@@ -588,14 +588,14 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
   const candidates = pickChannels(cfg, canonical.model, urlInfo.forceChannel);
   if (!candidates.length) return sendError(clientFormat, res, 503, 'no channel configured for model: ' + canonical.model);
 
-  /* 预授权放在“确认有渠道”之后：冻结失败立即拒绝；冻结成功后无论成功、失败、断开，
-   * 都由 releaseQuota 释放。真正的 usedTokens 仍只在 ctx.logDone() 的 onUsage 中增加。
-   * ★口径统一 (2026-09-18)：冻结值必须是**额度**，不能是 token 数 —— 结算走 billing
-   *  （charged = raw/1e6 × 倍率，量级 1e-3），若预授权按 token 冻结（量级 1e3）就大
-   *  100 万倍：额度 99.97 的卡会因「本次请求预授权需要约 13209」被 429 拒掉，而那次
-   *  实际只扣 0.01。换算只能由「价格唯一真相」的 billing 做（onQuotaEstimate），
-   *  所以这里把换算做成回调传下去：认证插件估 token，需要换额度时问它；拿不到估算值
-   *  （未装 billing / 模型未定价）→ 认证插件回退 token 口径，与老口径结算严格一致。 */
+/* Pre-authorization sits after "a channel is confirmed": a failed freeze rejects immediately; once frozen, success, failure, or disconnect alike
+* is released by releaseQuota. Actual usedTokens still increase only in ctx.logDone()'s onUsage.
+* ★Unified units (2026-09-18): the frozen value must be **quota**, never token count -- settlement goes through billing
+*  (charged = raw/1e6 x multiplier, magnitude 1e-3); freezing by token count (magnitude 1e3) would overshoot badly.
+   *  a million-fold error: a card with 99.97 quota got 429-rejected for "this request pre-authorizes about 13209", while that
+   *  actually deducting 0.01. Only billing (the single pricing truth) can do the conversion (onQuotaEstimate),
+   *  so the conversion is passed down as a callback: the auth plugin estimates tokens; ask it when a quota figure is needed; without an estimate
+*  (billing absent / model unpriced) -> the auth plugin falls back to the token unit, settling exactly like the old unit. */
   const estimateCharge = (u) => {
     try {
       if (!hooks.onQuotaEstimate) return null;
@@ -625,21 +625,21 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
     try { if (releaseQuota) releaseQuota(); } catch (e) { logErr('[quota] release:', e.message); }
   };
 
-  /* ================= ★收尾兜底（2026-09-18）=================
-   * 事故：流式请求的"收尾事件"一旦丢失（上游中断 / 报错 / 静默超时 / 客户端断开），旧代码只在
-   * upRes 的 error 分支给下游补个结束标记就 return —— 不调 logDone、不计 errors，于是统计里
-   * 永久留下「1 次请求 / 0 token / 最近请求为空 / 错误 0」的幽灵记录（用户实测：上游 18:27:06
-   * 已 200 完成，core 侧 9 分钟不结算，使用页显示 0 / 0）。
-   * 现在：任何非正常收尾都**恰好结算一次**，并尽量把已解析到的用量记上。
-   * 计费口径（用户 2026-09-18 定）：能解析到用量就按用量扣，零用量只计错误。
+  /* ================= *finalization fallback (2026-09-18) =================
+   * Incident: when a streamed request loses its "terminal event" (upstream abort / error / silent timeout / client disconnect), the old code only
+   * appended a terminal marker downstream in upRes's error branch and returned -- no logDone, no error count, so the stats were left with a ghost
+   * record of "1 request / 0 tokens / empty recent list / 0 errors" forever (user-observed: upstream finished 200 at 18:27:06
+   * while core settled nothing for 9 minutes; the usage page showed 0 / 0).
+   * Now: every abnormal ending settles **exactly once**, recording whatever usage could be parsed.
+   * Billing rule (set by the user 2026-09-18): charge by parsed usage when available; zero usage counts only as an error.
    * ========================================================= */
-  let settled = false;        /* 结算开关：end / error / close / 硬超时 只允许第一个生效 */
-  let currentCtx = null;      /* 当前候选渠道的 ctx（挂着 _parser / _guard / _upReq） */
-  let hardTimer = null;       /* 硬上限定时器（见下方 maxStreamSec） */
+  let settled = false;        /* settlement gate: end / error / close / hard timeout -- only the first one may fire */
+  let currentCtx = null;      /* ctx of the current candidate channel (holding _parser / _guard / _upReq) */
+  let hardTimer = null;       /* hard-cap timer (see maxStreamSec below) */
   const settleAbnormal = (status, why, countErr) => {
     if (settled) return;
     const c = currentCtx;
-    if (!c) { settled = true; return; }   /* 还没进入转发阶段（授权被拒等）→ 本就不该产生统计 */
+    if (!c) { settled = true; return; }   /* never reached forwarding (auth rejected etc.) -> no stats were ever due */
     const p = c._parser;
     try { if (p && p.usage) putUsage(usageCapture, p.usage); } catch (_) {}
     if (countErr) stats.errors++;
@@ -647,16 +647,16 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
       'in=' + usageCapture.input, 'out=' + usageCapture.output);
     c.logDone(status);
   };
-  /* 客户端断开、上游异常等不一定能走正常响应路径，close 是最后保险；幂等释放 + 兜底结算
-   * （★结算不能漏：否则该请求在统计里永不落账，使用页「最近请求」永远空着）。 */
+  /* client disconnects / upstream faults may never reach the normal response path; close is the last safety net; idempotent release + fallback settlement
+   * (★settlement must never be skipped: otherwise the request never lands in the stats and the usage page's "recent requests" stays empty forever). */
   res.once('close', () => {
     releaseQuotaOnce();
     if (!settled) settleAbnormal(499, '客户端提前断开', false);
   });
 
-  /* ★硬上限：上游"永不结束"（不给结束标记、连接又一直有活动 → socket idle 超时不会触发）时
-   * 不能无限悬挂。到点：给下游补结束标记 → 结算(504, 计错误) → 断开上游。
-   * cfg.maxStreamSec 设 0 可关闭。 */
+  /* *hard cap: when the upstream "never ends" (no end marker while the connection stays active -> the socket idle timeout never fires)
+   * must not hang forever. At the deadline: append a terminal marker downstream -> settle (504, count as error) -> disconnect upstream.
+   * Set cfg.maxStreamSec to 0 to disable. */
   const maxStreamSec = Math.max(0, Number(cfg.maxStreamSec == null ? 600 : cfg.maxStreamSec));
   if (maxStreamSec > 0) {
     hardTimer = setTimeout(() => {
@@ -668,13 +668,13 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
     }, maxStreamSec * 1000);
     if (hardTimer.unref) hardTimer.unref();
   }
-  /* u 可以是老的 (inT, outT) 数字对, 也可以是 logDone 传的完整 usage 对象(推荐) */
+  /* u may be the old (inT, outT) numeric pair, or the full usage object passed by logDone (preferred) */
   const recordReq = (status, chName, u, outTArg) => {
-    settled = true;   /* 其它结算口(错误透传 / 重试耗尽)也算"已落账"，避免 close/硬超时再补一次 */
+    settled = true;   /* other settlement exits (error passthrough / retries exhausted) also count as "settled", so close/hard timeout cannot settle twice */
     if (hardTimer) { try { clearTimeout(hardTimer); } catch (_) {} }
     releaseQuotaOnce();
-    /* ★注意: 这是箭头函数, 没有自己的 arguments —— 老调用的第4个参数必须走形参 outTArg,
-     *  写 arguments[3] 会取到 handleChat 的 arguments(踩过的坑)。 */
+    /* ★Note: this is an arrow function with no arguments of its own -- legacy callers pass the 4th argument, received via the outTArg parameter,
+     *  writing arguments[3] would grab handleChat's arguments (been there). */
     const o = (u && typeof u === 'object') ? u : { input: u || 0, output: outTArg || 0 };
     const inT = o.input || 0, outT = o.output || 0;
     stats.recent.push({
@@ -683,14 +683,14 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
       cacheReadTokens: o.cacheRead || 0, cacheWriteTokens: o.cacheWrite || 0,
       chargedTokens: o.charged != null ? o.charged : undefined,
       keyName: keyName || undefined,
-      /* ★按用户隔离用：keyId=用户uid/卡密哈希（''=免密请求）。keyName 只能当展示名，
-       *   过滤必须以 keyId 为准（卡密可重名、可改名）。 */
+      /* *for per-user isolation: keyId = user uid/card hash ('' = keyless request). keyName is display-only,
+       *   filtering must key on keyId (cards can share names and be renamed). */
       keyId: keyId || undefined,
     });
     if (stats.recent.length > 200) stats.recent.shift();
-    /* ★按用户累计（2026-09-18）：实例级 byChannel 之外再来一份 per-key 的，
-     *   让用户端「使用」页能看到**自己的**请求数/错误/token/计费量与渠道排行。
-     *   内存对象，重启归零（与实例级 byChannel 语义一致）；历史曲线走 usage-history 的 per-key 桶。 */
+    /* *per-user accumulation (2026-09-18): alongside the instance-level byChannel, a per-key copy,
+     *   letting the user "Usage" page show **their own** request/error/token/billing totals and channel ranking.
+     *   in-memory object, reset on restart (same semantics as instance-level byChannel); history curves use usage-history's per-key buckets. */
     if (keyId) {
       try {
         const bk = stats.byKey || (stats.byKey = {});
@@ -708,10 +708,10 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
         }
       } catch (_) {}
     }
-    /* ★使用统计历史(2026-09-18): 内存 recent 只有 200 条且重启归零,
-     *  「使用」页要按"任意时段 / 折点密度"看统计就必须有持久历史 —— 这里只把刚落账的
-     *  这条记录累加进内存桶(极轻量), 落盘由内核 60s 定时 flush 负责(见 usage-history.js)。
-     *  ★2026-09-18 加第三参 keyId：同时累加一份 per-key 桶（按用户隔离的历史曲线）。 */
+    /* *usage-stats history (2026-09-18): in-memory recent holds only 200 entries and resets on restart,
+     *  the "Usage" page needs persistent history for arbitrary spans / break granularity -- this only appends the just-settled
+     *  this record accumulates into in-memory buckets (very cheap); flushing is the kernel's 60s timer (see usage-history.js).
+     *  *added 2026-09-18, third arg keyId: also accumulate a per-key bucket (per-user history curves). */
     try { usageHist.bump(cfg._uid, stats.recent[stats.recent.length - 1], keyId); } catch (_) {}
     if (hooks.onChatDone) {
       try {
@@ -720,11 +720,11 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
           model: canonical.model, channel: chName || '', status, duration: Date.now() - t0,
           inputTokens: inT, outputTokens: outT,
           cacheReadTokens: o.cacheRead || 0, cacheWriteTokens: o.cacheWrite || 0,
-          /* charged = 实际从卡密额度扣掉的加权 token 数(null=按老口径 input+output) */
+          /* charged = the weighted token amount actually deducted from the key card quota (null = legacy input+output convention) */
           chargedTokens: o.charged != null ? o.charged : null,
           billDetail: o.detail || null,
-          /* ★按用户隔离（2026-09-18）：keyId=用户uid/卡密哈希、keyName=卡密名 —— 插件（record/billing）
-           *   可用它把自己记账的明细也按用户分开，不用再自己解析密钥。 */
+          /* *per-user isolation (2026-09-18): keyId = user uid/card hash, keyName = card name -- plugins (record/billing)
+           *   use it to split their own ledgers per user instead of parsing keys themselves. */
           keyId: keyId || null,
           keyName: keyName || null,
           userKey: urlInfo.userKey,
@@ -737,8 +737,8 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
   let lastErrStatus = 0;
   let lastErrMsg = '';
 
-  /* ★参数降级重试（2026-10-01）：只在"被上游明确拒绝"后调用，绝不预先剥参。
-   *   剔除 → 记入本渠道内存名单 → 重跑当前这个渠道（attempt 已自增，先退回一格）。 */
+  /* *param-downgrade retry (2026-10-01): invoked only after "the upstream explicitly rejected"; params are never stripped preemptively.
+   *   strip -> record in this channel's in-memory list -> rerun the same channel (attempt already incremented, so step back one). */
   let curCh = null, paramRetries = 0;
   const dropParamsAndRetry = (names) => {
     const rej = rejectedOf(cfg, curCh);
@@ -752,7 +752,7 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
     return true;
   };
 
-  // 逐个候选渠道尝试, 连接失败或可重试的 HTTP 错误 → 切下一个; 不可重试错误(如 400) → 直接透传
+  // Try candidate channels one by one; connection failure or retryable HTTP error -> next channel; non-retryable (e.g. 400) -> pass through as-is
   const tryNext = () => {
     if (attempt >= candidates.length) {
       stats.errors++;
@@ -765,11 +765,11 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
     curCh = ch;
     const myCanonical = { ...canonical, model: pick.upstreamModel || canonical.model };
     const forceConvert = !!hooks.needConvert(cfg, ch);
-    const effBody = bodyWithoutRejected(cfg, ch, body);   /* ★只剔"已被本渠道拒过"的参数（无则零拷贝原样） */
+    const effBody = bodyWithoutRejected(cfg, ch, body);   /* *strip only params "this channel already rejected" (zero-copy passthrough when none) */
     const built = buildRequestForChannel(cfg, ch, clientFormat, clientApi, myCanonical, effBody, urlInfo, req, { forceConvert });
     attempt++;
 
-    // HTTP 头只允许 ASCII, 中文/全角字符的 apiKey 会让 node 抛内部错误
+    // HTTP headers allow ASCII only; an apiKey with CJK/full-width characters makes node throw internally
     for (const [hk, hv] of Object.entries(built.headers)) {
       if (typeof hv === 'string' && !/^[\x09\x20-\x7e]*$/.test(hv)) {
         return sendError(clientFormat, res, 500, `渠道 "${ch.name}" 的请求头 ${hk} 含非 ASCII 字符(可能是 apiKey 里残留了中文占位符), 请检查配置`);
@@ -779,25 +779,25 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
     const ctx = {
       t0, usageCapture, stats,
       logMeta: [clientFormat + '>' + ch.type, 'model=' + canonical.model, 'ch=' + ch.name, 'proxy=' + (ch.proxy || '-'), stream ? 'stream' : 'block'].join(' '),
-      /* ★兜底结算入口（实现见 handleChat 顶部的 settleAbnormal）：上游中断 / 硬超时 / 客户端断开时调用 */
+      /* *fallback settlement entry (implemented as settleAbnormal at the top of handleChat): called on upstream interruption / hard timeout / client disconnect */
       abort: (e) => settleAbnormal(502, '上游中断(' + ((e && e.message) || e || '未知') + ')', true),
       logDone(status) {
-        if (settled) return;   /* ★幂等：end / error / close / 硬超时 都可能来，只结算一次 */
+        if (settled) return;   /* *idempotent: end / error / close / hard timeout may all arrive; settle exactly once */
         settled = true;
         if (hardTimer) { try { clearTimeout(hardTimer); } catch (_) {} }
-        /* ★用量对象：**一次性组装好**再交给 billing / onUsage / onChatDone。
-         * 以前 onUsage 只收到 {input,output} —— 连模型名都没有，按模型定价无从谈起；
-         * 缓存量也拿不到。现在把计费需要的一切都放进来（额外字段，老插件读 input/output 不受影响）。 */
+        /* *usage object: **assemble once** before handing to billing / onUsage / onChatDone.
+         * onUsage used to receive only {input,output} -- not even a model name, so per-model pricing was impossible;
+ * cache counts were unreachable too. Everything billing needs now rides along (extra fields; older plugins reading input/output are unaffected). */
         const usage = {
           input: usageCapture.input, output: usageCapture.output,
           cacheRead: usageCapture.cacheRead || 0, cacheWrite: usageCapture.cacheWrite || 0,
           model: canonical.model, channel: ch.name, format: clientFormat,
           t0, at: Date.now(),
         };
-        /* 动态计费：插件(通常是 billing)在这里算出「应扣多少」。
-         * · 返回数字 或 {charged, detail} → 计费插件按 charged 扣（可自由定义加权口径）
-         * · 返回 null / 未装动态计费插件 → charged 保持 null → 卡密插件回退老口径 input+output
-         *   （★这就是向后兼容的关键：没装 billing 时扣费与今天完全一致） */
+        /* Dynamic billing: the plugin (usually billing) computes "how much to deduct" here.
+         * · returns a number or {charged, detail} -> the billing plugin deducts charged (weighting convention is its own choice)
+         * · returns null / dynamic-billing plugin absent -> charged stays null -> the card plugin falls back to legacy input+output
+         *   (*this is the backward-compatibility key: without billing, deductions are byte-identical to today) */
         let charged = null, detail = null;
         if (hooks.billing) {
           try {
@@ -816,7 +816,7 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
         stats.byChannel[ch.name] = stats.byChannel[ch.name] || { requests: 0, inputTokens: 0, outputTokens: 0 };
         stats.byChannel[ch.name].inputTokens += usage.input;
         stats.byChannel[ch.name].outputTokens += usage.output;
-        /* 缓存量单独累计(不影响老字段) —— 使用页/成本核算要看缓存命中率 */
+        /* cache counts tracked separately (old fields untouched) -- the usage page / cost accounting need hit rates */
         if (usage.cacheRead) stats.byChannel[ch.name].cacheReadTokens = (stats.byChannel[ch.name].cacheReadTokens || 0) + usage.cacheRead;
         if (usage.cacheWrite) stats.byChannel[ch.name].cacheWriteTokens = (stats.byChannel[ch.name].cacheWriteTokens || 0) + usage.cacheWrite;
         if (charged != null) stats.chargedTokens = (stats.chargedTokens || 0) + charged;
@@ -824,14 +824,14 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
         recordReq(status, ch.name, usage);
       },
     };
-    currentCtx = ctx;   /* ★把本次尝试挂到兜底结算上（_parser/_guard/_upReq 由转发层填） */
-    ctx.dropParamsAndRetry = dropParamsAndRetry;   /* ★供流内错误守卫调用（handleUpstreamResponse） */
+    currentCtx = ctx;   /* *attach this attempt to fallback settlement (_parser/_guard/_upReq are filled by the forwarding layer) */
+    ctx.dropParamsAndRetry = dropParamsAndRetry;   /* *called by the in-stream error guard (handleUpstreamResponse) */
     stats.byChannel[ch.name] = stats.byChannel[ch.name] || { requests: 0, inputTokens: 0, outputTokens: 0 };
     stats.byChannel[ch.name].requests++;
 
-    // 渠道级排队延迟(delayMs): 并发请求经 _gate 链按间隔串行发出, 缓解 429 限流
+    // channel-level queueing delay (delayMs): concurrent requests serialize through the _gate chain at intervals, easing 429 rate limits
     const delayMs = Math.min(120000, Number(ch.delayMs) || 0);
-    // 连接级错误 / HTML 冒充成功的同渠道重试(cfg.connRetry 次, 每次换全新连接)
+    // same-channel retries for connection-level errors / HTML-faked success (cfg.connRetry times, a fresh connection each time)
     let connRetries = 0;
     const maxConnRetry = Math.max(0, Number(cfg.connRetry) || 0);
     const retrySameOrNext = (why) => {
@@ -849,7 +849,7 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
       return false;
     };
     const doSend = (fresh) => {
-      /* ★保留上游连接的引用：硬上限到点要能强制断开它（否则请求永远悬挂） */
+      /* *keep a reference to the upstream connection: the hard cap must be able to force-disconnect it (otherwise the request hangs forever) */
       const upReq = upstreamRequest(cfg, ch, built.url, built.headers, built.bodyBuf, (err, upRes) => {
       if (err) {
         lastErrStatus = 502; lastErrMsg = 'upstream request failed: ' + err.message;
@@ -864,7 +864,7 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
         return sendError(clientFormat, res, 502, lastErrMsg);
       }
 
-      // 上游拿 HTML 网页冒充成功(CDN 验证页/中转站故障页): 视为可重试错误, 先重试本渠道再换渠道
+      // upstream fakes success with an HTML page (CDN challenge / relay failure page): retryable; retry the channel first, then switch
       const upCt = String(upRes.headers['content-type'] || '');
       if (upRes.statusCode < 400 && /text\/html/i.test(upCt)) {
         const chunks = [];
@@ -901,11 +901,11 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
       }
 
       if (upRes.statusCode >= 400) {
-        // 不可重试错误(如 400) 或已是最后候选 → 原样透传错误
+        // non-retryable (e.g. 400) or last candidate -> pass the error through unchanged
         const chunks = [];
         upRes.on('data', c => chunks.push(c));
         upRes.on('end', () => {
-          /* ★上游点名"不支持的参数" → 记入本渠道内存名单、剔除后重试本渠道（默认并不剥参） */
+          /* ★Upstream names an "unsupported parameter" -> put it on this channel's in-memory list, strip it, retry the same channel (nothing is stripped by default) */
           try {
             const named = parseRejectedParams(Buffer.concat(chunks).toString('utf8'));
             if (named.length && dropParamsAndRetry(named)) return;
@@ -919,7 +919,7 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
           } catch (e) { logErr('[resp] 错误透传响应头下发失败:', e.message); try { res.destroy(); } catch (_) {} }
         });
         upRes.on('error', () => {
-          /* 错误透传阶段读失败也要落账（否则又是一条"1 次请求 0 消耗"的幽灵记录） */
+          /* settle even when reading fails during error passthrough (otherwise another ghost "1 request / 0 usage" record) */
           stats.errors++;
           recordReq(502, ch.name, 0, 0);
           try { res.end(); } catch (_) {}
@@ -927,13 +927,13 @@ function handleChat(cfg, clientFormat, clientApi, req, res, urlInfo, bodyStr, ho
         return;
       }
 
-      // 成功(2xx) → 正常处理, 从此不可回退(正文非 JSON 冒充成功时仍可经 hook 重试)
+      // success (2xx) -> normal handling; no fallback from here (a non-JSON body faking success can still retry via hooks)
       handleUpstreamResponse(cfg, ch, clientFormat, clientApi, myCanonical, body, urlInfo, req, res, upRes, built, ctx, (why) => {
         lastErrStatus = 502; lastErrMsg = why;
         return retrySameOrNext(why);
       }, hooks);
       }, undefined, fresh ? makeFreshAgents(cfg, ch) : undefined);
-      ctx._upReq = upReq;   /* 挂到 ctx：硬超时 / 兜底结算要能拿到 */
+      ctx._upReq = upReq;   /* attached to ctx: hard timeout / fallback settlement need it */
       return upReq;
     };
     if (delayMs > 0) {

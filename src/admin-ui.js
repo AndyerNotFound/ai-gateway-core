@@ -1,58 +1,58 @@
 'use strict';
-/* admin-ui.js — 管理端 SDUI 页面（gcui v1, 2026-09-15）
+/** admin-ui.js -- admin-side SDUI pages (gcui v1, 2026-09-15)
  *
- * 为什么有这个文件：
- *   管理端原来是 App 里硬编码的原生页（AdminPages.kt 2694 行），改一次界面就得重编 APK。
- *   现在把页面搬到服务端渲染成 gcui JSON，App 只负责「渲染 + 执行动作」。
+   * why this file exists:
+*   The admin side used to be native pages hard-coded in the App (AdminPages.kt, 2694 lines); every UI change required rebuilding the APK.
+*   Now pages are served from the server as gcui JSON; the App only "renders + executes actions".
  *
- * 安全边界（与 App 侧 SduiController.adminApiScope 配套）：
- *   - 这里渲染的页面只有 App 的**管理端内核页**会加载（GET /admin/ui/<id>，需 x-admin-key）
- *   - App 侧只允许这类页面执行 adminApi（内核页白名单 /admin/），插件页面拿不到
- *   - 页面里**绝不放** adminKey / 上游 apiKey 等敏感字段：页面 JSON 会进 App 内存
+   * security boundary (paired with the App-side SduiController.adminApiScope):
+*   - Pages rendered here are loaded only by the App's **admin core pages** (GET /admin/ui/<id>, requires x-admin-key)
+*   - The App lets only this class of pages call adminApi (core-page whitelist /admin/); plugin pages cannot get it
+*   - **Never put** sensitive fields like adminKey / upstream apiKey into pages: the page JSON ends up in App memory
  *
- * 回退：页面渲染或加载失败时，App 自动切回原生页（三重回退, 见 gay-core docs/ADMIN-SDUI-PLAN.md）
+   * fallback: on render/load failure the App automatically switches back to the native page (triple fallback; see gay-core docs/ADMIN-SDUI-PLAN.md)
  */
 
-/* gcui 规范版本（App 的 SduiCapabilities.GCUI_VERSION 低于此值时会拒绝渲染并回退原生） */
+/** gcui spec version (the App's SduiCapabilities.GCUI_VERSION refuses to render below this and falls back to native) */
 const UI_VERSION = 1;
 
-/* ==================== App 能力协商 (2026-10-07 深度改造 §C) ====================
- * 背景: App 的 SduiCapabilities.headers() 一直在上报 X-GCUI-Components / X-GCUI-Icons /
- *   X-GCUI-Version, 但**服务端从来没有任何代码读它们**(全仓只有一处拿 x-gcui-version 判"是不是 App")。
- *   于是契约断在这里: App 上报了能力, 插件却不知道要降级什么 → 真机上渲染成红色错误块。
- * 现在: 服务端按上报能力**主动裁剪/降级**页面, 让插件无需自己适配每一版 App。
- *   拿不到头(网页端/老 App) → caps 为 null, 一切照旧(向后兼容)。
+/** ==================== App capability negotiation (2026-10-07 deep refactor §C) ====================
+   * background: the App's SduiCapabilities.headers() has always reported X-GCUI-Components / X-GCUI-Icons /
+*   X-GCUI-Version, but **server code has never read them** (exactly one place in the repo uses x-gcui-version to tell "is it the App").
+*   So the contract breaks here: the App reports capabilities, yet plugins do not know what to downgrade -> real devices render a red error block.
+   * now: the server **proactively trims/degrades** pages per reported capabilities, so plugins need not adapt to every App version themselves.
+*   Headers unavailable (web / old App) -> caps is null, everything stays as-is (backward compatible).
  */
 function parseCaps(headers) {
   if (!headers) return null;
   const ver = Number(headers['x-gcui-version']);
-  if (!ver) return null;                     // 没上报 → 不做任何裁剪(旧行为)
+if (!ver) return null;                     // not reported -> no trimming at all (old behavior)
   const split = k => String(headers[k] || '').split(',').map(x => x.trim()).filter(Boolean);
   const comps = split('x-gcui-components');
   const icons = split('x-gcui-icons');
   const navs = split('x-gcui-nav');
   return {
     version: ver,
-    components: comps.length ? new Set(comps) : null,   // null = 未上报具体清单 → 不裁剪
+    components: comps.length ? new Set(comps) : null,   // null = no specific list reported -> no trimming
     icons: icons.length ? new Set(icons) : null,
     nav: navs.length ? new Set(navs) : null,
   };
 }
-/** 图标降级: 白名单外 → 换成通用图标(而不是 App 端静默空白) */
+/** icon degradation: outside the whitelist -> swap in a generic icon (rather than a silent blank on the App) */
 const ICON_FALLBACK = 'apps';
 function downgradeIcon(name, caps) {
   if (!caps || !caps.icons) return name;
   const n = String(name || '').replace(/^msym:/, '');
   return caps.icons.has(n) ? name : ICON_FALLBACK;
 }
-/** 页面裁剪: 递归走 gcui 树 —— 未知组件降级成 text(可读的降级提示), 未知图标换通用图标。
- *  返回 {page, dropped:[]} 便于日志/自检。 */
+/** Page trimming: walk the gcui tree recursively -- unknown components degrade to text (readable downgrade notice), unknown icons swap to a generic icon.
+   *  returns {page, dropped:[]} for logging/self-inspection. */
 function downgradePage(node, caps, dropped) {
   if (!caps) return node;
   if (Array.isArray(node)) return node.map(n => downgradePage(n, caps, dropped)).filter(Boolean);
   if (!node || typeof node !== 'object') return node;
   let out = node;
-  /* 组件白名单: 未知 → 降级成一行可读文本(App 会渲染成红色错误块, 不如给明确提示) */
+/* Component whitelist: unknown -> degrade to one readable text line (the App would render a red error block; an explicit notice is better) */
   if (node.type && caps.components && !caps.components.has(node.type)) {
     dropped.push(node.type);
     out = {
@@ -64,7 +64,7 @@ function downgradePage(node, caps, dropped) {
   } else {
     out = Object.assign({}, node);
     if (out.icon) out.icon = downgradeIcon(out.icon, caps);
-    /* nav 模式降级: 不支持的 nav → 去掉(旧 App 按默认规则走, 不会坏) */
+    /* nav degradation: unsupported nav -> drop it (older Apps apply default rules; nothing breaks) */
     if (out.action && out.action.nav && caps.nav && !caps.nav.has(out.action.nav)) {
       out.action = Object.assign({}, out.action); delete out.action.nav;
     }
@@ -73,35 +73,35 @@ function downgradePage(node, caps, dropped) {
   if (out.template) out.template = downgradePage(out.template, caps, dropped);
   return out;
 }
-/** 供插件自检用的能力视图 (2026-10-07): 只暴露"能用什么", 不暴露内部集合。
- *  ctx.clientCaps() 返回它 —— 插件可在渲染前先问"这台 App 认不认我要用的组件"。
- *  拿不到头(网页端/旧 App) → null(插件应回退到"按最保守写法渲染")。 */
+/** the capability view for plugin self-checks (2026-10-07): exposes only "what can be used", never the internal sets.
+*  ctx.clientCaps() returns it -- plugins can ask before rendering "does this App support the components I want to use".
+   *  no header (web / old App) -> null (plugins should fall back to the most conservative rendering). */
 function capsView(caps) {
   if (!caps) return null;
   return {
     version: caps.version,
-    /** 组件白名单(数组); 未上报具体清单 → null(= 不做限制) */
+    /** component whitelist (array); no list reported -> null (= unrestricted) */
     components: caps.components ? [...caps.components] : null,
     icons: caps.icons ? [...caps.icons] : null,
     nav: caps.nav ? [...caps.nav] : null,
-    /** 支持某组件? 未上报清单 → 一律 true(不限制) */
+    /** supports a component? no list reported -> always true (no restriction) */
     hasComponent: (t) => !caps.components || caps.components.has(String(t || '')),
-    /** 支持某图标?(自动去 msym: 前缀) 未上报 → true */
+    /** supports an icon? (the msym: prefix is stripped automatically); unreported -> true */
     hasIcon: (i) => !caps.icons || caps.icons.has(String(i || '').replace(/^msym:/, '')),
-    /** 支持某导航模式? 未上报 → true */
+    /** supports a navigation mode? unreported -> true */
     hasNav: (n) => !caps.nav || caps.nav.has(String(n || '')),
-    /** 从组件列表里挑出本 App 认识的(插件可据此决定渲染哪几个) */
+    /** pick the components this App knows from the list (plugins decide which to render from it) */
     pick: (list) => (Array.isArray(list) ? list : []).filter(t => !caps.components || caps.components.has(String(t || ''))),
   };
 }
 
-/** 对整页做能力协商; caps 为 null → 原样返回(零开销、零行为变化) */
+/** capability-negotiate a whole page; caps null -> return as-is (zero overhead, zero behavior change) */
 function negotiate(page, caps) {
   if (!caps || !page || !page.root) return page;
   const dropped = [];
   const root = downgradePage(page.root, caps, dropped);
   if (dropped.length) {
-    /* 明确告知(而不是静默降级): 让管理员知道"这页在旧 App 上少了什么" */
+    /* say it out loud (rather than silently degrading): admins should know "what this page loses on older Apps" */
     const uniq = [...new Set(dropped)];
     root.children = (root.children || []).concat([{
       type: 'text', style: 'caption', color: '$onSurfaceVariant',
@@ -111,10 +111,10 @@ function negotiate(page, caps) {
   return Object.assign({}, page, { root });
 }
 
-/* ==================== 组件小工具 ==================== */
-/* ★2026-10-08 多语言治本(用户报「英文语言下还是几乎全是中文」):
- *  内核页 107 处文案硬编码中文 + dict-seed 的 en 只覆盖 3/24 内核页 key。
- *  治本 = 模块级 _t(render 时从 i18n bundle 取, 失败回退恒等) + txt/chip 助手过 _t()。 */
+/** ==================== Component helpers ==================== */
+/** *2026-10-08 i18n done properly (user report: "in English mode almost everything is still Chinese"):
+   *  kernel pages had 107 hardcoded Chinese strings + dict-seed's en covering only 3 of 24 kernel-page keys.
+   *  the real fix = module-level _t (read from the i18n bundle at render, identity fallback on failure) + txt/chip helpers routed through _t(). */
 let _t = (s) => (typeof s === 'string' ? s : s);
 const txt = (text, style, color) => {
   text = _t(text);
@@ -130,7 +130,7 @@ const tile = (value, label) => ({ type: 'metricTile', value: value, label: label
 const btn = (text, style, action, extra) =>
   Object.assign({ type: 'button', text: text, style: style, action: action }, extra || {});
 
-/** 药丸小按钮（原生实例卡的按钮就是 chip，比大按钮紧凑得多） */
+/** pill buttons (the native instance card's buttons are chips -- far more compact than large buttons) */
 const chip = (text, icon, action, extra) => {
   text = _t(text);
   const o = { type: 'chip', text: text };
@@ -139,10 +139,10 @@ const chip = (text, icon, action, extra) => {
   return Object.assign(o, extra || {});
 };
 
-/* 确认文案统一加一句"操作对象"，避免误点 */
+/** confirm dialogs uniformly name the target, preventing mis-taps */
 const confirmText = s => s + '\n\n（该操作立即生效）';
 
-/* ==================== 实例页 ==================== */
+/** ==================== Instances page ==================== */
 function buildInstances(gw, cfg) {
   let reqs = 0, errs = 0;
   const insts = (gw.store.index.instances || []).map(m => {
@@ -163,7 +163,7 @@ function buildInstances(gw, cfg) {
       statusText: running ? '运行中' : (enabled ? '未运行' : '已停用'),
       statusTone: running ? 'success' : (enabled ? 'warning' : 'neutral'),
       reqErr: (Number(s.requests) || 0) + ' / ' + (Number(s.errors) || 0),
-      /* 紧凑版：把端口/UID/请求合并成一行说明；子页 URL 服务端预生成 */
+      /* compact version: port/UID/requests merged into one line; sub-page URLs pre-generated server-side */
       meta: '端口 ' + (m.port || 0) + ' · UID ' + m.uid + ' · 请求/错误 ' +
         (Number(s.requests) || 0) + '/' + (Number(s.errors) || 0) +
         (running ? '' : ' · 未占用内存'),
@@ -175,7 +175,7 @@ function buildInstances(gw, cfg) {
     };
   });
 
-  /* ★实例卡片模板：list 的 template，`{{item.xxx}}` 指向当前实例 */
+  /* *instance card template: a list template where {{item.xxx}} points at the current instance */
   const instCard = {
     type: 'card',
     variant: 'outlined',
@@ -189,7 +189,7 @@ function buildInstances(gw, cfg) {
       },
       txt('{{item.meta}}', 'caption', '$onSurfaceVariant'),
       Object.assign(txt('✓ 当前管理实例', 'caption', '$primary'), { visible: '{{item.current}}' }),
-      /* 多选（勾中的 uid 进入 {{selected}}；没写 action 时 App 会自己刷新计数） */
+      /* multi-select (checked uids land in {{selected}}; without an action the App refreshes the count itself) */
       { type: 'checkbox', value: '{{item.uid}}', label: '选择' },
       {
         type: 'row', gap: 6, children: [
@@ -275,33 +275,33 @@ function buildInstances(gw, cfg) {
   };
 }
 
-/* ==================== 使用统计页（2026-09-18 重做：时段 / 折点粒度 / 持久历史） ==================== */
-/* 数据分两层（页面底部会向用户说明，别让用户以为每块都跟随时段）：
- *   ① 曲线 + 指标卡 = **持久历史**（usage-history.js：小时桶永久、10 分钟桶 30 天）
- *      → 可查任意时段、重启网关不丢；
- *   ② 渠道排行 / 最近请求 = 内存 `_stats`（各实例最近 200 条明细、重启清空）
- *      → 没有渠道×时间的历史维度，只能"自启动累计"。
- * 交互：切时段/粒度走 `open` + **同页换 query** → App 端判为"同页就地刷新"，不压栈
- *   （见 SduiController 内联导航语义）。两端页面路径不同（管理端 /admin/ui/usage、
- *   用户端 /ui/usage），所以 base 由 core.js 通过 render 的 ctx 传进来。
- * ★gcui 模板只认**纯路径**（`{{state.x}}`），不认 `{{a=='b'}}` 这种表达式
- *   → 选中态一律由服务端在 state 里算好纯值（spanA/spanB 为空即"本行无选中"）。
+/** ==================== Usage stats page (redone 2026-09-18: spans / break granularity / persistent history) ==================== */
+/** data has two layers (explained to users at the page bottom, so nobody assumes every block follows the span):
+*   (1) Curve + metric cards = **persistent history** (usage-history.js: hourly buckets forever, 10-minute buckets 30 days)
+*      -> query any time range, survives gateway restarts;
+*   (2) Channel ranking / recent requests = in-memory `_stats` (latest 200 detail records per instance, cleared on restart)
+*      -> no channel-by-time history dimension, only "accumulated since startup".
+   * interaction: span/granularity changes use `open` + **same-page query swap** -> the App reads it as "same-page in-place refresh", never pushing
+*   (see SduiController inline navigation semantics). The two sides use different page paths (admin /admin/ui/usage,
+*   user side /ui/usage), so base is passed in by core.js through the render ctx.
+   * *gcui templates accept **pure paths** only (`{{state.x}}`), not expressions like `{{a=='b'}}`
+*   -> selection state is always computed server-side into plain values in state (empty spanA/spanB means "no selection in this row").
  */
 const usageHist = require('./usage-history');
 
 const U_HOUR = 3600000;
-/** 本地时区偏移（毫秒）：**展示/输入用本地时间**，存储桶一律 UTC */
+/** local timezone offset (ms): **display/input in local time**, buckets always UTC */
 function uTzMin() { return -new Date().getTimezoneOffset(); }
-/** 毫秒 → 本地 'YYYY-MM-DD HH:MM' */
+/** ms -> local 'YYYY-MM-DD HH:MM' */
 function uLocal(ms) {
   const s = new Date(ms + uTzMin() * 60000).toISOString();
   return s.slice(0, 10) + ' ' + s.slice(11, 16);
 }
-/** 毫秒 → 本地 'HH:MM:SS'（最近请求列表） */
+/** ms -> local 'HH:MM:SS' (recent request list) */
 function uLocalTime(ms) {
   return new Date(ms + uTzMin() * 60000).toISOString().slice(11, 19);
 }
-/** 用户输入（本地时间）→ 毫秒；接受 '2026-09-18 08' / '2026-09-18T08:30' / '2026-09-18' */
+/** user input (local time) -> ms; accepts '2026-09-18 08' / '2026-09-18T08:30' / '2026-09-18' */
 function uParseLocal(v) {
   const m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2})(?::(\d{1,2}))?)?/.exec(String(v || '').trim());
   if (!m) return 0;
@@ -314,10 +314,10 @@ const U_SPAN_A = [{ value: '1h', text: '近 1 小时' }, { value: '6h', text: '�
 const U_SPAN_B = [{ value: 'today', text: '今天' }, { value: 'yesterday', text: '昨天' }, { value: 'all', text: '全部' }, { value: 'custom', text: '自定义' }];
 const U_GRAN_OPTS = [{ value: 'min10', text: '10 分' }, { value: 'min30', text: '30 分' }, { value: 'hour', text: '小时' }, { value: 'day', text: '天' }];
 
-/** 分段选择器：点击时把 value 写进 inputs[key]（Renderer.segmented 行为），动作里用 {{input.<key>}} 取 */
+/** segmented picker: a tap writes value into inputs[key] (Renderer.segmented behavior); actions read it via {{input.<key>}} */
 const seg = (key, options, selected, action) => ({ type: 'segmented', key: key, options: options, selected: selected, action: action });
 
-/** 时段 → [fromMs, toMs]（本地语义）；非法输入回退默认窗口，绝不抛错 */
+/** span -> [fromMs, toMs] (local-time semantics); illegal input falls back to the default window; never throws */
 function uResolveRange(span, q, now, keyId) {
   const dayStart = (ms) => { const d = new Date(ms + uTzMin() * 60000); d.setUTCHours(0, 0, 0, 0); return d.getTime() - uTzMin() * 60000; };
   switch (span) {
@@ -329,7 +329,7 @@ function uResolveRange(span, q, now, keyId) {
     case 'all': { const r = usageHist.range(keyId); return { from: r.minMs || (now - 24 * U_HOUR), to: now }; }
     case 'custom': {
       const f = uParseLocal(q.get('from')), t = uParseLocal(q.get('to'));
-      /* 输入精确到小时 → 该小时整段都算进去（+59:59.999） */
+      /* hour-precision input -> the whole hour counts (+59:59.999) */
       if (f && t && t >= f) return { from: f, to: t + U_HOUR - 1 };
       const r = usageHist.range(keyId); return { from: r.minMs || (now - 24 * U_HOUR), to: now };
     }
@@ -340,16 +340,16 @@ function uResolveRange(span, q, now, keyId) {
 function buildUsage(gw, cfg, q, ctx) {
   const ic = gw.pool.instances.get(cfg._uid);
   const base = (ctx && ctx.base) || '/admin/ui/usage';
-  /* ★按用户隔离（2026-09-18）：ctx.scope = { keyId, name }，由 core.js 从**请求自带的卡密**解析
-   *   （只有用户端 /ui/usage 会带；管理端 /admin/ui/usage 不带 = 全站视图，行为不变）。
-   *   为什么：用户端页面以前忽略请求里的卡密，任何持卡用户打开都看到**全站**请求
-   *   —— 表现为"另一个从没调用过的用户也能看到请求"。 */
+  /* *per-user isolation (2026-09-18): ctx.scope = { keyId, name }, resolved by core.js from **the request's own key card**
+   *   (only the user-side /ui/usage carries it; the admin /admin/ui/usage does not = site-wide view, behavior unchanged).
+   *   why: user-side pages used to ignore the request's key card, so any card holder saw **site-wide** requests
+*   -- visible as "a user who never called also sees the request". */
   const scope = (ctx && ctx.scope) || null;
   const meKey = (scope && scope.keyId) ? String(scope.keyId) : '';
   const meMode = !!meKey;
   const meName = (scope && scope.name) || '';
-  /* ★身份不明（卡密无效/过期/没带凭证）→ **隐藏统计**，绝不退回全站视图：
-   *   否则"卡密失效的用户"反而能看到别人的请求（安全默认 = 宁可不给）。 */
+  /* *unknown identity (invalid/expired card, or no credentials at all) -> **hide the stats**; never fall back to the site-wide view:
+   *   otherwise "users with expired cards" could see other people's requests (secure default = give nothing). */
   if (scope && scope.denied) {
     return {
       title: '使用统计',
@@ -382,9 +382,9 @@ function buildUsage(gw, cfg, q, ctx) {
   const now = Date.now();
   const rg = uResolveRange(span, qq, now, meMode ? meKey : undefined);
 
-  /* ★default 聚合全实例(§45)：跨实例路由的请求计入**目标实例**的 _stats，
-   *   只看 cfg._uid 会漏掉它们。历史桶同样要按多 uid 合并查。
-   *   ★meMode（用户端）时历史桶改查 **per-key 桶**（queryMany 的第 5 参 keyId）。 */
+  /* *default aggregates all instances (§45): cross-instance requests count into the **target instance's** _stats,
+   *   looking only at cfg._uid would miss them. History buckets must merge across uids too.
+   *   in meMode (user side), history buckets switch to **per-key buckets** (queryMany's 5th arg keyId). */
   const isDef = cfg._name === 'default';
   const targets = isDef ? [...gw.pool.instances.values()].filter(x => x) : [ic];
   const uids = targets.map(x => x._uid);
@@ -394,13 +394,13 @@ function buildUsage(gw, cfg, q, ctx) {
   const sum = series.reduce((a, x) => a + x.count, 0);
   const avg = series.length ? Math.round((sum / series.length) * 10) / 10 : 0;
 
-  /* ---- 内存侧（渠道排行 / 最近请求 / 运行时长）---- */
+  /* ---- In-memory side (channel ranking / recent requests / uptime) ---- */
   let startMs = 0; const allRecent = []; const byChMap = {};
   let myCharged = 0;
   for (const tt of targets) {
     const s = (tt && tt._stats) || {};
     if (meMode) {
-      /* ★只看自己的：累计量取 stats.byKey[<keyId>]，明细取 recent 里 keyId 相同的那些 */
+      /* *own data only: totals from stats.byKey[<keyId>], details from recent entries sharing that keyId */
       const b = (s.byKey || {})[meKey];
       if (b) {
         const st0 = b.startedAt ? new Date(String(b.startedAt).replace(' ', 'T') + 'Z').getTime() : 0;
@@ -431,7 +431,7 @@ function buildUsage(gw, cfg, q, ctx) {
     }))
     .sort((a, b) => b.reqs - a.reqs)
     .slice(0, 10);
-  /* 最近请求：明细只在内存里 → **按所选时段过滤**（时段超出内存范围时就是空，页面会说明） */
+  /* recent requests: details live only in memory -> **filter by the selected span** (empty when the span exceeds memory; the page explains this) */
   const recent = allRecent
     .map(r => ({ r: r, ms: new Date(String(r.time || '').replace(' ', 'T') + 'Z').getTime() }))
     .filter(x => isFinite(x.ms) && x.ms >= rg.from && x.ms <= rg.to)
@@ -450,7 +450,7 @@ function buildUsage(gw, cfg, q, ctx) {
   const state = {
     span: span,
     gran: hist.gran,
-    /* 两行分段控件各自的高亮值：不在本行 → 空串（该行无高亮） */
+    /* each segmented row's highlighted value: not in this row -> empty string (that row shows no highlight) */
     spanA: U_SPAN_A.some(o => o.value === span) ? span : '',
     spanB: U_SPAN_B.some(o => o.value === span) ? span : '',
     series: series,
@@ -473,7 +473,7 @@ function buildUsage(gw, cfg, q, ctx) {
     hasChannels: byChannel.length > 0,
     meMode: meMode,
     scopeName: meName,
-    /* 第三个指标卡：管理端看"运行时长"，用户端那没意义 → 换成他自己的累计计费量 */
+    /* third stat card: admins see "uptime"; meaningless for users -> replaced with their own cumulative billing */
     tile3: meMode ? (Math.round(myCharged * 1e6) / 1e6) : upMin,
     tile3Label: meMode ? '计费(自启动)' : '运行(分)',
     memNote: meMode
@@ -484,9 +484,9 @@ function buildUsage(gw, cfg, q, ctx) {
       : '曲线与指标来自持久历史：小时桶永久保存 · 10 分钟桶保留 30 天',
   };
 
-  /* ★2026-09-18: target 必须带 `page:` 协议前缀 —— App 端 open 动作只认
-   *   `page:` / `http(s)://`，裸路径会被判「未知页面: /ui/usage?span=…」直接丢弃。
-   *   （GCUI 的导航协议：换页/换 query 一律 page:<path>[?query]，见 SduiController.dispatch） */
+/* ★2026-09-18: target must carry the `page:` protocol prefix -- the App-side open action only accepts
+   *   `page:` / `http(s)://`; a bare path is judged "unknown page: /ui/usage?span=..." and dropped outright.
+   *   (GCUI's navigation protocol: page/query changes always use page:<path>[?query]; see SduiController.dispatch) */
   const openTo = (qs) => ({ type: 'open', nav: 'replace', target: 'page:' + base + '?' + qs });
 
   return {
@@ -497,7 +497,7 @@ function buildUsage(gw, cfg, q, ctx) {
         txt(meMode ? '我的使用统计' : '使用统计', 'title3'),
         ...(meMode ? [txt('只统计「' + (meName || '当前卡密') + '」发起的请求。管理端「使用」页可查看全站统计。', 'caption', '$onSurfaceVariant')] : []),
         txt('{{state.rangeText}}', 'caption', '$onSurfaceVariant'),
-        /* ---- 时段：两行分段（一行 4 个，避免 7 个选项在手机上挤成一团）---- */
+        /* ---- Span: two segmented rows (4 per row; 7 options would cram on phones) ---- */
         seg('spanA', U_SPAN_A, '{{state.spanA}}', openTo('span={{input.spanA}}&g={{state.gran}}')),
         seg('spanB', U_SPAN_B, '{{state.spanB}}', openTo('span={{input.spanB}}&g={{state.gran}}')),
         ...(isCustom ? [
@@ -509,11 +509,11 @@ function buildUsage(gw, cfg, q, ctx) {
           },
           btn('应用时段', 'tonal', openTo('span=custom&from={{input.cfrom}}&to={{input.cto}}&g={{state.gran}}')),
         ] : []),
-        /* ---- 折点粒度（动态缩放：桶少 = 折点密，桶多 = 自动变稀）---- */
+        /* ---- Break granularity (dynamic: few buckets = dense points; many = automatically sparser) ---- */
         txt('折点粒度', 'caption', '$onSurfaceVariant'),
         seg('granSel', U_GRAN_OPTS, '{{state.gran}}', openTo('span={{state.span}}&g={{input.granSel}}')),
         gap(4),
-        /* ---- 指标卡（跟随时段）---- */
+        /* ---- Stat cards (follow the selected span) ---- */
         {
           type: 'row', gap: 8, children: [
             tile('{{state.req}}', '请求'),
@@ -560,21 +560,21 @@ function buildUsage(gw, cfg, q, ctx) {
   };
 }
 
-/* ==================== 渠道页 ==================== */
+/** ==================== Channels page ==================== */
 
-/** 当前实例配置（loadInstance 不在时给空对象，便于测试桩） */
+/** the current instance config (an empty object when loadInstance is absent, easing test stubs) */
 function instCfg(gw, uid) {
   return (typeof gw.store.loadInstance === 'function') ? (gw.store.loadInstance(uid) || {}) : {};
 }
 
-/** 实例路径前缀（非 default 实例的插件路由要带 /<name> 前缀） */
+/** instance path prefix (plugin routes of non-default instances must carry the /<name> prefix) */
 function instPrefix(cfg) {
   return (cfg && cfg._name && cfg._name !== 'default') ? '/' + cfg._name : '';
 }
 
-/* 探测成功率缓存 —— probe 插件是异步的，而页面渲染必须**同步**（gcui 契约）。
- * 策略：读上次结果 + 后台刷新。首次打开可能还没成功率，刷新一下就有；
- * 好处是整页不会为了一个 badge 去等 HTTP（probe 没装时也不拖慢页面）。 */
+/** Probe success-rate cache -- the probe plugin is async while page rendering must be **synchronous** (gcui contract).
+   * strategy: read the last result + background refresh. The first open may lack success rates; refresh once and they appear;
+   * benefit: the page never waits on HTTP for one badge (and an absent probe never slows the page). */
 const rateCache = { uid: 0, at: 0, data: null, busy: false };
 
 async function refreshRates(gw, cfg) {
@@ -595,7 +595,7 @@ function buildChannels(gw, cfg) {
   const c = instCfg(gw, uid);
   const channels = Array.isArray(c.channels) ? c.channels : [];
   const rates = (rateCache.uid === uid) ? rateCache.data : null;
-  if (Date.now() - rateCache.at > 15000) refreshRates(gw, cfg);   /* 后台刷，不等待 */
+if (Date.now() - rateCache.at > 15000) refreshRates(gw, cfg);   /* refreshed in background, not awaited */
 
   const list = channels.map((ch, i) => {
     const nm = String(ch.name || '?');
@@ -614,7 +614,7 @@ function buildChannels(gw, cfg) {
         (ch.useResponses ? ' · ⚡Responses' : '') +
         (ch.proxy ? ' · 代理 ' + ch.proxy : '') +
         (ch.insecure ? ' · 跳过证书校验' : ''),
-      /* ★URL 在服务端就编码好：渠道名可能是中文，App 直接拼进 URL 会报非法地址 */
+      /* *URLs are encoded server-side: channel names may contain CJK, and the App would reject a naively built URL as invalid */
       editUrl: '/admin/ui/channel-edit?name=' + encodeURIComponent(nm),
     };
   });
@@ -697,7 +697,7 @@ function buildChannels(gw, cfg) {
   };
 }
 
-/** 编辑/新增渠道的表单字段（两边共用） */
+/** form fields for editing/adding a channel (shared by both sides) */
 function channelFormFields(ch, isNew) {
   const modelsTxt = Array.isArray(ch.models) ? ch.models.join(', ') : '';
   const mapTxt = (ch.modelMap && typeof ch.modelMap === 'object')
@@ -718,7 +718,7 @@ function channelFormFields(ch, isNew) {
   ];
 }
 
-/** 提交体：origName 由服务端填（App 的表单只管字段值） */
+/** submission body: origName is filled by the server (the App's form only carries field values) */
 function channelSubmitBody(uid, origName) {
   const body = { origName: origName || '' };
   const keys = ['name', 'type', 'baseUrl', 'apiKey', 'models', 'modelMap', 'proxy', 'delayMs', 'isDefault', 'useResponses', 'insecure'];
@@ -777,15 +777,15 @@ function buildChannelNew(gw, cfg, q) {
   };
 }
 
-/* ==================== 插件页 ==================== */
+/** ==================== Plugins page ==================== */
 
-/** 当前实例的插件清单（来自插件系统，异常不该拖垮页面） */
+/** the current instance's plugin list (from the plugin system; failures must not take the page down) */
 function pluginList(gw, cfg) {
   try {
     if (gw.plugins && typeof gw.plugins.listForInstance === 'function') {
       return gw.plugins.listForInstance(cfg._uid, cfg) || [];
     }
-  } catch (_) { /* 忽略 */ }
+} catch (_) { /* ignored */ }
   return [];
 }
 
@@ -848,7 +848,7 @@ function buildPlugins(gw, cfg, q) {
     txt('插件', 'title3'),
     txt('当前实例「' + String(cfg._name || '') + '」共 ' + all.length + ' 个插件，已停用 ' + off + ' 个',
       'caption', '$onSurfaceVariant'),
-    /* 搜索：input + submit（输入框的值靠点击时的完整作用域解析） */
+    /* search: input + submit (the input's value resolves through the full scope at tap time) */
     {
       type: 'input', key: 'q', label: '搜索插件（名称 / ID / 说明）', value: kw,
       shape: 'pill', leadingIcon: 'msym:search',
@@ -875,7 +875,7 @@ function buildPlugins(gw, cfg, q) {
   };
 }
 
-/** 插件 schema → 表单字段（type: string/number/boolean） */
+/** plugin schema -> form fields (type: string/number/boolean) */
 function pluginConfigFields(schema, config) {
   const out = [];
   for (const f of (schema || [])) {
@@ -926,9 +926,9 @@ function buildPlugin(gw, cfg, q) {
       confirm: '切换该插件的启用状态？停用后它提供的接口会立即失效。',
     },
   });
-  /* ★兜底入口（2026-09-19 事故修复）：两个**写死布尔**的按钮，不依赖任何模板变量。
-   *  背景：App 把 _checked 注在 action 上、body 却用渲染作用域解析 → {{_checked}} 解析成空串，
-   *  旧服务端 !!"": false → 插件"关得掉、永远开不起来"。这里保证任何情况下都能改状态。 */
+  /* *fallback entries (2026-09-19 incident fix): two buttons with **hardcoded booleans**, depending on no template variables.
+*  Background: the App attaches _checked to the action while the body resolves in render scope -> {{_checked}} resolves to an empty string,
+   *  the old server turned !!"": false, so plugins could "switch off but never on". This guarantees the state can always change. */
   kids.push({
     type: 'row', gap: 8, children: [
       btn('启用该插件', 'tonal', { type: 'adminApi', method: 'POST', path: '/admin/api/plugin-enable', body: { id: pid, enable: true } }, { weight: 1 }),
@@ -958,10 +958,10 @@ function buildPlugin(gw, cfg, q) {
   return { title: '插件', state: {}, root: { type: 'column', gap: 10, children: kids } };
 }
 
-/* ==================== 公告页 ==================== */
-/* 公告是 serverInfo.announcement 里的**一个字符串**（一行一条），格式与 App 的 Notices.kt 完全一致：
- *   普通公告 / [2026/09/12 13:20] 内容 / @u1234 内容 / [时间] @u1 内容
- * ⚠️ 定向只是展示层过滤，原文仍在公开串里（任何能读 bootstrap 的人都能看到），别发敏感内容。 */
+/** ==================== Notices page ==================== */
+/** notices are **one string** inside serverInfo.announcement (one per line), formatted exactly like the App's Notices.kt:
+ *   plain notice / [2026/09/12 13:20] content / @u1234 content / [time] @u1 content
+   * targeting is display-layer filtering only; the raw text stays in the public string (anyone reading bootstrap can see it) -- never post sensitive content. */
 function noticeParse(raw) {
   const out = [];
   for (const line of String(raw == null ? '' : raw).split('\n')) {
@@ -1049,7 +1049,7 @@ function buildNotice(gw, cfg) {
     });
   }
   kids.push(gap(4));
-  /* 两个入口（对齐原生：新增公告 / 添加时间线） */
+  /* two entries (matching native: add a notice / add a timeline entry) */
   kids.push({
     type: 'row', gap: 10, children: [
       btn('新增公告', 'filled', { type: 'open', target: 'page:/admin/ui/notice-new?timed=0' }, { weight: 1 }),
@@ -1060,7 +1060,7 @@ function buildNotice(gw, cfg) {
   return { title: '公告', state: { notices: list }, root: { type: 'column', gap: 10, children: kids } };
 }
 
-/** 新增公告 / 添加时间线（timed=1 时预置时间戳） */
+/** add a notice / add a timeline entry (timestamps pre-filled when timed=1) */
 function buildNoticeNew(gw, cfg, q) {
   const timed = String((q && q.get ? q.get('timed') : '1') || '1') !== '0';
   return {
@@ -1089,7 +1089,7 @@ function buildNoticeNew(gw, cfg, q) {
   };
 }
 
-/** 编辑公告（只改内容，时间/定向保持原样） */
+/** edit a notice (content only; time/targeting untouched) */
 function buildNoticeEdit(gw, cfg, q) {
   const i = Number((q && q.get ? q.get('i') : 0) || 0);
   const si = (typeof gw.store.getServerInfo === 'function') ? (gw.store.getServerInfo() || {}) : {};
@@ -1118,18 +1118,18 @@ function buildNoticeEdit(gw, cfg, q) {
   };
 }
 
-/* ==================== 用户 / 卡密页 ==================== */
+/** ==================== Users / key cards page ==================== */
 
-/** 代调插件管理端点（页面渲染期直接读数据，不走 App 的 adminApi） */
+/** proxy-call plugin admin endpoints (data is read directly during page rendering, not via the App's adminApi) */
 async function pluginGet(gw, cfg, plugin, sub) {
   if (typeof gw.selfReq !== 'function') return null;
   return gw.selfReq(cfg, 'GET', instPrefix(cfg) + '/plugins/' + plugin + sub, null, 9000);
 }
 
-/* ★能力查询 (2026-10-07 深度改造): 内核页不再写死插件名。
- * 以前 buildUsers() 里是 pluginGet(gw, cfg, 'auth-user', '/admin/users') —— 内核必须知道
- * 认证插件叫 auth-user。现在改成问「谁提供 user-admin 能力」, 提供方是谁内核完全不关心。
- * 返回 {cap, adm} —— adm 是提供方自报的动作路径(pluginId + 各端点), 用于拼 adminApi 动作。 */
+/** *capability queries (2026-10-07 deep refactor): kernel pages no longer hardcode plugin names.
+* previously buildUsers() did pluginGet(gw, cfg, 'auth-user', '/admin/users') -- the core had to know
+   * the auth plugin was auth-user. Now it asks "who provides the user-admin capability"; the kernel cares nothing for who that is.
+* returns {cap, adm} -- adm is the provider-reported action paths (pluginId + endpoints), used to assemble adminApi actions. */
 function capOf(gw, cfg, name) {
   try {
     const pm = gw && gw.plugins;
@@ -1137,7 +1137,7 @@ function capOf(gw, cfg, name) {
     return pm.requireCapability(cfg._uid, name) || null;
   } catch (_) { return null; }
 }
-/** 取能力提供方声明的动作面(含 pluginId); 缺能力 → null(页面据此显示空态, 不崩) */
+/** fetch the capability provider's declared action surface (pluginId included); missing -> null (the page shows an empty state from it, never crashes) */
 function capAdmin(gw, cfg, name) {
   const cap = capOf(gw, cfg, name);
   if (!cap || typeof cap.adminApi !== 'function') return null;
@@ -1154,7 +1154,7 @@ async function buildUsers(gw, cfg, q) {
 
   let items = [], total = 0, rawCount = 0;
   if (tab === 'keys') {
-    /* ★能力优先: 谁提供 cardkey-admin 就用谁; 拿不到 → 空态(而不是 404/崩溃) */
+    /* *capability first: whoever provides cardkey-admin is used; unavailable -> an empty state (not 404/crash) */
     const ckCap = capOf(gw, cfg, 'cardkey-admin');
     const all = ckCap && typeof ckCap.listKeys === 'function' ? (ckCap.listKeys() || []) : [];
     rawCount = all.length;
@@ -1181,7 +1181,7 @@ async function buildUsers(gw, cfg, q) {
       };
     });
   } else {
-    /* ★能力优先: 谁提供 user-admin 就用谁 */
+    /* *capability first: whoever provides user-admin is used */
     const usrCap = capOf(gw, cfg, 'user-admin');
     const all = usrCap && typeof usrCap.listUsers === 'function' ? (usrCap.listUsers() || []) : [];
     rawCount = all.length;
@@ -1212,12 +1212,12 @@ async function buildUsers(gw, cfg, q) {
 
   const pages = Math.max(1, Math.ceil(total / size));
   const base = '/admin/ui/users?tab=' + tab + (kw ? '&q=' + encodeURIComponent(kw) : '');
-  /* 动作路径由**能力提供方自报**(不再写死 'auth-user'); 缺能力 → 动作指向空, 按钮不可见 */
+  /* action paths are **provider-declared** (never hardcoded to 'auth-user'); capability missing -> the action is empty and the button invisible */
   const userAdm = capAdmin(gw, cfg, 'user-admin') || { pluginId: '', list: '' };
   const keyAdm = capAdmin(gw, cfg, 'cardkey-admin') || { pluginId: '', list: '', update: '' };
   const canAct = !!(userAdm.pluginId), canActKey = !!(keyAdm.pluginId);
-  /* ★2026-10-08 对齐原生页功能: ①头像(UID 首字) ②点卡片→编辑 ③操作行改 chip(药丸, 窄屏不换行)
-   *  ④补「复制 UID」。SDUI 组件全支持(avatar/chip/card), App 零参与, 不用重编。 */
+  /* *2026-10-08 native-page feature parity: (1) avatar (first char of the UID) (2) tap card -> edit (3) action row as chips (pills, no wrap on narrow screens)
+   *  (4) adds "copy UID". All SDUI components support it (avatar/chip/card); zero App involvement, no rebuild. */
   const userCard = {
     type: 'card', variant: 'outlined', action: { type: 'open', target: 'page:/admin/ui/user-edit?uid={{item.uid}}' },
     children: [
@@ -1268,7 +1268,7 @@ async function buildUsers(gw, cfg, q) {
       },
     ],
   };
-  /* ★2026-10-08 keyCard 对齐 userCard: ①头像(卡名首字) ②点卡片→编辑(key-edit) ③chip 操作行 */
+  /* *2026-10-08 keyCard aligns with userCard: (1) avatar (first char of the card name) (2) tap card -> edit (key-edit) (3) chip action row */
   const keyCard = {
     type: 'card', variant: 'outlined', action: { type: 'open', target: 'page:/admin/ui/key-edit?key={{item.k}}' },
     children: [
@@ -1339,7 +1339,7 @@ async function buildUsers(gw, cfg, q) {
   } else {
     kids.push({ type: 'list', items: '{{state.items}}', columns: 1, template: tab === 'keys' ? keyCard : userCard });
   }
-  /* ★添加入口(2026-10-08): 移到搜索框下面(高频操作一眼看到), 与原生页底部按钮同能力 */
+  /* *add entry (2026-10-08): moved below the search box (a frequent action, visible at a glance); same capability as the native page's bottom button */
   kids.push({
     type: 'button', text: tab === 'keys' ? '生成卡密' : '添加用户', style: 'filled', shape: 'pill', icon: 'msym:add',
     action: { type: 'open', target: tab === 'keys' ? 'page:/admin/ui/key-create' : 'page:/admin/ui/user-create' },
@@ -1358,12 +1358,12 @@ async function buildUsers(gw, cfg, q) {
   };
 }
 
-/* ==================== 用户添加 / 编辑(内核子页, menu:false) ====================
- * ★2026-10-08: App 原生页的「添加用户/编辑资料」退役为回退 —— 治本 = 内核页驱动。
- * 端点走能力(capOf 'user-admin'), 不写死 auth-user。表单提交 = adminApi + {{input.*}}
- * (App 端点击时用完整作用域解析)。 */
+/** ==================== User add / edit (kernel sub-page, menu:false) ====================
+* ★2026-10-08: the App's native "add user / edit profile" pages are retired to fallback -- the real fix is core-page driven.
+   * endpoints go through the capability (capOf 'user-admin'), never hardcoded to auth-user. Form submits = adminApi + {{input.*}}
+   * (the App resolves it through the full scope at tap time). */
 
-/** 用户添加表单: 用户名/密码/昵称/分组/额度, 创建后自动发主卡 */
+/** user add form: username/password/nickname/group/quota; a primary card is issued automatically on creation */
 async function buildUserCreate(gw, cfg, q) {
   const usrCap = capOf(gw, cfg, 'user-admin');
   const groups = (() => { try { const c = capOf(gw, cfg, 'user-groups'); return c && c.groups ? (c.groups() || []) : []; } catch (_) { return []; } })();
@@ -1390,7 +1390,7 @@ async function buildUserCreate(gw, cfg, q) {
   };
 }
 
-/** 用户编辑表单: 资料(名称/昵称/邮箱/备注/分组) + 重置密码 + 封禁/解封 + 删除 */
+/** user edit form: profile (name/nickname/email/note/group) + password reset + ban/unban + delete */
 async function buildUserEdit(gw, cfg, q) {
   const usrCap = capOf(gw, cfg, 'user-admin');
   if (!usrCap || !usrCap.listUsers) return missingPage('没有可用的用户管理能力（user-admin）。');
@@ -1431,16 +1431,16 @@ async function buildUserEdit(gw, cfg, q) {
   };
 }
 
-/* ==================== 实例详情 / 改名 / 新建 ==================== */
+/** ==================== Instance details / rename / create ==================== */
 
-/** 统一取 query 里的 uid + 实例 meta（找不到返回 null → 页面显示提示） */
+/** uniformly fetch uid + instance meta from the query (returns null when missing -> the page shows a hint) */
 function instMeta(gw, q) {
   const uid = Number(q && q.get ? (q.get('uid') || 0) : 0);
   const list = gw.store.index.instances || [];
   return { uid: uid, meta: list.find(m => m.uid === uid) || null };
 }
 
-/** 找不到对象时的兜底页（不让 App 收到 404 而回退到原生页） */
+/** the fallback page when the target is missing (never let the App see a 404 and bounce to the native page) */
 function missingPage(msg) {
   return {
     title: '注意',
@@ -1499,7 +1499,7 @@ function buildInstanceDetail(gw, cfg, q) {
   };
 }
 
-/** 「编辑实例」= 接入参数表单（对齐旧版 App：名称 / 端口 / 监听地址 / adminKey） */
+/** "edit instance" = the onboarding params form (mirroring the old App: name / port / listen address / adminKey) */
 function buildInstanceEdit(gw, cfg, q) {
   const r = instMeta(gw, q);
   if (!r.meta) return missingPage('实例不存在或已被删除。');
@@ -1556,7 +1556,7 @@ function buildInstanceEdit(gw, cfg, q) {
       txt(running ? '当前正在运行' : '当前未运行', 'caption', '$onSurfaceVariant'),
     ],
   });
-  /* 兜底入口：实例启停同样给写死布尔的按钮（误停一个实例的代价比误停插件大得多） */
+  /* fallback entries: instance start/stop also gets hardcoded-boolean buttons (mistakenly stopping an instance costs far more than a plugin) */
   kids.push({
     type: 'row', gap: 8, children: [
       btn('启用该实例', 'tonal', { type: 'adminApi', method: 'POST', path: '/admin/api/instance/' + uid + '/enable', body: { enable: true } }, { weight: 1 }),
@@ -1590,9 +1590,9 @@ function buildInstanceNew(gw, cfg, q) {
   };
 }
 
-/* ==================== 页面注册表 ==================== */
-/* ★新增页面：在这里加一项，并在 App 的内置页 id 里对应（或由 App 追加菜单项）。
- *  id 必须与 App 侧菜单 id 一致才会"替换"那一页；不一致则作为新菜单项追加。 */
+/** ==================== Page registry ==================== */
+/** *new pages: add an entry here and match it to the App's built-in page ids (or let the App append a menu item).
+   *  the id must match the App-side menu id to "replace" that page; otherwise it appends as a new menu item. */
 const PAGES = {
   instances: { title: '实例', subtitle: '单进程托管全部实例', icon: 'grid', build: buildInstances },
   usage: { title: '使用', subtitle: '请求统计与排行', icon: 'wallet', build: buildUsage },
@@ -1603,21 +1603,21 @@ const PAGES = {
   'user-create': { title: '添加用户', icon: 'add', menu: false, build: buildUserCreate },
   'user-edit': { title: '编辑用户', icon: 'edit', menu: false, build: buildUserEdit },
   'lang-set': { title: '语言 / Language', icon: 'translate', menu: true, build: buildLangSet },
-  /* 子页：menu:false 不进侧边栏，只做菜单项过滤，仍可被 open 打开 */
+  /* sub-pages: menu:false keeps them out of the sidebar (menu filtering only); still openable */
   plugin: { title: '插件设置', icon: 'settings', menu: false, build: buildPlugin },
   'notice-new': { title: '新增公告', icon: 'add', menu: false, build: buildNoticeNew },
   'notice-edit': { title: '编辑公告', icon: 'edit', menu: false, build: buildNoticeEdit },
-  /* 子页：menu:false 不进侧边栏，只做菜单项过滤，仍可被 open 打开 */
+  /* sub-pages: menu:false keeps them out of the sidebar (menu filtering only); still openable */
   'channel-edit': { title: '编辑渠道', icon: 'edit', menu: false, build: buildChannelEdit },
   'channel-new': { title: '新增渠道', icon: 'add', menu: false, build: buildChannelNew },
-  /* 以下三页只是「实例页」的子页，**不进侧边栏**（menu:false）—— 只做菜单项过滤，仍可被 open 打开 */
+/* The three pages below are only sub-pages of the "instances page", **not in the sidebar** (menu:false) -- only filtered from menu items, still openable via open */
   'instance-detail': { title: '实例详情', icon: 'info', menu: false, build: buildInstanceDetail },
   'instance-edit': { title: '编辑实例', icon: 'edit', menu: false, build: buildInstanceEdit },
   'instance-new': { title: '新建实例', icon: 'add', menu: false, build: buildInstanceNew },
 };
 
-/** 给 App 的 bootstrap.adminUi（服务端声明哪些管理页可用服务端界面）
- *  ★menu:false 的页不下发 —— 否则 App 会把「实例详情/改名/新建」当成侧边栏菜单项追加进去。 */
+/** for the App's bootstrap.adminUi (the server declaring which admin pages have server-side UIs)
+*  Pages with menu:false are not sent down -- otherwise the App would append "instance details / rename / create" as sidebar menu items. */
 function manifest(extraPages) {
   const list = Object.keys(PAGES).filter(id => PAGES[id].menu !== false).map(id => ({
     id: id,
@@ -1626,8 +1626,8 @@ function manifest(extraPages) {
     icon: PAGES[id].icon,
     ui: '/admin/ui/' + id,
   }));
-  /* 插件贡献的页面（registerAdminUi）：同名 id **覆盖**内核页（插件想接管某页时这么干）；
-   * 新 id 追加为新菜单项。menu:false 的插件页不下发（只做子页）。 */
+  /* plugin-contributed pages (registerAdminUi): the same id **overrides** the kernel page (how a plugin takes over a page);
+* new ids are appended as new menu items. Plugin pages with menu:false are not sent down (sub-pages only). */
   for (const p of (extraPages || [])) {
     if (p.menu === false) continue;
     const i = list.findIndex(x => x.id === p.id);
@@ -1637,28 +1637,28 @@ function manifest(extraPages) {
   return { version: 1, pages: list };
 }
 
-/** 渲染一页（q = URLSearchParams，子页靠它取 uid 之类的参数）；name 不存在 → null
- *  ctx（2026-09-18 加）：{ base, admin } —— 页面里的 `open` 目标要区分两端路径
- *  （管理端 /admin/ui/<id>、用户端 /ui/xxx），由 core.js 的两个调用点传入。 */
+/** render one page (q = URLSearchParams; sub-pages read uid etc. from it); unknown name -> null
+*  ctx (added 2026-09-18): { base, admin } -- `open` targets inside pages must distinguish the two sides' paths
+   *  (admin /admin/ui/<id>, user /ui/xxx), passed in by core.js's two call sites. */
 function render(gw, cfg, name, q, extraPages, ctx) {
-  /* ★多语言(2026-10-08): 每次渲染取一次 i18n bundle → 模块级 _t, txt/chip/标题全部过 _t */
+  /* *i18n (2026-10-08): fetch the i18n bundle once per render -> module-level _t; txt/chip/titles all pass through _t */
   try {
     const ib = require('../i18n/lib').bundle;
     if (ib && gw) _t = ib(gw, { uid: cfg && cfg._uid }).t || _t;
-  } catch (_) { /* 回退恒等, 绝不因 i18n 影响页面 */ }
-  /* ★能力协商(2026-10-07): ctx.caps 由调用方从请求头解析后传入; 没传 → 不裁剪(旧行为) */
+} catch (_) { /* fall back to identity, never let i18n break the page */ }
+  /* *capability negotiation (2026-10-07): ctx.caps is parsed from request headers by the caller and passed in; absent -> no trimming (legacy behavior) */
   const caps = (ctx && ctx.caps) || null;
-  /* ★插件页优先(2026-10-08): 与 App 端 buildPage 的 SDUI 优先分发**语义统一** ——
-   *  旧顺序「内核页优先」让插件注册的同 id 页永远轮不到: App 端 sduiUsable('users')=true
-   *  以为接管了, 服务端却返回内核内置页(长得和原生页像) → 用户「没变化」。
-   *  插件页优先后, 内核页退役为兜底(插件没注册同 id 页时才用)。 */
+/* ★Plugin pages first (2026-10-08): semantically unified with the App-side buildPage SDUI-first dispatch --
+   *  the old "kernel pages first" order meant plugin pages with the same id never got their turn: on the App, sduiUsable('users')=true
+   *  believing it took over, while the server returned the kernel built-in page (which looks like the native one) -> the user sees "no change".
+   *  with plugin pages first, kernel pages retire to fallback (used only when no plugin registered the same id). */
   const pp = (extraPages || []).find(x => x.id === name);
   if (pp && typeof pp.render === 'function') {
     try {
       const page = pp.render(gw, cfg, q) || {};
       page.gcui = UI_VERSION;
       if (!page.title) page.title = pp.title || name;
-      /* ★插件页也走同一套协商: 插件作者不用自己适配每一版 App */
+      /* *plugin pages go through the same negotiation: plugin authors need not adapt to every App version themselves */
       return negotiate(page, caps);
     } catch (e) {
       return {
@@ -1670,7 +1670,7 @@ function render(gw, cfg, name, q, extraPages, ctx) {
       };
     }
   }
-  /* 内核内置页(兜底): 插件没注册同 id 页时才轮到 —— async 页面 resolve 后再协商 */
+/* Core built-in pages (fallback): used only when no plugin registered a page with the same id -- negotiated after async pages resolve */
   const p = PAGES[name];
   if (p) {
     const page = p.build(gw, cfg, q, ctx);
@@ -1683,18 +1683,18 @@ function render(gw, cfg, name, q, extraPages, ctx) {
   return null;
 }
 
-/* ★2026-10-08 管理端语言设置(用户报「找不到设置语言的入口」——两端都没有):
- *  radio → intent /admin/api/set-lang(core.js 落盘 i18n prefs[管理端 uid]) → then:'reload'
- *  → 当前页刷新, bundle 读到新语言 → 全部内核页文案跟着切。纯服务端, App 零参与。 */
+          /* *2026-10-08 admin language setting (user report: no way to change language on either end):
+   *  radio -> intent /admin/api/set-lang (core.js persists i18n prefs[admin uid]) -> then:'reload'
+   *  -> the current page refreshes, the bundle reads the new language -> every kernel page's copy follows. Pure server-side; the App does nothing. */
 function buildLangSet(gw, cfg, q, ctx) {
   let lang = 'zh-CN';
   try {
-    /* ★内核惯例是 gw.store.getPluginConfig(本文件其它 build* 全用它; gw.getPluginConfig 不存在) */
+    /* *the kernel convention is gw.store.getPluginConfig (every other build* in this file uses it; gw.getPluginConfig does not exist) */
     const pc = (gw.store && gw.store.getPluginConfig('i18n', cfg._uid, 'user')) || {};
     lang = (pc.prefs && pc.prefs[String(cfg._uid)]) || pc.defaultLang || 'zh-CN';
   } catch (_) {}
   const opt = (id, label) => ({
-    /* ★checked 与 selected 双写: App 端 radio 读 checked(现状), 插件页/内核页习俗写 selected —— 双写两头都认 */
+/* ★checked and selected written in parallel: App-side radio reads checked (current), plugin/core pages conventionally write selected -- dual-write keeps both recognized */
     type: 'radio', text: label, checked: lang === id, selected: lang === id,
     action: { type: 'intent', endpoint: '/admin/api/set-lang', body: { lang: id }, then: 'reload' },
   });
@@ -1715,10 +1715,10 @@ function buildLangSet(gw, cfg, q, ctx) {
 
 module.exports = {
   manifest, render, buildUsage, pageIds: () => Object.keys(PAGES), UI_VERSION,
-  /* 能力协商(供 core.js 从请求头解析后传入 render 的 ctx.caps) */
+/* Capability negotiation (parsed from request headers by core.js, passed into render's ctx.caps) */
   parseCaps, negotiate, downgradePage,
-  /* 插件自检视图(ctx.clientCaps() 返回它) */
+  /* the plugin self-check view (returned by ctx.clientCaps()) */
   capsView,
-  /* 公告解析/编码（core.js 的 /admin/api/notice 复用它，保持与 App 的 Notices.kt 一致） */
+  /* notice parsing/encoding (core.js's /admin/api/notice reuses this, staying consistent with the App's Notices.kt) */
   noticeParse, noticeEncode, nowStamp,
 };

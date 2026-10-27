@@ -1,19 +1,19 @@
 'use strict';
-/* adminsdui.test.js — 管理端 SDUI 页面测试（2026-09-15）
+/* adminsdui.test.js -- admin SDUI page tests (2026-09-15)
  *
- * 验四件事：
- *   ① 渲染出的页面能被 App 渲染器认识（复用 validate-gcui.js：直接读 App 源码的能力清单）
- *   ② 页面数据正确（实例数 / 运行中 / 请求汇总 / 状态徽章 / 24 小时桶）
- *   ③ **不泄密**：页面 JSON 里绝不能出现 adminKey / apiKey 之类字段
- *   ④ 阶段2 新组件（checkbox / chart / form）确实被用上且写法正确
+   * verifies four things:
+ *   (1) rendered pages are recognized by the App's renderer (reusing validate-gcui.js: the capability list read straight from App source)
+ *   (2) page data is correct (instance count / running / request totals / status badges / 24-hour buckets)
+ *   (3) **no secret leaks**: page JSON must never contain fields like adminKey / apiKey
+ *   (4) the phase-2 components (checkbox / chart / form) are actually used, and used correctly
  *
- * 用法: node test/adminsdui.test.js
+   * run: node test/adminsdui.test.js
  */
 const assert = require('assert');
 const path = require('path');
 
 const adminUi = require(path.join(__dirname, '..', 'src', 'admin-ui.js'));
-/* gcui 静态校验器只在沙箱有（它读 App 源码的能力清单）—— 手机上跑时优雅跳过 */
+/* The gcui static validator exists only in the sandbox (it reads the capability list from App source) -- gracefully skipped on the phone */
 let validate = () => [], GCUI_VERSION = 1, COMPONENTS = [];
 try {
   const v = require(process.env.GCUI_VALIDATOR || '/workspace/tunnel-verify/validate-gcui.js');
@@ -28,9 +28,9 @@ function T(name, fn) {
   catch (e) { console.log('  ✗ ' + name + '\n      ' + e.message); failed++; }
 }
 
-/* ---- 假网关：三个实例，uid=2 在运行且有统计 ---- */
+/** ---- fake gateway: three instances, uid=2 running with stats ---- */
 function fakeGw() {
-  const instances = new Map();   /* 真网关结构: gw.pool.instances 是 Map<uid, cfg> */
+  const instances = new Map();   /* real gateway shape: gw.pool.instances is a Map<uid, cfg> */
   instances.set(2, {
     _name: 'AgnesAI',
     _stats: {
@@ -61,8 +61,8 @@ function fakeGw() {
       adminKey: 'ADMINKEY-LEAKCANARY-99',
     }),
   };
-  /* ★2026-10-07: 内核「用户」页已改为**能力查询**(不再走 gw.selfReq + 插件名)。
-   *  测试据此注入一个假 PluginManager —— caps 里放什么, 页面就显示什么。 */
+  /* *2026-10-07: the kernel "users" page switched to a **capability query** (no more gw.selfReq + plugin names).
+   *  the test injects a fake PluginManager on that seam -- whatever caps provide is what the page shows. */
   const gw = { store: store, pool: { instances: instances }, plugins: { requireCapability: () => null } };
   return gw;
 }
@@ -130,9 +130,9 @@ T('render(usage) 返回页面并通过能力校验', () => {
   assert(p && p.root, '页面为空');
   const errs = validate(p, 'usage');
   assert.deepStrictEqual(errs, [], errs.join('; '));
-  /* ★2026-09-18 修：页面在 v0.6.0 已重写（hourly→series、requests→req/err），
-   *   本条断言是旧的、已失效（用旧字段必然抛错）。同时补两条**协议类**断言：
-   *   切时段的 open 动作必须带 `page:` 前缀 + 合法的 nav，否则 App 报「未知页面: …」。 */
+  /* *fixed 2026-09-18: the page was rewritten in v0.6.0 (hourly -> series, requests -> req/err),
+   *   this assertion is stale and dead (the old field always throws now). Two **protocol-level** assertions are added too:
+   *   span-switching open actions must carry the `page:` prefix + a legal nav, or the App reports "unknown page: ...". */
   assert.ok(Array.isArray(p.state.series) && p.state.series.length > 0, '应有曲线序列 series');
   assert.strictEqual(p.state.gran, 'hour');
   assert.strictEqual(typeof p.state.req, 'number');
@@ -140,7 +140,7 @@ T('render(usage) 返回页面并通过能力校验', () => {
   assert.strictEqual(p.state.recent[0].status, '500', '最近请求应新→旧');
   assert.strictEqual(p.state.recent[0].tone, 'error');
   assert.strictEqual(p.state.channels[0].name, 'main');
-  /* 所有 open 动作的 target 必须是 page:/http(s) 协议形式 */
+  /* every open action's target must be page:/http(s) protocol form */
   const opens = [];
   (function w(n) {
     if (!n || typeof n !== 'object') return;
@@ -305,7 +305,7 @@ T('未知页面返回 null（App 收到 404 会回退原生）', () => {
   assert.strictEqual(adminUi.render(fakeGw(), cfg, 'nope-not-exist'), null);
 });
 
-/* ---- 异步页面（渠道页要等插件返回探测成功率）---- */
+/** ---- async pages (the channels page waits for the plugin's probe success rates) ---- */
 async function TA(name, fn) {
   try { await fn(); console.log('  ✓ ' + name); passed++; }
   catch (e) { console.log('  ✗ ' + name + '\n      ' + e.message); failed++; }
@@ -360,7 +360,7 @@ async function TA(name, fn) {
 
   await TA('★阶段4：用户页列出用户（封禁/解封按钮可见性正确）', async () => {
     const gw = fakeGw();
-    /* ★能力方式: 内核页问"谁提供 user-admin / cardkey-admin", 不关心插件叫什么 */
+    /* *capability style: kernel pages ask "who provides user-admin / cardkey-admin", caring nothing for plugin names */
     const CAPS = {
       'user-admin': {
         listUsers: () => [
@@ -407,7 +407,7 @@ async function TA(name, fn) {
 
   await TA('★阶段5(深度改造)：换个插件提供同一能力，内核页无感（依赖倒置验证）', async () => {
     const gw = fakeGw();
-    /* 提供方故意不叫 auth-user —— 证明内核页确实不认插件名了 */
+    /* The provider deliberately is not named auth-user -- proving the core page truly ignores plugin names */
     gw.plugins = { requireCapability: (uid, n) => (n === 'user-admin' ? {
       listUsers: () => [{ uid: 'x9', nickname: '第三方用户', banned: false }],
       adminApi: () => ({ pluginId: 'my-own-auth', list: '/admin/users' }),
@@ -415,7 +415,7 @@ async function TA(name, fn) {
     const p = await adminUi.render(gw, cfg, 'users', new Map([['tab', 'users']]));
     assert.strictEqual(p.state.items.length, 1);
     assert.strictEqual(p.state.items[0].name, '第三方用户');
-    /* 动作里的 plugin 字段应指向**提供方自报**的名字, 而不是内核写死的 */
+    /* the action's plugin field should point at the **provider-declared** name, not a kernel-hardcoded one */
     const json = JSON.stringify(p);
     assert(json.indexOf('my-own-auth') >= 0, '动作应指向提供方自报的插件 id');
     assert.deepStrictEqual(validate(p, 'users'), []);

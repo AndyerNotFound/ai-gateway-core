@@ -1,11 +1,11 @@
 'use strict';
-/* record 插件 - 请求记录(JSONL)
- * 配置: { enable, keepDays }   ← keepDays=0（默认）= **永久保留**；>0 才按天滚动删除
- * 输出: plugins/record/records/<uid>-YYYYMMDD.jsonl (每日一个文件)
- * 端点: /plugins/record/today (查今日聚合) /plugins/record/recent?n=20
- * ★2026-09-18 修两处：① 清理原本只在 activate 里跑一次（不重启网关就**永不清理**，与 usage-history
- *   同族缺陷）→ 改 `ctx.cron` 定时 + 激活时整理一次；② 删掉**从未被代码使用**的 `maxChars`
- *   字段（schema 写着"正文记录上限"，实际正文压根不记录，留着只会误导）。
+/** the record plugin - request recording (JSONL)
+   * config: { enable, keepDays }   <- keepDays=0 (default) = **keep forever**; >0 enables daily rolling deletion
+   * output: plugins/record/records/<uid>-YYYYMMDD.jsonl (one file per day)
+   * endpoints: /plugins/record/today (today's aggregate) /plugins/record/recent?n=20
+   * *2026-09-18, two fixes: (1) cleanup ran only once in activate (never again without a gateway restart; same defect family as usage-history's
+ *   same-family defect) -> switched to `ctx.cron` scheduling + one cleanup at activation; (2) removed the `maxChars`
+ *   field (the schema claimed a "body record limit" while the body was never recorded at all -- keeping it would only mislead).
  */
 const fs = require('fs');
 const path = require('path');
@@ -26,13 +26,13 @@ module.exports.activate = (ctx) => {
           pt: rec.inputTokens || 0, ct: rec.outputTokens || 0,
           ms: rec.duration || 0, status: rec.status, format: rec.format,
           keyName: (rec.userKey && (rec.userKey.name || (rec.userKey.key || '').slice(0, 24)) || '').toString().slice(0, 24),
-          /* ★按用户区分（内核 v0.7.0 起 onChatDone 载荷自带）：keyId = 用户 uid 或卡密哈希（不含明文卡密） */
+          /* *per-user (onChatDone payload carries it since kernel v0.7.0): keyId = user uid or card hash (never the plaintext card) */
           keyId: rec.keyId || '',
         };
         fs.appendFile(fileOf(), JSON.stringify(row) + '\n', () => {});
       } catch (_) {}
     });
-    /* 清理超期文件：keepDays = 0（默认）→ **永久保留**，不删；>0 才按天滚动删除 */
+    /* clean up expired files: keepDays = 0 (default) -> **keep forever**, no deletion; >0 enables daily rolling deletion */
     const prune = () => {
       try {
         const keep = Number(cfg.keepDays) || 0;
@@ -46,8 +46,8 @@ module.exports.activate = (ctx) => {
         }
       } catch (_) {}
     };
-    /* ★定时清理（每 6 小时）+ 激活时整理一次 ——
-     *  以前只在 activate 里清一次，网关长期不重启就等于"保留 7 天"的承诺不成立。 */
+    /* ★Scheduled cleanup (every 6 hours) + one tidy-up at activation --
+     *  it used to clean once in activate; with the gateway rarely restarting, the "keep 7 days" promise never held. */
     ctx.cron(6 * 3600 * 1000, prune);
     prune();
   }

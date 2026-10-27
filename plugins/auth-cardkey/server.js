@@ -1,16 +1,16 @@
 'use strict';
-/* auth-cardkey 插件 (type:auth) - 卡密认证系统
- * 配置 plugins-config/auth-cardkey.json[<uid>]: { apiKeys: [...], keyLength: 24 }
- * 数据 plugins-data/<uid>/auth-cardkey.json: { usage: { "<key>": usedTokens } }
- * 端点: GET /credits(顶层) + /plugins/auth-cardkey/admin/keys*(管理)
+/** the auth-cardkey plugin (type:auth) - key-card authentication system
+   * config plugins-config/auth-cardkey.json[<uid>]: { apiKeys: [...], keyLength: 24 }
+   * data plugins-data/<uid>/auth-cardkey.json: { usage: { "<key>": usedTokens } }
+   * endpoints: GET /credits (top-level) + /plugins/auth-cardkey/admin/keys* (admin)
  */
 const crypto = require('crypto');
 
-/* 预授权冻结是进程内并发闸门，不是最终账单。
- * 网关进程重启时冻结自然清零；真正的 usedTokens 仍由 onUsage 按上游 usage 结算。
- * ★单位（2026-09-18）：冻结量 = **额度**（与结算同单位：raw/1e6 × 倍率，量级 1e-3），
- *   不是 token 数。换算由 billing 的 onQuotaEstimate 提供；估不出来才回退 token 口径。 */
-const quotaFrozen = new Map(); // key -> estimated 额度 currently in-flight
+/** pre-auth freezing is an in-process concurrency gate, not the final bill.
+   * freezes clear naturally on gateway restart; real usedTokens are still settled by onUsage from the upstream usage.
+   * *units (2026-09-18): frozen amounts = **quota** (the same unit as settlement: raw/1e6 x multiplier, magnitude 1e-3),
+ *   not token counts. The conversion is provided by billing's onQuotaEstimate; the token convention is only the fallback when no estimate is possible. */
+const quotaFrozen = new Map(); // key -> estimated quota currently in flight
 
 function jsonRes(res, code, o) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
@@ -18,9 +18,9 @@ function jsonRes(res, code, o) {
 }
 
 module.exports.activate = (ctx) => {
-  /* ★多实例一致性: 本插件的配置(卡密表)是全局共享的, 但每个实例各有一份内存副本。
-   * 用内核给的配置版本号做失效检查 —— 任何实例改过配置后, 其它实例这里会自动重新读盘,
-   * 否则新建的卡密在别的实例上会 401 invalid key。 */
+  /* *multi-instance consistency: this plugin's config (the card table) is globally shared, but each instance holds its own memory copy.
+   * Invalidation checks use the config version handed over by the core -- after any instance changes config, other instances automatically re-read disk here,
+   * otherwise new card keys would 401 invalid key on the other instances. */
   let _cfgCache = null, _cfgRev = -1;
   const cfgLive = () => {
     const r = ctx.configRev ? ctx.configRev() : 0;
@@ -36,26 +36,26 @@ module.exports.activate = (ctx) => {
   const usage = () => ctx.data.get('usage') || {};
   const usedOf = k => (usage()[k.key] || 0);
   const frozenOf = k => quotaFrozen.get(k.key) || 0;
-  /* 额度文案：最多 6 位小数、去尾零（额度本就是小数，报错里别刷一长串） */
+  /* Quota formatting: at most 6 decimals, trailing zeros trimmed (quota is decimal; error messages must not sprawl) */
   const fmtAmt = (v) => {
     const x = Number(v);
     if (!isFinite(x)) return '0';
     return String(Math.round(x * 1e6) / 1e6);
   };
   const setUsed = (k, v) => {
-    /* ★必须保留小数：动态计费会算出加权额度（如权重 0.5、金额模式的小数），
-     *  若在这里 Math.round 成整数，小额扣费会被抹成 0（= 变相白嫖），
-     *  且"扣了多少"与 billing 的账单对不上（对账会崩）。
-     *  取 6 位小数足够；整数值的存量数据行为完全不变。 */
+    /* *decimals must survive: dynamic billing yields weighted quota (a 0.5 weight, money-mode fractions),
+     *  Math.round-ing to integers here would flatten small deductions to 0 (= free usage by the back door),
+     *  and "what was deducted" would disagree with billing's ledger (reconciliation would break).
+     *  6 decimals is plenty; integer-valued existing data behaves exactly as before. */
     const u = usage();
     const x = Number(v);
     u[k.key] = isFinite(x) ? Math.max(0, Math.round(x * 1e6) / 1e6) : (u[k.key] || 0);
     ctx.data.set('usage', u);
   };
   const save = () => ctx.setPluginConfig(cfgLive());
-  /* 生成卡密: base64url 随机 + 存活唯一性检查(碰撞就重生成)。
-   *  24 字符 base64url ≈ 144 bit 熵, 碰撞概率 ~2^-72(数十亿张也安全);
-   *  这里再挡一道"同一实例内重复", 把实际可触发的碰撞归零。 */
+  /* Card-key generation: base64url randomness + liveness uniqueness check (regenerate on collision).
+   *  24-char base64url ~ 144 bits of entropy; collision odds ~2^-72 (safe for billions of cards);
+   *  This adds one more guard against "duplicates within the same instance", driving practically triggerable collisions to zero. */
   const genKey = () => {
     const live = keys();
     let k;
@@ -66,14 +66,14 @@ module.exports.activate = (ctx) => {
 
   const creditsJSON = (uk) => {
     const qt = Number(uk.quotaTokens);
-    const zeroLimited = qt === 0; /* 0 = 零额度(不可用) */
-    const unlimited = qt === -1; /* -1 = 不限(无限) */
+    const zeroLimited = qt === 0; /* 0 = zero quota (unusable) */
+    const unlimited = qt === -1; /* -1 = unlimited */
     const quota = (zeroLimited || unlimited) ? 0 : Math.max(0, qt);
     const used = usedOf(uk);
     return {
       name: uk.name || '', uid: uk.uid || '', quotaTokens: quota, usedTokens: used,
-      /* ★额度一律按 6 位小数显示：动态计费会产生小数用量（如 0.5 权重）。
-       *  App 端原本按整数展示，小数会被显示成 0 → 用户以为"没扣费"。 */
+      /* *quota always shows 6 decimals: dynamic billing produces fractional usage (e.g. a 0.5 weight).
+       *  the App used to render integers, so decimals showed as 0 -> users believed nothing was deducted. */
       usedTokensDisplay: Math.round(used * 1e6) / 1e6,
       remainingTokens: zeroLimited ? 0 : (unlimited ? null : Math.max(0, quota - used - frozenOf(uk))),
       reservedTokens: unlimited ? 0 : Math.round(frozenOf(uk) * 1e6) / 1e6,
@@ -82,7 +82,7 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /* 1) 认证策略: 查卡 → 禁用/过期/额度校验 */
+  /* 1) auth strategy: look up the card -> disabled/expired/quota checks */
   ctx.registerAuth({
     name: 'cardkey',
     check: ({ token, req }) => {
@@ -96,19 +96,19 @@ module.exports.activate = (ctx) => {
       }
       const used = usedOf(uk);
       if (uk.quotaTokens === 0) {
-        /* 零额度: 拦截真正花钱的推理请求; 自助/只读端点放行 —— 让用户能查账号、看模型列表。
-         * 放行: /auth/*  ·  /credits  ·  /v1/models  ·  /v1/models/xxx (只读元数据, 不打上游) */
+        /* zero quota: block money-costing inference; self-service/read-only endpoints pass -- users can still check accounts and browse models.
+ * allow: /auth/* /credits /v1/models /v1/models/xxx (read-only metadata, never hits the upstream) */
         const p = (req && req.url || '').split('?')[0];
-        /* 零额度放行清单: 自助/只读端点 —— 让用户能查账号、看模型列表、使用插件界面
-         *  (含「保存资料」「签到」等自助意图, 这些不打上游不花钱)。
-         *  注意: ① 插件的 /admin/* 管理端点**不**放行(另有管理密钥校验);
-         *        ② 真正花钱的推理请求(/v1/chat/completions 等)仍然被拦。 */
+        /* zero-quota allowlist: self-service/read-only endpoints -- users can check accounts, browse models, use plugin UIs
+         *  (including self-service intents like "save profile" / "check in" -- these never hit the upstream or cost money).
+         *  note: (1) a plugin's /admin/* admin endpoints are **not** allowed here (separate admin-key check);
+         *        (2) requests that actually cost money (/v1/chat/completions etc.) are still blocked. */
         const selfServe = /(^|\/)auth\//.test(p)
           || /\/credits$/.test(p)
           || /\/v1\/models(\/[^\/]+)?$/.test(p)
           || /\/v1\/branches$/.test(p)
           || /\/plugins\/[^\/]+\/(ui|intent|data)(\/|$)/.test(p);
-        /* 零额度 = 余额不足, 只挡**花钱的推理请求**; 自助操作(登录/发卡/改权限/看模型)一律放行 */
+        /* zero quota = out of balance; block only **inference requests that cost money**; self-service (login/card issuing/permissions/model browsing) always passes */
         if (!selfServe) return { ok: false, status: 429, error: '余额不足：当前额度为 0，无法调用模型（请联系管理员充值）' };
       }
       if (uk.quotaTokens > 0 && used >= uk.quotaTokens)
@@ -117,15 +117,15 @@ module.exports.activate = (ctx) => {
     },
   });
 
-  /* 2) 全局分支白名单(防目标实例免密绕过) */
+  /* 2) global branch whitelist (blocks keyless bypass of the target instance) */
   const syncGlobal = () => { for (const k of keys()) if (k && k.key) ctx.gateway.registerGlobalKey(k.key, k.branches || []); };
   syncGlobal();
 
-  /* 3) 模型白名单 + 分组白名单 (分支白名单由内核全局检查覆盖)
-   *    · models[]  精确模型名白名单 (空 = 不限)
-   *    · groups[]  模型分组白名单 (空 = 不限); 分组来自 model-square 的「快速分组」定义,
-   *                未定义时按名称前缀推导 (gpt-4o → gpt)
-   *    两者同时非空 = 交集 (都要满足)。 */
+  /* 3) model whitelist + group whitelist (the branch whitelist is covered by the kernel's global check)
+   *    - models[]  exact model-name whitelist (empty = unrestricted)
+   *    - groups[]  the model group whitelist (empty = unrestricted); groups come from model-square's "quick groups" definitions,
+   *                when undefined, infer from the name prefix (gpt-4o -> gpt)
+   *    when both are non-empty = intersection (both must hold). */
   ctx.hook('onChatAuth', ({ userKey, model, body }) => {
     if (!userKey) return null;
     if (Array.isArray(userKey.models) && userKey.models.length && !userKey.models.includes(model))
@@ -137,7 +137,7 @@ module.exports.activate = (ctx) => {
       catch (e) { ok = true; ctx.log('分组校验不可用(放行):', e.message); }
       if (!ok) return { status: 403, message: '此卡密只能使用分组内的模型: ' + model + ' (允许分组: ' + gs.join(', ') + ')' };
     }
-    /* 预授权只冻结，不计入 usedTokens。估算在 router 确认存在可用渠道后才执行。 */
+    /* pre-auth only freezes, never counting into usedTokens. The estimate runs only after the router confirms a usable channel exists. */
     return { quota: {
       reserve: ({ canonical, cfg, estimateCharge, ch }) => {
         const qt = Number(userKey.quotaTokens);
@@ -146,19 +146,19 @@ module.exports.activate = (ctx) => {
         let maxOut = Math.max(1, Math.min(1000000, Number(
           body && (body.max_tokens ?? body.max_completion_tokens ?? (body.generationConfig && body.generationConfig.maxOutputTokens))
         ) || 4096));
-        /* ★预授权只冻结一小部分输出: 客户端常把 max_tokens 设很大(如 32768),
-         *  "你好"也会被冻结 32k —— 但实际生成往往只有几十 token, 真实用量由
-         *  onUsage 按上游 usage 结算。冻结过多会导致: 可用额度被高估扣减、
-         *  甚至把本可成功的请求 429 拒掉。封顶 4096 已足够防超支。 */
+        /* *pre-authorization freezes only a fraction of the output: clients often set max_tokens very high (e.g. 32768),
+         *  a plain "hello" would freeze 32k -- real generation is usually tens of tokens; true usage is settled by
+         *  onUsage with the upstream usage. Over-freezing causes: quotas overstated as deducted,
+         *  even 429-rejecting requests that would have succeeded. The 4096 cap is plenty against overspend. */
         maxOut = Math.min(maxOut, 4096);
         const tokens = promptEstimate + maxOut;
-        /* ★单位口径 (2026-09-18)：冻结量必须与**结算**同单位。
-         *  结算走 billing 的加权额度（raw/1e6 × 倍率，量级 1e-3），而这里原来直接拿
-         *  token 数当额度冻结（量级 1e3）→ 大 100 万倍：额度 99.97 的卡被
-         *  「本次请求预授权需要约 13209」429 拒掉，而那次实际只扣 0.01。
-         *  所以先请 billing 把 token 换算成额度（内核给的 estimateCharge 回调 →
-         *  onQuotaEstimate）；**拿不到估算**（未装 billing / 模型未定价 → 结算也走
-         *  老口径 1 token = 1 额度）时回退 token 口径 —— 两种口径各自自洽。 */
+        /* *unit convention (2026-09-18): frozen amounts must share the **settlement** unit.
+         *  settlement uses billing's weighted quota (raw/1e6 x multiplier, magnitude 1e-3), while this originally took
+         *  freezing raw token counts as quota (magnitude 1e3) -> a million-fold error: a card with 99.97 quota got
+         *  "this request pre-authorizes about 13209" and 429-rejected, while that request actually deducted 0.01.
+         *  so first ask billing to convert tokens into quota (the kernel-provided estimateCharge callback ->
+         *  onQuotaEstimate); **no estimate available** (billing absent / model unpriced -> settlement also uses
+         *  legacy 1 token = 1 quota) fall back to the token convention -- each convention is self-consistent. */
         let estimate = tokens, inChargeUnit = false;
         if (typeof estimateCharge === 'function') {
           const v = estimateCharge({
@@ -191,12 +191,12 @@ module.exports.activate = (ctx) => {
     }};
   });
 
-  /* 4) 用量累计 —— ★动态计费(billing 插件)的唯一接入点
-   *  内核在 usage.charged 里给「这次该扣多少加权额度」：
-   *    · charged 有值 → 按它扣（可为小数，如 0.5 权重；0 = 免费，是合法值）
-   *    · charged 为 null（未装 billing / 模型既没配价也没规则命中）→ 回退老口径 input+output
-   *  这样「没配过计费的模型」扣费与改造前**逐字节一致**，已发出的卡密额度零迁移。
-   *  ⚠️判断必须用 `!= null`：`if (charged)` 会把 0（免费规则）误判成"没值"再扣一遍老口径。 */
+  /* 4) usage accumulation -- *the only integration point of dynamic billing (the billing plugin)
+   *  the kernel states "how much weighted quota this should deduct" in usage.charged:
+   *    - charged is set -> deduct it (may be fractional, e.g. a 0.5 weight; 0 = free, a legal value)
+   *    - charged is null (billing absent / the model has neither a price nor a matching rule) -> fall back to legacy input+output
+   *  This keeps deduction for "models never configured for billing" **byte-for-byte identical** to the pre-refactor behavior; issued card quotas need zero migration.
+   *  the check must use `!= null`: `if (charged)` misreads 0 (a free rule) as "no value" and deducts again via the legacy convention. */
   ctx.hook('onUsage', (usage, c) => {
     const uk = c.urlInfo && c.urlInfo.userKey;
     if (!uk || !uk.key || !usage) return;
@@ -206,10 +206,10 @@ module.exports.activate = (ctx) => {
     setUsed(uk, usedOf(uk) + charged);
   });
 
-  /* 5) 暴露 API 给其他插件(签到/充值/用户体系) */
+  /* 5) expose APIs to other plugins (check-in / top-up / user system) */
   ctx.bindAuthApis({
     findKey: (cfg2, token) => { const k = keys().find(x => x && x.key === token); return k ? Object.assign({}, k, { usedTokens: usedOf(k) }) : null; },
-    /** 可勾选项清单(编辑卡密权限用)。scope=父卡密时按其白名单裁剪, null=全量 */
+    /** checkable option list (for editing card permissions). scope = a parent card clips to its whitelist; null = everything */
     accessOptions: (scope) => optionsJSON(scope || null),
     grantQuota: (cfg2, keyId, tokens) => { const k = keys().find(x => x && x.key === keyId); if (!k || !(tokens > 0)) return false; setUsed(k, usedOf(k) - tokens); return true; },
     listKeys: () => keys().map(k => Object.assign({}, k, { usedTokens: usedOf(k) })),
@@ -220,7 +220,7 @@ module.exports.activate = (ctx) => {
     creditsJSON, genKey,
   });
 
-  /* 6) GET /credits 顶层路由(用户端查余额) */
+  /* 6) the GET /credits top-level route (user-side balance check) */
   ctx.registerTopRoute('GET', '/credits', ({ res, auth }) => {
     const r = auth();
     if (!r.ok) return jsonRes(res, r.status || 401, { error: r.error || 'invalid key' });
@@ -228,7 +228,7 @@ module.exports.activate = (ctx) => {
     return jsonRes(res, 200, { admin: true, unlimited: true });
   });
 
-  /* 7) 管理端点 /plugins/auth-cardkey/admin/* */
+  /* 7) admin endpoints /plugins/auth-cardkey/admin/* */
   const adminOnly = (p, res) => { const a = p.authAdmin(); if (!a.ok) { jsonRes(res, a.status || 401, { error: a.error || 'unauthorized' }); return false; } return true; };
 
   ctx.registerRoute('GET', '/admin/keys', (req, res, p) => {
@@ -241,7 +241,7 @@ module.exports.activate = (ctx) => {
     const j = p.body || {};
     const nk = {
       key: genKey(), name: String(j.name || '卡密').slice(0, 64), enable: true,
-      /* -1 = 不限额度 (别被 Math.max(0,..) 吃掉, 否则发不出不限卡) */
+      /* -1 = unlimited quota (must not be eaten by Math.max(0,..), or unlimited cards cannot be issued) */
       quotaTokens: Number(j.quotaTokens) === -1 ? -1 : Math.max(0, Number(j.quotaTokens) || 0), uid: String(j.uid || ''),
       models: Array.isArray(j.models) ? j.models.map(String) : [],
       groups: Array.isArray(j.groups) ? j.groups.map(String) : [],
@@ -268,10 +268,10 @@ module.exports.activate = (ctx) => {
     if (j.branches !== undefined) k.branches = Array.isArray(j.branches) ? j.branches.map(String) : [];
     if (j.expiresAt !== undefined) k.expiresAt = String(j.expiresAt);
     if (j.note !== undefined) k.note = String(j.note).slice(0, 200);
-    if (j.quotaTokens !== undefined) k.quotaTokens = Math.max(-1, Number(j.quotaTokens) || 0); /* -1=零额度 */
-    /* 充值 / 扣减: **正数增加、负数扣减** (用户要求能手动扣减余额)。
-     *  不限额度(-1) 保持不变(充/扣都没意义, 也不能降级成有限额度);
-     *  扣减下限为 0 (0 即"零额度, 不可用")。 */
+    if (j.quotaTokens !== undefined) k.quotaTokens = Math.max(-1, Number(j.quotaTokens) || 0); /* -1 = zero quota */
+    /* top-up / deduct: **positive adds, negative deducts** (users asked for manual balance deduction).
+     *  unlimited (-1) stays untouched (top-up/deduct are meaningless, and it must not degrade to a finite quota);
+     *  deductions floor at 0 (0 meaning "zero quota, unusable"). */
     if (j.addQuota !== undefined && j.addQuota !== '' && j.addQuota !== null) {
       const delta = Number(j.addQuota);
       if (isFinite(delta) && delta !== 0) {
@@ -295,10 +295,10 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true });
   });
 
-  /* 8) 可勾选清单 (卡密「访问权限」多选面板用)
-   *    返回: 全部分组 / 全部模型(带分组与所属实例) / 全部实例
-   *    scope: 传卡密时按该卡密的父级限制裁剪(用户端编辑子卡用)。
-   *           传入 null = 不裁剪(管理端)。 */
+  /* 8) the checkable option list (for the key card "access permissions" multi-select panel)
+   *    returns: all groups / all models (with group + owning instance) / all instances
+   *    scope: when a key card is passed, clip to that card's parent's limits (used when users edit their sub-cards).
+   *           pass null = no trimming (admin side). */
   const optionsJSON = (scope) => {
     const gi = ctx.gateway.modelGroups ? ctx.gateway.modelGroups() : { declared: [], groupsOf: m => [], matches: () => true };
     const models = [];
@@ -341,30 +341,30 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, optionsJSON(null));
   });
 
-  /* 用户端: 编辑自己子卡时能勾选的清单 (受父卡白名单裁剪) */
+  /* User side: checkable list when editing one's own child card (trimmed by the parent whitelist) */
   ctx.registerTopRoute('GET', '/auth/access-options', ({ res, auth }) => {
     const r = auth();
     if (!r.ok) return jsonRes(res, r.status || 401, { error: r.error || 'invalid key' });
     jsonRes(res, 200, optionsJSON(r.userKey || null));
   });
 
-  /* ===== 9) 管理端「编辑卡密」SDUI 页 (2026-09-17) =====
-   * 由 registerAdminUi 贡献（menu:false 子页）。App 管理端在卡密卡片点「编辑」时打开：
-   *   /admin/ui/key-edit?key=<卡密>
-   * 内容：卡密信息 + 基本信息表单（卡名/额度/到期/备注）+ 访问权限（模式 chip + 分组/模型网格多选）。
+  /* ===== (9) the admin "edit key card" SDUI page (2026-09-17) =====
+   * contributed by registerAdminUi (menu:false sub-page). Opened from the App admin's card-key card "edit" button:
+   *   /admin/ui/key-edit?key=<key card>
+   * Contents: card info + a basic-info form (name/quota/expiry/note) + access permissions (mode chips + multi-select group/model grid).
    *
-   * ★无状态设计（关键）：渲染时**为每个候选项预计算好「点它之后的完整白名单」**，
-   *   塞进该 chip 的 action.body（{{item.g}} / {{item.m}}）。App 渲染期就把 {{item.*}} 绑成
-   *   真正的 JSON 数组（Template.bindJsonKeep 支持 List→JsonArray），点击即 adminApi 提交完整结果。
-   *   好处：不需要临时状态、不需要签名意图；提交后 then:'reload' 原地刷新同一 URL
-   *   （SduiController 走 refreshInto），**不会压栈 → 根治嵌套打开**。
+   * ★Stateless design (crucial): at render time **the full post-tap whitelist is precomputed for every candidate**,
+   *   into that chip's action.body ({{item.g}} / {{item.m}}). The App binds {{item.*}} at render time into
+   *   a real JSON array (Template.bindJsonKeep supports List->JsonArray); a tap submits the complete result via adminApi.
+   *   benefits: no temp state, no signed intents; after submit, then:'reload' refreshes the same URL in place
+   *   (SduiController uses refreshInto), **so it never pushes -> nested opens are cured at the root**.
    *
-   * ★模式是「纯 UI 状态」（2026-09-17 二修）：一开始把模式做成由数据推断（groups 非空=按分组…），
-   *   结果「按模型」在 models 为空时**点不进去**（提交空数组 → 数据没变 → 又退回不限），
-   *   管理员根本没法开始选模型。现在：模式 chip 用 setState 只切本地显隐（showGroup/showModel），
-   *   真正的权限由「勾选网格里的项」提交决定 —— 从任意状态都能进入任一模式的候选列表。
-   *   两套网格的候选**都预计算好**，且各自提交时清空另一维度（模式语义互斥，不叠加）。 */
-  /* ---- key-create 子页: 管理员发卡(用户/额度/卡名) —— App「用户管理」页的卡密 tab 入口 ---- */
+   * ★The mode is "pure UI state" (second revision, 2026-09-17): it was first inferred from data (non-empty groups = group mode ...),
+   *   so "by model" was **untappable** when models was empty (submitting [] -> no change -> back to unrestricted),
+   *   admins could not even start choosing models. Now: mode chips use setState to toggle local visibility only (showGroup/showModel),
+   *   the real permissions are decided by what the grid submits -- from any state you can reach any mode's candidate list.
+   *   both grids' candidates are **precomputed**, and each submit clears the other dimension (the modes are mutually exclusive, never stacked). */
+  /* ---- key-create sub-page: admin issues a card (user/quota/name) -- the cards tab entry of the App's "Users" page ---- */
   ctx.registerAdminUi({
     id: 'key-create', menu: false,
     render(gw, _cfg, q, caps) {
@@ -372,7 +372,7 @@ module.exports.activate = (ctx) => {
       const txt = (text, style, color) => { const o = { type: 'text', text }; if (style) o.style = style; if (color) o.color = color; return o; };
       const act = (body) => ({ type: 'adminApi', method: 'POST', path: '/admin/api/plugin-call',
         body: { plugin: 'auth-cardkey', path: '/admin/keys', method: 'POST', body } });
-      /* 用户候选(供 uid 填写提示) —— 能力拿, 不写死 auth-user */
+      /* user candidates (for uid autocomplete) -- fetched via capability, never hardcoded to auth-user */
       let userHint = '';
       try {
         const ua = ctx.gateway.listCapabilities ? null : null;
@@ -423,7 +423,7 @@ module.exports.activate = (ctx) => {
         body: { plugin: 'auth-cardkey', path: '/admin/keys-update', method: 'POST', body: Object.assign({ key: key }, body) } });
       const permText = groups.length ? ('分组 ' + groups.join('/'))
         : (models.length ? (models.length + ' 个模型') : '全部模型');
-      /* 两套候选网格（各自预计算「点它之后」的完整白名单；提交时清空另一维度） */
+      /* two candidate grids (each precomputes the full whitelist "after tapping it"; submitting clears the other dimension) */
       const gc = allGroups.map(g => {
         const on = groups.indexOf(g) >= 0;
         return { name: g, on: on, g: (on ? groups.filter(x => x !== g) : groups.concat([g])), m: [] };
@@ -433,13 +433,13 @@ module.exports.activate = (ctx) => {
         return { name: m, on: on, g: [], m: (on ? models.filter(x => x !== m) : models.concat([m])) };
       });
 
-      /* ---- 卡密信息 ---- */
+      /* ---- Key card info ---- */
       kids.push(txt(k.name || '(未命名)', 'title3'));
       kids.push(txt('卡号 ' + key.slice(0, 8) + '\u2026' + key.slice(-4) + (k.enable === false ? ' \u00b7 已禁用' : ''), 'caption', '$onSurfaceVariant'));
       kids.push(txt('额度 ' + (quota === -1 ? '不限' : String(quota)) + ' \u00b7 已用 ' + used, 'caption', '$onSurfaceVariant'));
       kids.push(gap(10));
 
-      /* ---- 基本信息表单（只提交这几个字段，不碰白名单） ---- */
+      /* ---- Basic info form (submits exactly these fields; whitelists untouched) ---- */
       kids.push(txt('基本信息', 'title3'));
       kids.push({
         type: 'form', submitText: '保存基本信息', submitShape: 'large',
@@ -456,7 +456,7 @@ module.exports.activate = (ctx) => {
       });
       kids.push(gap(12));
 
-      /* ---- 访问权限 ---- */
+      /* ---- Access permissions ---- */
       kids.push(txt('访问权限', 'title3'));
       kids.push(txt('当前：' + permText + (branches.length ? ' \u00b7 实例 ' + branches.join('/') : ''), 'caption', '$onSurfaceVariant'));
       kids.push({
@@ -470,7 +470,7 @@ module.exports.activate = (ctx) => {
       });
       kids.push(txt('「不限」立即生效；「按分组/按模型」只是切换下面的列表，点选具体项才保存。', 'caption', '$onSurfaceVariant'));
 
-      /* 分组网格 */
+      /* group grid */
       kids.push({ type: 'text', text: '点分组即勾选/取消并立即保存（已选 ' + groups.length + ' / 共 ' + allGroups.length + '）',
         style: 'caption', color: '$onSurfaceVariant', visible: '{{state.showGroup}}' });
       if (allGroups.length) {
@@ -485,7 +485,7 @@ module.exports.activate = (ctx) => {
         kids.push({ type: 'text', text: '没有可选分组（先在「模型分组 / 快速分组」里定义）。', style: 'caption', color: '$error', visible: '{{state.showGroup}}' });
       }
 
-      /* 模型网格 */
+      /* model grid */
       kids.push({ type: 'text', text: '点模型即勾选/取消并立即保存（已选 ' + models.length + ' / 共 ' + allModels.length + '）',
         style: 'caption', color: '$onSurfaceVariant', visible: '{{state.showModel}}' });
       if (allModels.length) {
@@ -510,16 +510,16 @@ module.exports.activate = (ctx) => {
     },
   });
 
-  /* ★能力注册 (2026-10-07 深度改造): 让"卡密管理"成为可查询的能力,
-   *  内核页就不必再写死插件名 'auth-cardkey' —— 任何插件提供同名能力都能顶上。
-   *  只暴露只读的 listKeys + 动作面声明; 写操作仍走各插件自己的 /admin/ 端点(经声明式 plugin-call)。 */
+  /* *capability registration (2026-10-07 deep refactor): making "card management" a queryable capability,
+   *  the core page no longer hard-codes the plugin name 'auth-cardkey' -- any plugin offering the same capability can take over.
+   *  exposes only read-only listKeys + an action-surface declaration; writes still go through each plugin's own /admin/ endpoints (via declarative plugin-call). */
   ctx.provideCapability('cardkey-admin', {
     listKeys: () => { try { return keys().map(k => ({ key: k.key, name: k.name, note: k.note, enable: k.enable !== false, quotaTokens: k.quotaTokens, usedTokens: usedOf(k) })); } catch (_) { return []; } },
-    /** 动作路径声明(内核据此拼 adminApi, 不写死插件 id) */
+    /** action path declaration (the kernel assembles adminApi from it, never hardcoding plugin ids) */
     adminApi: () => ({ pluginId: ctx.id, list: '/admin/keys', update: '/admin/keys-update' }),
-    /* ★api (2026-10-07): 可序列化端点说明 → 内核 bootstrap 下发 → **App 按能力名查端点**。
-     *  以前 App 把 /plugins/auth-cardkey/admin/keys 写死在 Api.kt 里, 换插件实现 App 就断。
-     *  ★路径是**相对插件**的(内核/App 拼上 /plugins/<pluginId> 前缀), 所以插件改名也不影响。 */
+    /* *api (2026-10-07): serializable endpoint descriptions -> shipped via kernel bootstrap -> **the App looks endpoints up by capability name**.
+     *  the App used to hardcode /plugins/auth-cardkey/admin/keys in Api.kt; a different plugin implementation would break it.
+     *  *paths are **plugin-relative** (the kernel/App prepend /plugins/<pluginId>), so plugin renames do not affect them. */
     api: () => ({
       endpoints: {
         list:   '/admin/keys',          // GET  列表

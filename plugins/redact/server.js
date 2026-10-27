@@ -1,6 +1,6 @@
 'use strict';
-/* redact 插件 - 隐私过滤(密钥脱敏) + 内容替换
- * 配置: { enable, extra: '正则1,正则2', replace: { out: [{re,to,ci}], inc: [...] } }
+/** the redact plugin - privacy filtering (secret masking) + content replacement
+   * config: { enable, extra: 'regex1,regex2', replace: { out: [{re,to,ci}], inc: [...] } }
  * hook: onRequestBody(redact+out) / onResponseEvent / onResponseLine / onResponseBody(inc) / sanitizeText
  */
 const redactCache = require('../../src/redact-cache.js');
@@ -52,7 +52,7 @@ module.exports.activate = (ctx) => {
   const incRules = rpCompile(replace.inc);
   const extra = String(cfg.extra || '').split(',').map(s => s.trim()).filter(Boolean);
 
-  /* 卡级 redact 覆盖: 实例总开关是上限, 卡可关不可开 */
+  /* card-level redact override: the instance master switch is the ceiling; a card can opt out but never opt in */
   const effRedact = (c) => {
     if (!cfg.enable) return false;
     const uk = c && c.urlInfo && c.urlInfo.userKey;

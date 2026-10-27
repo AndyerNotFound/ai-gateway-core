@@ -1,12 +1,12 @@
 'use strict';
-/* plugins.js - PluginManager v2 (内核职责: 加载器本体, 文档 §2.1/§7)
- * 与旧版差异:
- *   - manifest.type: 'auth'|'business', 认证插件先于业务插件加载, 认证插件激活失败 = fail-closed 阻断 (§3.2)
- *   - 数据/配置按 UID 隔离 (plugins-data/<uid>/<id>.json, plugins-config/<id>.json[uid]), 改名不断 (§4/§6)
- *   - ctx 扩展 (§7.1): getPluginConfig/getInstanceConfig/registerAuth/registerExtraEndpoint/wrapWriter/
+/** plugins.js - PluginManager v2 (kernel responsibility: the loader itself, doc §2.1/§7)
+   * differences from the old version:
+*   - manifest.type: 'auth'|'business', auth plugins load before business plugins; auth activation failure = fail-closed blocking (§3.2)
+*   - Data/config isolated per UID (plugins-data/<uid>/<id>.json, plugins-config/<id>.json[uid]); renames stay intact (§4/§6)
+*   - ctx extensions (§7.1): getPluginConfig/getInstanceConfig/registerAuth/registerExtraEndpoint/wrapWriter/
  *     onRequest/onResponse/encrypt/decrypt/emit/on/upstreamRequest/stats
- *   - permissions 运行时校验 (§7.3): 敏感 API 未声明即抛错
- *   - hook 聚合: hooksFor(uid) 产出 router.handleChat 所需的 hooks 对象
+*   - permissions checked at runtime (§7.3): calling an undeclared sensitive API throws
+*   - hook aggregation: hooksFor(uid) produces the hooks object router.handleChat needs
  */
 const fs = require('fs');
 const path = require('path');
@@ -19,7 +19,7 @@ const { EventEmitter } = require('events');
 const { log: defaultLog } = require('./util');
 const { paletteFromSeed, normalizeSeed, applyScheme } = require('./palette');
 
-/** 极简 tar 解压（仅文件/目录，防路径穿越）。插件包用 .tar.gz 格式（零依赖跨平台）。 */
+/** minimal tar extraction (files/dirs only, path-traversal safe). Plugin packages use .tar.gz (zero-dep, cross-platform). */
 function untar(tarBuf, destDir) {
   let off = 0;
   while (off + 512 <= tarBuf.length) {
@@ -44,12 +44,12 @@ function untar(tarBuf, destDir) {
   }
 }
 
-/** 下载 URL → Buffer（跟随重定向, 30s 超时, 默认上限 50MB） */
+/** download a URL -> Buffer (follows redirects, 30s timeout, 50MB default cap) */
 function downloadBuf(url, maxBytes = 50 * 1024 * 1024, redirects = 5, proxyUrl = null) {
   return new Promise((resolve, reject) => {
     let lib;
     try { lib = url.startsWith('https') ? https : http; } catch (e) { return reject(e); }
-    /* 可选代理(下载插件包用, 如手机代理 127.0.0.1:7890) */
+    /* optional proxy (for downloading plugin packages, e.g. a phone proxy at 127.0.0.1:7890) */
     let agent;
     if (proxyUrl) {
       try {
@@ -74,14 +74,14 @@ function downloadBuf(url, maxBytes = 50 * 1024 * 1024, redirects = 5, proxyUrl =
   });
 }
 
-/* router hooks 的所有合法名称 (与 router.js NO_HOOKS 对齐) */
+/** every legal router hook name (kept in sync with router.js NO_HOOKS) */
 const HOOK_NAMES = ['onRequestBody', 'onChatAuth', 'onQuotaEstimate', 'needConvert', 'wrapWriter', 'processCanonicalResp',
   'onResponseEvent', 'onResponseLine', 'onResponseBody', 'sanitizeText', 'onUsage', 'onChatDone', 'billing'];
 
-/* manifest.type 合法值: auth=认证插件 / business=业务插件 / theme=主题插件(仅提供配色, 无 server.js) */
+/** legal manifest.type values: auth = auth plugin / business = business plugin / theme = theme plugin (palette only, no server.js) */
 const PLUGIN_TYPES = ['auth', 'business', 'theme'];
 
-/** 插件目录内容 SHA256 (App 添加服务器时的安全验证公示用): 相对路径排序后逐文件 hash。 */
+/** the plugin directory's content SHA256 (for security-verification disclosure when the App adds a server): hash file by file after sorting relative paths. */
 function hashDir(dir) {
   const h = crypto.createHash('sha256');
   const files = [];
@@ -103,7 +103,7 @@ function hashDir(dir) {
 
 class PluginManager {
   /**
-   * @param store  Store 实例 (UID/插件配置/数据目录)
+* @param store  Store instance (UID / plugin config / data directory)
    * @param deps   { authChain, upstreamRequest, encrypt, decrypt, log }
    */
   constructor(store, deps = {}) {
@@ -112,49 +112,49 @@ class PluginManager {
     this.pluginsDir = store.pluginsDir;
     this.dataDir = store.pluginsDataDir;
     this.log = deps.log || ((...a) => defaultLog('[plugins]', ...a));
-    this.authChain = deps.authChain || null;          // AuthChain 实例 (registerAuth 用)
+    this.authChain = deps.authChain || null;          // the AuthChain instance (used by registerAuth)
     this.upstreamRequest = deps.upstreamRequest || null;
     this.pickChannels = deps.pickChannels || null;
-    this.crypt = deps.crypt || null;                  // {encrypt, decrypt} 字段级
-    /* 插件贡献的管理端页面: 'uid/pluginId/pageId' → 页面定义 (registerAdminUi) */
+    this.crypt = deps.crypt || null;                  // {encrypt, decrypt}, field-level
+    /* plugin-contributed admin pages: 'uid/pluginId/pageId' -> page definition (registerAdminUi) */
     this._adminUiPages = new Map();
-    this.bus = new EventEmitter();                    // 事件总线 (ctx.emit/on)
+    this.bus = new EventEmitter();                    // event bus (ctx.emit/on)
     this.bus.setMaxListeners(100);
     /** installed: id -> {manifest, dir} */
     this.installed = new Map();
     /** active: `${uid}/${id}` -> state */
     this.active = new Map();
-    /** 扩展端点注册表: 'METHOD /v1/xxx' -> {pluginId, uid, handler} (§7.1 registerExtraEndpoint) */
+    /** extended endpoint registry: 'METHOD /v1/xxx' -> {pluginId, uid, handler} (§7.1 registerExtraEndpoint) */
     this.extraEndpoints = new Map();
-    /** 顶层路由注册表: 'METHOD /credits' -> {pluginId, uid, handler} (auth 插件用) */
+    /** top-level route registry: 'METHOD /credits' -> {pluginId, uid, handler} (auth plugins) */
     this.topRoutes = new Map();
-    /** 全局卡密分支白名单: token -> {uid, branches} (auth-cardkey 注册; core 路由后全局检查, 防目标实例免密绕过) */
+    /** global card branch whitelist: token -> {uid, branches} (registered by auth-cardkey; checked globally after core routing, blocking keyless bypass of the target instance) */
     this.globalKeys = new Map();
-    /** 插件配置版本号: pluginId -> number (跨实例共享, 用于发现配置副本过期) */
+    /** plugin config version: pluginId -> number (shared across instances; detects stale config copies) */
     this._cfgRev = new Map();
-    /** 插件运行数据版本号: pluginId -> number (同上, 对象是 ctx.data)
-     *  ★2026-09-18 加: 数据的写入路径(flushData)以前既不加版本号也不广播,
-     *  于是"别实例刚写的卡密用量/规则"在本实例读不到, 本实例写盘时还会用旧快照抹掉它。 */
+/** Plugin runtime-data version counter: pluginId -> number (same idea; the object is ctx.data)
+     *  *added 2026-09-18: the data write path (flushData) used to neither bump a version nor broadcast,
+     *  so "card usage/rules another instance just wrote" were invisible here, and persisting here would wipe them with the stale snapshot. */
     this._dataRev = new Map();
     this.gateway = deps.gateway || null;
-    /** 能力注册表 (2026-10-07 深度改造): uid+cap -> {uid,name,impl,pluginId,seq}
-     *  为什么: 以前"谁提供模型价格"写死在内核(getPluginConfig('model-square', 0)), 换个插件提供就崩。
-     *  改成运行期可查询的事实: 插件 provideCapability('model-pricing', impl), 消费方 requireCapability(...)。
-     *  与 hooks 的区别: hooks 是内核定义的管线(内核必须知道有哪些钩子); capability 是插件间自由约定的能力面。 */
+/** Capability registry (2026-10-07 deep refactor): uid+cap -> {uid,name,impl,pluginId,seq}
+     *  why: "who provides model prices" used to be hardcoded in the kernel (getPluginConfig('model-square', 0)); a different provider would break it.
+     *  turned into a runtime-queryable fact: plugins provideCapability('model-pricing', impl); consumers requireCapability(...).
+     *  vs hooks: hooks are a kernel-defined pipeline (the kernel must know which hooks exist); capabilities are a freely-contracted surface between plugins. */
     this._capabilities = new Map();
     this._capSeq = 0;
-    /** ★全局能力层 (2026-10-07): dataScope=global 的插件(价格/分组/用户/卡密这类全实例共享的数据),
-     *  其能力注册在 uid=0 下, 供"不区分实例"的内核逻辑(如模型分组索引)查询。
-     *  为什么需要: 分组/价格配置本身存在 uid=0 键(全局), 若能力只注册在实例 uid 下,
-     *  内核的 groupIndex() 就查不到 —— 表现为"分组索引永远为空"。
-     *  ★声明式: 由 manifest.dataScope==='global' 决定, 内核不认插件名。 */
+    /** *global capability layer (2026-10-07): dataScope=global plugins (prices/groups/users/cards -- data shared across all instances),
+     *  its capability registers under uid=0 for kernel logic that ignores instances (e.g. the model group index).
+     *  why needed: group/price config itself lives under the uid=0 key (global); if a capability registers only under an instance uid,
+*  the core's groupIndex() finds nothing -- visible as "the group index is forever empty".
+     *  *declarative: decided by manifest.dataScope==='global'; the kernel never checks plugin names. */
     this._globalCaps = new Set();
-    /** ★每实例最近一次请求的客户端能力(2026-10-07): 供 ctx.clientCaps() 同步读取。
-     *  为什么需要"最近一次": gcui 页面是**请求驱动**的, 插件在 render 时通常就在处理某个请求;
-     *  而 ctx 是激活期一次性创建的, 拿不到 per-request 参数。所以这里按请求滚动更新,
-     *  render(params) 里另有精确值(优先级更高)。 */
+    /** *per-instance latest-request client capabilities (2026-10-07): for synchronous ctx.clientCaps() reads.
+     *  why "the latest one": gcui pages are **request-driven**; a plugin's render usually runs while handling some request;
+     *  but ctx is created once at activation and cannot see per-request args, so this rolls forward per request,
+     *  render(params) carries the precise value too (higher priority). */
     this._lastCaps = new Map();
-    /* 意图安全协议存储: uid -> {keys:{tokenHash:{lastSeq,nonces[],intents{}}}, dirty} (Gay Core §3) */
+    /* intent security protocol store: uid -> {keys:{tokenHash:{lastSeq,nonces[],intents{}}}, dirty} (Gay Core §3) */
     this._secCache = new Map();
     this._secTimer = setInterval(() => this._flushSecAll(), 30000);
     if (this._secTimer.unref) this._secTimer.unref();
@@ -163,10 +163,10 @@ class PluginManager {
 
   scanInstalled() {
     this.installed.clear();
-    /* 两级插件目录: 内置(源码 plugins/) + 数据目录(用户安装, 同 id 覆盖内置) */
+    /* two plugin dirs: built-ins (source plugins/) + the data dir (user-installed; same id overrides built-ins) */
     const dirs = [
       path.resolve(__dirname, '..', 'plugins'), // 内置插件(随内核分发)
-      this.pluginsDir,                           // 用户安装(数据目录)
+      this.pluginsDir,                           // user-installed (data dir)
     ];
     for (const baseDir of dirs) {
       if (!baseDir || !fs.existsSync(baseDir)) continue;
@@ -179,7 +179,7 @@ class PluginManager {
           if (!manifest.id) manifest.id = d;
           if (!/^[a-z0-9][a-z0-9-]*$/.test(manifest.id)) { this.log('插件 id 非法, 跳过:', d); continue; }
           if (manifest.type && !PLUGIN_TYPES.includes(manifest.type)) { this.log('插件 type 非法(auth|business|theme), 跳过:', d); continue; }
-          /* 主题插件硬约束 (Gay Core §11): 只允许样式令牌, 禁止服务端逻辑/权限 */
+          /* Theme plugin hard constraint (Gay Core §11): style tokens only; no server logic/permissions */
           if (manifest.type === 'theme') {
             if (manifest.hasServer || fs.existsSync(path.join(pdir, 'server.js'))) { this.log('主题插件禁止携带 server.js, 跳过:', d); continue; }
             if (Array.isArray(manifest.permissions) && manifest.permissions.length) { this.log('主题插件禁止声明权限, 跳过:', d); continue; }
@@ -194,20 +194,20 @@ class PluginManager {
     }
   }
 
-  /* 依赖拓扑排序 (2026-10-07 深度改造 §B)
-   * 背景: manifest 里一直有 depends 字段(billing -> model-square), 但**从来没有任何代码读它** ——
-   *   全仓搜索 .depends 只命中声明本身。后果是依赖缺失时静默降级(表现为"切分支后价格丢失"),
-   *   而不是明确报错。这里把它激活, 对标 Minecraft Forge 的 mod 依赖解析。
-   * 语义:
-   *   - 拓扑排序: 被依赖者先加载(同 type 组内)
-   *   - 缺失依赖: strict 模式 fail-fast(该插件不加载 + blocked 报告); 默认 fail-soft(加载但明确告警)
-   *   - 环: 检测到环 → 保留原顺序并告警(绝不静默死循环)
+  /* dependency topological sort (2026-10-07 deep refactor §B)
+* Background: the manifest always had a depends field (billing -> model-square) but **no code ever read it** --
+   *   searching the repo for .depends only found the declaration itself; the consequence was silent degradation on missing deps (showing up as "prices lost after switching branches"),
+   *   instead of failing loudly. This activates it, benchmarked against Minecraft Forge's mod dependency resolution.
+* Semantics:
+   *   - topological sort: dependees load first (within the same type group)
+   *   - missing dependencies: strict mode fails fast (the plugin does not load + a blocked report); default fail-soft (loads but warns clearly)
+   *   - cycles: a detected cycle keeps the original order and warns (never a silent infinite loop)
    * @returns {{order:Array, missing:Array<{id,dep}>, cycles:string[]}}
    */
   _topoSort(entries) {
     const byId = new Map(entries.map(e => [e[0].id, e]));
     const missing = [], cycles = [];
-    const out = [], state = new Map();   // id -> 1=访问中 2=已完成
+    const out = [], state = new Map();   // id -> 1=in progress 2=done
     const visit = (id, stack) => {
       if (state.get(id) === 2) return;
       if (state.get(id) === 1) { cycles.push(stack.concat(id).join(' → ')); return; }
@@ -218,7 +218,7 @@ class PluginManager {
       for (const dep of deps) {
         const d = String(dep || '');
         if (!d) continue;
-        if (!byId.has(d)) { missing.push({ id, dep: d }); continue; }   // 依赖没启用/没安装
+        if (!byId.has(d)) { missing.push({ id, dep: d }); continue; }   // dependency not enabled/not installed
         visit(d, stack.concat(id));
       }
       state.set(id, 2);
@@ -228,9 +228,9 @@ class PluginManager {
     return { order: out, missing, cycles };
   }
 
-  /* 激活某实例启用的插件。先 type:'auth' 后 type:'business'; 认证插件失败 fail-closed 阻断 (§3.2)。
-   * ★2026-10-07: 组内按 manifest.depends 做拓扑排序(以前完全不读 depends)。
-   * 返回 {ok, blocked?:原因, warnings?:[], missing?:[], cycles?:[]} */
+/* Activate the plugins an instance enables. type:'auth' first, then 'business'; auth plugin failure fail-closed blocks (§3.2).
+* ★2026-10-07: topological sort within a group by manifest.depends (depends used to be ignored entirely).
+* Returns {ok, blocked?:reason, warnings?:[], missing?:[], cycles?:[]} */
   activateInstance(uid, cfg) {
     this.deactivateInstance(uid);
     this.scanInstalled();
@@ -242,7 +242,7 @@ class PluginManager {
       if (!inst) { this.log(`[uid:${uid}] 插件未安装:`, pc.id); continue; }
       (inst.manifest.type === 'auth' ? authPlugins : bizPlugins).push([pc, inst]);
     }
-    /* 依赖解析: 严格模式由实例配置 strictDepends=true 打开(默认 fail-soft, 不打断线上服务) */
+    /* dependency resolution: strict mode via instance config strictDepends=true (default fail-soft, never interrupting live service) */
     const strict = !!(cfg && cfg.strictDepends);
     const warnings = [], allMissing = [], allCycles = [];
     const resolve = (arr) => {
@@ -253,7 +253,7 @@ class PluginManager {
           (strict ? ' → strictDepends 已开, 跳过该插件' : ' → 继续加载(可能功能降级)'));
       }
       for (const c of r.cycles) { allCycles.push(c); this.log(`[uid:${uid}] ⚠ 依赖成环: ${c} → 按声明顺序加载`); }
-      /* strict: 丢掉依赖不全的插件 */
+      /* strict: drop plugins with incomplete dependencies */
       const order = strict ? r.order.filter(e => !r.missing.some(m => m.id === e[0].id)) : r.order;
       return order;
     };
@@ -262,7 +262,7 @@ class PluginManager {
     if (allMissing.length) warnings.push('依赖缺失 ' + allMissing.length + ' 处');
     if (allCycles.length) warnings.push('依赖成环 ' + allCycles.length + ' 处');
 
-    // 1) 认证插件先加载, fail-closed
+    // 1) auth plugins load first, fail-closed
     for (const [pc, inst] of authOrder) {
       const r = this.activateOne(uid, pc, inst, cfg);
       if (!r.ok) {
@@ -270,7 +270,7 @@ class PluginManager {
         return { ok: false, blocked: 'auth plugin failed: ' + pc.id + ' — ' + r.error, warnings, missing: allMissing, cycles: allCycles };
       }
     }
-    // 2) 业务插件 (已按依赖排序: 被依赖者在前)
+    // 2) business plugins (dependency-ordered: dependees first)
     for (const [pc, inst] of bizOrder) this.activateOne(uid, pc, inst, cfg);
     return { ok: true, warnings, missing: allMissing, cycles: allCycles };
   }
@@ -284,9 +284,9 @@ class PluginManager {
       routes: new Map(), timers: [], hooks: {},
       data: this.loadData(uid, pc.id),
       dirty: false,
-      /* 运行数据版本号"已见"水位 —— 分发前据此决定要不要重读磁盘(见 maybeReloadData) */
+      /* the "seen" watermark for runtime-data versions -- decides whether to re-read disk before dispatch (see maybeReloadData) */
       _dataSeen: this._dataRev.get(pc.id) || 0,
-      // 配置: plugins-config/<id>.json[uid] 优先, 回退实例内联 cfg.plugins[].config (旧格式兼容)
+      // config: plugins-config/<id>.json[uid] first, falling back to inline cfg.plugins[].config (legacy format)
       cfg: this.store.getPluginConfig(pc.id, uid) || pc.config || {},
     };
     const saveTimer = setInterval(() => this.flushData(state), 30000);
@@ -313,10 +313,10 @@ class PluginManager {
     return { ok: true };
   }
 
-  /** ctx 工厂 (文档 §7.1)。perms 运行时可校验的敏感能力逐项检查。 */
+/** ctx factory (docs §7.1). perms: per-item runtime checks of sensitive capabilities. */
   makeCtx(state, cfg) {
     const self = this;
-    state._instCfg = cfg; // 实例配置引用 (security.verifyIntent 认证用)
+    state._instCfg = cfg; // instance config reference (used by security.verifyIntent auth)
     const perms = new Set(state.manifest.permissions || []);
     const needPerm = (p) => { if (!perms.has(p)) throw new Error(`插件 ${state.pluginId} 未声明权限: ${p}`); };
     const uid = state.uid;
@@ -326,19 +326,19 @@ class PluginManager {
       instanceName: cfg._name,
       config: state.cfg,
 
-      /* —— 配置 (§6.2 经内核中间层, 不直读文件) —— */
+      /* -- config (§6.2 via the kernel middle layer, never reading files directly) -- */
       getPluginConfig: (pluginId, u) => self.store.getPluginConfig(pluginId, u == null ? uid : u),
-      setPluginConfig: (u, conf) => { // setPluginConfig(config) 或 setPluginConfig(uid, config)
+      setPluginConfig: (u, conf) => { // setPluginConfig(config) or setPluginConfig(uid, config)
         if (conf === undefined) { conf = u; u = uid; }
         self.store.setPluginConfig(state.pluginId, u == null ? uid : u, conf);
         state.cfg = conf;
-        /* 配置版本号 +1, 并**立即**把新配置同步给同插件的其它实例(state.cfg 原地刷新)。
-         * ★2026-09-18 从"只递增版本号"改成"主动同步": 版本号只有插件自己写 cfgLive() 去查才有用,
-         *  而绝大多数插件没查(model-square 就没查 → 用户报「Guili 分支配了价格, 切回 default 显示无价格」)。
-         *  详见 bumpCfgRev 的注释。 */
+        /* bump the config version +1 and **immediately** push-sync the new config to the plugin's other instances (state.cfg refreshed in place).
+         * *2026-09-18 changed from "only bump the version" to "push-sync": a version number helps only if the plugin itself polls cfgLive(),
+         *  yet most plugins never check (model-square didn't -> user report "Guili branch has prices, switching to default shows none").
+         *  see the bumpCfgRev comment for details. */
         self.bumpCfgRev(state.pluginId, state.key);
       },
-      /** 配置版本号 (插件用: 变了说明该重新 getPluginConfig 取最新配置) */
+      /** config version (for plugins: a change means re-fetch via getPluginConfig) */
       configRev: () => self._cfgRev.get(state.pluginId) || 0,
       getInstanceConfig: (u) => {
         const c = self.store.loadInstance(u == null ? uid : u);
@@ -348,33 +348,33 @@ class PluginManager {
         return masked;
       },
 
-      /* —— HTTP 路由 —— */
+      /* -- HTTP routes -- */
       registerRoute(method, p, handler) { // /plugins/<id><path>
         if (!p.startsWith('/')) p = '/' + p;
         state.routes.set(method.toUpperCase() + ' ' + p, handler);
       },
-      registerExtraEndpoint(method, p, handler) { // /v1/* 扩展端点 (openaiExtras 插件用)
+      registerExtraEndpoint(method, p, handler) { // /v1/* extended endpoints (used by the openaiExtras plugin)
         needPerm('gateway:registerExtraEndpoint');
         const k = method.toUpperCase() + ' ' + p;
         self.extraEndpoints.set(k, { pluginId: state.pluginId, uid, handler });
       },
-      registerTopRoute(method, p, handler) { // 顶层路由 (卡密 /credits、用户 /auth/* 用)
+      registerTopRoute(method, p, handler) { // top-level routes (card /credits, user /auth/*)
         needPerm('gateway:topRoute');
         const k = uid + '|' + method.toUpperCase() + ' ' + p; /* key 带 uid: 同插件多实例各自注册不互相覆盖 */
         if (self.topRoutes.has(k)) self.log(`[${state.pluginId}] 顶层路由覆盖: ${k}`);
         self.topRoutes.set(k, { pluginId: state.pluginId, uid, handler });
       },
 
-      /* —— 认证 (仅 type:'auth' 插件) —— */
+      /* -- auth (type:'auth' plugins only) -- */
       registerAuth(strategy, opts = {}) {
         needPerm('auth:registerAuth');
         if (state.manifest.type !== 'auth') throw new Error('只有 type:"auth" 的插件能注册认证策略');
         if (!self.authChain) throw new Error('内核未提供 authChain');
         strategy._pluginId = state.pluginId;
-        strategy._uid = uid;   /* 多实例: 注销时按 插件+实例 精确匹配 (见 deactivateByKey) */
+        strategy._uid = uid;   /* multi-instance: unregistration matches plugin+instance exactly (see deactivateByKey) */
         return self.authChain.registerAuth(strategy, opts);
       },
-      /* 认证插件暴露 API 给其他插件 (findKey/grantQuota/listKeys/...) */
+      /* auth plugin exposes APIs to other plugins (findKey/grantQuota/listKeys/...) */
       bindAuthApis(apis) {
         if (state.manifest.type !== 'auth') throw new Error('只有 type:"auth" 的插件能 bindAuthApis');
         self._bindingPluginId = state.pluginId;
@@ -382,7 +382,7 @@ class PluginManager {
         self._bindingPluginId = null;
       },
 
-      /* —— 转发 hook (thinkingSummary/redact/replace 等插件用) —— */
+      /* -- forwarding hooks (used by thinkingSummary/redact/replace etc.) -- */
       hook(name, fn) {
         if (!HOOK_NAMES.includes(name)) throw new Error('未知 hook: ' + name + ' (可用: ' + HOOK_NAMES.join(', ') + ')');
         (state.hooks[name] = state.hooks[name] || []).push(fn);
@@ -391,38 +391,38 @@ class PluginManager {
       onRequest(fn) { (state.hooks.onRequestBody = state.hooks.onRequestBody || []).push(fn); },
       onResponse(fn) { (state.hooks.onResponseBody = state.hooks.onResponseBody || []).push(fn); },
 
-      /* —— 基础设施 —— */
+      /* -- infrastructure -- */
       data: {
         get: k => state.data[k],
         set: (k, v) => { state.data[k] = v; state.dirty = true; },
         del: k => { delete state.data[k]; state.dirty = true; },
         all: () => state.data,
-        /* ★2026-09-17 新增：管理端这类"低频但重要"的写入可调它立即落盘。
-         * 默认仍走 30s 周期 flush（保护存储写入量）；billing 存规则用它，
-         * 之前只标 dirty，重启/kill -9 抢在周期 flush 前会把刚存的规则丢掉。 */
+        /* *2026-09-17 new: admin-side "low-frequency but important" writes can call this to flush immediately.
+ * the default is still the 30s periodic flush (protects storage write volume); billing's rule saves use it,
+         * previously only marked dirty; a restart / kill -9 beating the periodic flush lost freshly stored rules. */
         flush: () => self.flushData(state),
-        /* ★2026-09-18 多实例一致性: 把磁盘上的最新数据**原地**并回内存(对象引用不变)。
-         *  用在「读-改-写」型操作(如扣费累加用量)之前 —— 先 reload 再改, 才不至于拿旧快照做增量、
-         *  把别实例刚记的用量整段覆盖掉。有未落盘的本地改动时**不刷新**(返回 false, 防丢)。 */
+        /* *2026-09-18 multi-instance consistency: merge the freshest disk data back into memory **in place** (object references unchanged).
+         *  before "read-modify-write" operations (like deducting usage) -- reload first, then modify, or you increment from a stale snapshot
+         *  wiping usage another instance just wrote. With un-flushed local changes it **does not refresh** (returns false, preventing loss). */
         reload: () => self.reloadData(state),
-        /** 运行数据版本号(别实例写盘 or 本实例落盘都会 +1), 插件可据此自行判断新鲜度 */
+        /** Runtime-data version (+1 on any instance's write); plugins can freshness-check against it */
         rev: () => self._dataRev.get(state.pluginId) || 0,
       },
-      /* 插件专属数据目录 (plugins-data/<uid>/<id>/, 惰性创建, 可写文件) */
+      /* plugin-private data dir (plugins-data/<uid>/<id>/, created lazily, files writable) */
       get dataDir() {
         const d = path.join(self.dataDir, String(uid), state.pluginId);
         try { fs.mkdirSync(d, { recursive: true }); } catch (_) {}
         return d;
       },
-      /* —— 管理端页面贡献 (registerAdminUi) ——
-       * 让插件把自己的管理界面做成 **gcui 服务端页面**，由内核的 /admin/ui/<id> 一起下发，
-       * App 管理端就能用原生渲染器画出来（而不是塞一个 WebView 进去，看着违和）。
-       * 声明字段: { id, title, subtitle?, icon?, menu?, render(gw, cfg, q) → gcui 页面 }
-       *   id     : 页面 id（小写字母/数字/连字符）。与内核页同名 = 覆盖内核页；否则作为新页面/菜单项。
-       *   menu   : 默认 true（进侧边栏）；设 false 则只做子页，可被 `open page:/admin/ui/<id>` 打开。
-       *   render : 返回 gcui JSON（同 admin-ui.js 的页面格式），异常会被兜住并显示错误页。
-       * ★安全: 这页由**管理端**加载（x-admin-key），页面里的写操作请用 adminApi 打
-       *   /admin/api/plugin-call（白名单插件）或自己的 /admin/ 端点 —— 页面里绝不放密钥。 */
+      /* -- admin page contributions (registerAdminUi) --
+       * lets plugins ship their admin UI as **gcui server pages**, delivered through the kernel's /admin/ui/<id>,
+* the App admin can draw it with the native renderer (instead of stuffing a WebView in, which looks out of place).
+       * declared fields: { id, title, subtitle?, icon?, menu?, render(gw, cfg, q) -> gcui page }
+       *   id     : page id (lowercase letters/digits/hyphens). Same name as a kernel page = override it; otherwise a new page/menu item.
+       *   menu   : default true (in the sidebar); false = sub-page only, openable via `open page:/admin/ui/<id>`.
+       *   render : returns gcui JSON (same page format as admin-ui.js); exceptions are caught and shown as an error page.
+       * *security: this page loads from the **admin side** (x-admin-key); route its write operations through adminApi
+       *   /admin/api/plugin-call (whitelisted plugins) or its own /admin/ endpoints -- pages never embed secrets. */
       registerAdminUi(def) {
         needPerm('gateway:adminUi');
         const d = def && typeof def === 'object' ? def : null;
@@ -436,7 +436,7 @@ class PluginManager {
       },
 
       cron(a, b, c) {
-        /* 宽容签名: cron(ms, fn) 或 cron(名字, ms, fn) */
+        /* tolerant signature: cron(ms, fn) or cron(name, ms, fn) */
         let ms = a, fn = b;
         if (typeof c === 'function') { ms = b; fn = c; }
         if (typeof ms !== 'number' || !(ms > 0)) ms = 60000;
@@ -447,16 +447,16 @@ class PluginManager {
       },
       stats(u, delta) {
         const inst = self.store.meta(u == null ? uid : u);
-        void inst; void delta; // 统计写入口预留: 由内核 stats 结构承载, 插件通常用 onUsage/onChatDone
+        void inst; void delta; // stats hook reserved: the kernel stats structure carries it; plugins usually use onUsage/onChatDone
       },
       emit: (ev, data) => self.bus.emit(state.pluginId + ':' + ev, data),
-      on: (ev, fn) => self.bus.on(ev, fn),          // 可监听任意插件事件 'pluginId:event'
+      on: (ev, fn) => self.bus.on(ev, fn),          // listen to any plugin event 'pluginId:event'
       encrypt: v => { if (!self.crypt) throw new Error('内核未启用加密'); return self.crypt.encrypt(v); },
       decrypt: v => { if (!self.crypt) throw new Error('内核未启用加密'); return self.crypt.decrypt(v); },
 
-      /* —— 意图安全协议 (Gay Core SDUI, 设计文档 §3/§7) ——
-       * guard(req, params, res, fn): 验签+时间窗+nonce去重+序列号防回滚+幂等 一体化; fn(keyRecord) 返回响应对象。
-       * 签名 = HMAC_SHA256(卡密, ts\nnonce\nseq\nintentId\nMETHOD\npathname\nsha256(body)) */
+      /* -- intent security protocol (Gay Core SDUI, design doc §3/§7) --
+       * guard(req, params, res, fn): all-in-one signature verification + time window + nonce dedup + sequence anti-rollback + idempotency; fn(keyRecord) returns the response object.
+       * signature = HMAC_SHA256(card, ts\nnonce\nseq\nintentId\nMETHOD\npathname\nsha256(body)) */
       security: {
         verifyIntent: (req, params) => self.verifyIntent(state, req, params),
         commit: (token, intentId, seq, nonce, response) => self.commitIntent(state, token, intentId, seq, nonce, response),
@@ -464,7 +464,7 @@ class PluginManager {
           const jsonRes = (code, obj) => { try { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); } catch (_) {} };
           const v = self.verifyIntent(state, req, params);
           if (!v.ok) return jsonRes(v.status || 401, { ok: false, error: v.error, currentSeq: v.currentSeq });
-          if (v.replay !== undefined) return jsonRes(200, v.replay); // 幂等命中: 返回上次响应
+          if (v.replay !== undefined) return jsonRes(200, v.replay); // idempotent hit: return the previous response
           let out;
           try { out = fn(v.keyRecord); } catch (e) { self.log(`[${state.pluginId}] intent 处理异常:`, e.stack || e.message); return jsonRes(500, { ok: false, error: '插件内部错误: ' + e.message }); }
           const h2 = (req && req.headers) || {};
@@ -473,44 +473,44 @@ class PluginManager {
         },
       },
 
-      /* —— 能力倒置: 插件间协作不再靠"知道对方的插件 id" —— */
-      /** 提供一项能力。name 自由约定(建议 kebab-case), 与插件 id 解耦。 */
+      /* -- capability inversion: plugin-to-plugin cooperation no longer requires knowing the other's plugin id -- */
+      /** provide a capability. name is a free convention (kebab-case advised), decoupled from plugin ids. */
       provideCapability(name, impl) {
-        /* ★是否全局由 manifest.dataScope 决定(声明式), 内核不认插件名 */
+        /* *global-ness is decided by manifest.dataScope (declarative); the kernel never checks plugin names */
         const isGlobal = (state.manifest && state.manifest.dataScope === 'global');
         return self.provideCapability(uid, name, impl, state.pluginId, isGlobal);
       },
-      /** 取一项能力; 没装提供方 → null(自行降级, 不要抛)。 */
+      /** fetch one capability; no provider -> null (degrade on your own; never throw). */
       requireCapability(name) { return self.requireCapability(uid, name); },
-      /** 本实例已注册的能力名清单 */
+      /** capability names registered on this instance */
       listCapabilities() { return self.listCapabilities(uid).map(c => c.name); },
 
-      /* —— 客户端能力自检 (2026-10-07): 让插件能"按 App 会什么"渲染, 而不是撞上未知组件才降级 —— */
-      /** 最近一次请求的 App 能力视图; 拿不到头 → null(请回退保守写法) */
-      clientCaps() { return self._lastCaps.get(String(uid)) || null; },   /* 已是 capsView 视图(有 hasComponent 等方法) */
+      /* -- client capability self-check (2026-10-07): lets plugins render "to what the App knows" instead of degrading on unknown components -- */
+      /** the latest request's App capability view; no header -> null (render conservatively) */
+      clientCaps() { return self._lastCaps.get(String(uid)) || null; },   /* already a capsView (has hasComponent etc.) */
 
-      /* ★gcui Kit (2026-10-08, DEVLOG 2.70): 双模式构件收进内核独立模块 src/gcui-kit.js
-       *  —— 插件只声明「筛什么」, caps 探测与 setState/open 分支全在内核;
-       *  App 零参与零重编; 插件作者测试可 require 该模块 stub ctx.gcui。 */
+      /* *gcui Kit (2026-10-08, DEVLOG 2.70): dual-mode components moved into the standalone kernel module src/gcui-kit.js
+       *  -- plugins declare only "what to filter"; caps probing and the setState/open branches live in the kernel;
+       *  zero App involvement, zero rebuilds; plugin authors can require this module to stub ctx.gcui in tests. */
       gcui: require('./gcui-kit'),
 
-      /* —— 上游调用 (复用内核 agent 池/代理) —— */
+      /* -- upstream calls (reusing the kernel agent pool/proxies) -- */
       upstreamRequest(opts) {
         if (!self.upstreamRequest) throw new Error('内核未提供 upstreamRequest');
         return self.upstreamRequest(cfg, opts);
       },
-      /* 渠道路由(与内核同逻辑): 返回 [{ch, upstreamModel}] */
+      /* channel routing (same logic as the kernel): returns [{ch, upstreamModel}] */
       pickChannels(model) { return self.pickChannels ? self.pickChannels(cfg, model) : []; },
 
-      /* —— 网关能力 (permissions 放行) —— */
+      /* -- gateway capabilities (granted per permissions) -- */
       gateway: {
         uid,
         instanceName: cfg._name,
         findKey: token => { needPerm('gateway:findKey'); const a = self._gwApisByUid && self._gwApisByUid.get(uid); return a && a.apis.findKey ? a.apis.findKey(cfg, token) : null; },
         grantQuota: (keyId, tokens) => { needPerm('gateway:grantQuota'); const a = self._gwApisByUid && self._gwApisByUid.get(uid); return a && a.apis.grantQuota ? a.apis.grantQuota(cfg, keyId, tokens) : false; },
-        /** 热重载本实例(配置落盘后调) */
+        /** Hot-reload this instance (call after config persistence) */
         reload() { if (self.gateway) self.gateway.loadInstance(uid); },
-        /** 改实例配置并热重载: mutator(cfg) 就地修改 */
+        /** Edit an instance config and hot-reload: mutator(cfg) edits in place */
         saveInstanceConfig(mutator) {
           needPerm('gateway:saveConfig');
           const c = self.store.loadInstance(uid);
@@ -520,13 +520,13 @@ class PluginManager {
           if (self.gateway) self.gateway.loadInstance(uid);
           return true;
         },
-        /** 实例列表 (meta) */
+        /** Instance list (meta) */
         listInstances() { return self.store.index.instances.map(m => ({ uid: m.uid, name: m.name, port: m.port, enabled: m.enabled !== false })); },
-        /** 本实例全部渠道 (未打码, 插件读模型/分组用) */
+        /** All channels of this instance (unmasked; plugins use it for models/groups) */
         instanceChannels() { const c = self.store.loadInstance(uid); return c ? (c.channels || []) : []; },
-        /** 站点资料 (代币符号/汇率等; bootstrap 本就公开下发, 无敏感字段) */
+        /** Site profile (currency symbol / FX etc.; bootstrap already publishes it; nothing sensitive) */
         serverInfo() { return self.store.getServerInfo() || {}; },
-        /** 模型分组索引 (模型名 → 分组; 卡密分组白名单/筛选用) —— 读 model-square 配置 + 名称前缀推导 */
+        /** Model group index (model -> group; for card group whitelists/filters) -- reads model-square config + name-prefix inference */
         modelGroups() {
           needPerm('gateway:modelGroups');
           const gi = (self.gateway && self.gateway.groupIndex) ? self.gateway.groupIndex() : null;
@@ -534,13 +534,13 @@ class PluginManager {
           const fb = require('./modelgroups').buildIndex(self.store);
           return { declared: fb.declared.slice(), groupsOf: m => fb.groupsOf(m), matches: (m, g) => fb.matches(m, g) };
         },
-        /** 注册/注销全局卡密分支白名单 (auth-cardkey 用) */
+        /** Register/unregister the global card branch whitelist (used by auth-cardkey) */
         registerGlobalKey(token, branches) { needPerm('gateway:registerGlobalKey'); self.globalKeys.set(token, { uid, branches: branches || [], pluginId: state.pluginId }); },
         unregisterGlobalKey(token) { self.globalKeys.delete(token); },
-        /** 认证插件暴露的 API (findKey/grantQuota/listKeys/addKey/...), 其他插件经此用卡密能力 */
+        /** APIs exposed by auth plugins (findKey/grantQuota/listKeys/addKey/...); other plugins reach card capabilities through it */
         authApis() { needPerm('gateway:authApis'); const a = self._gwApisByUid && self._gwApisByUid.get(uid); return (a && a.apis) || {}; },
-        /* ★加密口令开关 (2026-09-18「密钥保险箱」插件用): 口令只在内存, 不落盘。
-         *  插件负责 UI/流程(签名意图 + SDUI 页), 内核只提供这四个动作与落盘/重载。 */
+        /* *encryption passphrase switch (for the 2026-09-18 "key vault" plugin): passphrase lives in memory only, never on disk.
+         *  plugins own UI/flow (signed intents + SDUI pages); the kernel provides only these four actions plus persistence/reload. */
         cryptStatus() { needPerm('gateway:crypt'); return self.gateway ? self.gateway.cryptStatus() : null; },
         cryptUnlock(pass, adminKey) { needPerm('gateway:crypt'); return self.gateway ? self.gateway.cryptUnlock(pass, adminKey) : { ok: false, error: '内核不支持' }; },
         cryptLock() { needPerm('gateway:crypt'); return self.gateway ? self.gateway.cryptLock() : { ok: false, error: '内核不支持' }; },
@@ -552,15 +552,15 @@ class PluginManager {
     };
   }
 
-  /* 认证插件注册后提供的能力 (findKey/grantQuota/listKeys/addKey/updateKey/deleteKey 等, 由 auth 插件 bind) */
+/* Capabilities an auth plugin provides once registered (findKey/grantQuota/listKeys/addKey/updateKey/deleteKey etc., bound by the auth plugin) */
   bindGatewayAuthApis(uid, apis) {
     if (!this._gwApisByUid) this._gwApisByUid = new Map();
     const cur = this._gwApisByUid.get(uid);
-    /* 同实例重复绑定时合并(覆盖同名字段), 并记录属主插件 */
+    /* duplicate bindings within an instance merge (same-named fields overwritten) and record the owning plugin */
     this._gwApisByUid.set(uid, { apis: Object.assign((cur && cur.apis) || {}, apis), pluginId: (cur && cur.pluginId) || this._bindingPluginId || null });
   }
 
-  /* ---------- hook 聚合: 产出 router.handleChat 需要的 hooks ---------- */
+  /* ---------- hook aggregation: produce the hooks object router.handleChat needs ---------- */
   hooksFor(uid) {
     const states = [...this.active.values()].filter(s => s.uid === uid);
     if (!states.length) return null;
@@ -569,10 +569,10 @@ class PluginManager {
     const onRequestBody = collect('onRequestBody');
     if (onRequestBody.length) hooks.onRequestBody = (body, ctx) => { for (const fn of onRequestBody) { try { body = fn(body, ctx) || body; } catch (e) { this.log('onRequestBody:', e.message); } } return body; };
     const onChatAuth = collect('onChatAuth');
-    /* ★2026-09-18：onChatAuth 原来是"第一个非空决定即返回"—— 而 auth-cardkey 对**放行**的请求
-     *  也会返回一个"额度预授权"对象(非空)，于是排在后面的插件(如 billing 的"未定价禁止调用")
-     *  **永远轮不到执行**。改为：任何插件的**拒绝**(status>=400 或带 message)立即生效；
-     *  否则记住第一个非空对象返回(保留 quota 预授权语义)。 */
+/* ★2026-09-18: onChatAuth used to "return on the first non-empty decision" -- but for **allowed** requests auth-cardkey
+     *  it also returned a "quota pre-authorization" object (non-empty), so later plugins (like billing's "unpriced models must not be called")
+     *  **never got its turn**. Now: any plugin's **rejection** (status>=400 or carrying a message) takes effect immediately;
+     *  otherwise remember and return the first non-empty object (preserving quota pre-authorization semantics). */
     if (onChatAuth.length) hooks.onChatAuth = (info) => {
       let first = null;
       for (const fn of onChatAuth) {
@@ -583,14 +583,14 @@ class PluginManager {
       }
       return first;
     };
-    /* ★预授权估算 (2026-09-18)：把「token 数」换算成「额度」的唯一通道。
-     *  背景：结算走 billing（charged = raw/1e6 × 倍率，量级 1e-3），而预授权冻结原来
-     *  直接用 token 数（量级 1e3）→ 差 100 万倍，额度 99.97 的卡被
-     *  "本次请求预授权需要约 13209" 429 拒掉，而那次实际只扣 0.01。
-     *  约定：注册方（billing，价格唯一真相在它手里）返回**额度单位**的预估值；
-     *        返回 null/无效值 = 这次估不出来（没装 billing / 模型未定价）→
-     *        调用方回退「1 token = 1 额度」的老口径（与老口径结算严格对齐）。
-     *  取值语义：第一个有效（非 null、有限、≥0）的数生效。 */
+    /* *pre-auth estimate (2026-09-18): the sole channel converting "token counts" into "quota".
+     *  background: settlement goes through billing (charged = raw/1e6 x multiplier, magnitude 1e-3), while pre-auth freezing originally
+     *  raw token counts (magnitude 1e3) -> a million-fold error; a card with 99.97 quota got
+     *  "this request pre-authorizes about 13209" and 429-rejected, while it actually deducted 0.01.
+     *  convention: the registrar (billing, the single source of pricing truth) returns the estimate in **quota units**;
+     *        returning null/invalid = no estimate this time (billing absent / model unpriced) ->
+     *        callers fall back to the legacy "1 token = 1 quota" convention (strictly aligned with legacy settlement).
+     *  value semantics: the first valid (non-null, finite, >=0) number wins. */
     const onQuotaEstimate = collect('onQuotaEstimate');
     if (onQuotaEstimate.length) hooks.onQuotaEstimate = (info) => {
       for (const fn of onQuotaEstimate) {
@@ -617,8 +617,8 @@ class PluginManager {
     if (st.length) hooks.sanitizeText = (s, ctx) => { for (const fn of st) { try { s = fn(s, ctx); } catch (e) { this.log('sanitizeText:', e.message); } } return s; };
     const ou = collect('onUsage');
     if (ou.length) hooks.onUsage = (usage, ctx) => { for (const fn of ou) { try { fn(usage, ctx); } catch (e) { this.log('onUsage:', e.message); } } };
-    /* 动态计费：多插件时**按注册顺序**依次算，最后一个非空结果生效（后注册的优先级更高）。
-     * 约定：返回数字 = 应扣加权 token；返回 {charged, detail} 可带明细；返回 null = 不参与（交给下一个）。 */
+    /* dynamic billing: with multiple plugins, evaluate **in registration order**; the last non-null result wins (later registrations have higher priority).
+     * convention: return a number = weighted tokens to deduct; {charged, detail} may carry a breakdown; null = not participating (hand to the next one). */
     const bil = collect('billing');
     if (bil.length) hooks.billing = (usage, ctx) => {
       let out = null;
@@ -637,9 +637,9 @@ class PluginManager {
     return Object.keys(hooks).length ? hooks : null;
   }
 
-  /* ---------- 数据持久化 (按 UID 隔离) ---------- */
+  /* ---------- Data persistence (isolated per UID) ---------- */
   dataFile(uid, pluginId) {
-    /* dataScope=global 的插件(用户/卡密)数据全局共享: plugins-data/_global/<id>.json */
+    /* dataScope=global plugins (users/cards) share data globally: plugins-data/_global/<id>.json */
     const scope = this.store.dataScope(pluginId);
     const dir = scope === 'global' ? '_global' : String(uid);
     const safe = s => String(s).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -655,16 +655,16 @@ class PluginManager {
     try {
       const f = this.dataFile(state.uid, state.pluginId);
       fs.mkdirSync(path.dirname(f), { recursive: true });
-      /* ★写盘前"读旧合并"(2026-09-18 多实例一致性): 本实例的内存是**激活时的快照**,
-       *  盘上可能已经有别实例后来写进去的键 —— 直接用内存覆盖会把它们整段抹掉
-       *  (与插件配置 ctx.config 同一个坑, 已实测: default 实例写一次价就把 Guili 的键删了)。
-       *  合并口径: 磁盘为底 + 内存覆盖(本实例改过的顶层键以内存为准; 只有别实例有的键保留下来)。 */
+      /* *"read-old-then-merge" before persisting (2026-09-18 multi-instance consistency): this instance's memory is a **snapshot from activation**,
+       *  the disk may already hold keys other instances wrote later -- overwriting straight from memory would wipe them wholesale
+       *  (the same trap as plugin config ctx.config; verified: one price write from default deleted Guili's keys).
+       *  merge convention: disk as base + memory overrides (top-level keys this instance changed win; keys only other instances have are preserved). */
       let disk = null;
       try { disk = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) { disk = null; }
       const out = (disk && typeof disk === 'object' && !Array.isArray(disk))
         ? Object.assign({}, disk, state.data) : state.data;
       fs.writeFileSync(f, JSON.stringify(out, null, 2));
-      if (out !== state.data) {           /* 内存同步成合并结果, 保持"内存 = 盘上"(原地, 引用不变) */
+      if (out !== state.data) {           /* sync memory to the merged result, keeping "memory == disk" (in place, references unchanged) */
         for (const k of Object.keys(state.data)) delete state.data[k];
         Object.assign(state.data, out);
       }
@@ -674,8 +674,8 @@ class PluginManager {
     } catch (e) { this.log('插件数据落盘失败:', e.message); }
   }
 
-  /** 全局作用域插件的数据是共享的: 没有未落盘改动时(且别实例写过)分发前重读磁盘。
-   *  ★有本地改动就**不刷新** —— 刷新会丢掉本实例刚扣的费/刚改的规则(宁可旧一点, 不可丢)。 */
+/** Global-scope plugin data is shared: re-read disk before dispatch when there are no local unflushed changes (and another instance wrote).
+*  ★With local changes, do **not refresh** -- refreshing would drop this instance's just-charged fees / just-edited rules (slightly stale beats lost). */
   maybeReloadData(pluginId, uid) {
     try {
       const st = this.active.get(uid + '/' + pluginId);
@@ -686,7 +686,7 @@ class PluginManager {
     } catch (_) {}
   }
 
-  /** 原地重读运行数据(对象引用不变, 插件持有的 ctx.data.all() 引用依然有效)。dirty 时不动作。 */
+/** Re-read runtime data in place (object identity unchanged, so ctx.data.all() references held by plugins stay valid). No-op when dirty. */
   reloadData(state) {
     if (!state || state.dirty) return false;
     try {
@@ -700,13 +700,13 @@ class PluginManager {
     } catch (e) { this.log('插件数据重读失败:', e.message); return false; }
   }
 
-  /** 配置版本号 +1, 并把最新配置**原地**同步给同插件的其它实例(多实例一致性, 2026-09-18)
-   *  背景: 插件配置默认全局共享(manifest 未写 scope → 存 plugins-config/<id>.json 的 `_global`),
-   *  但每个实例的插件在 activate() 时各抓一份**独立**的 ctx.config, 之后内核不刷新 →
-   *  A 实例改完配置, B 实例还拿旧副本(实测 6 实例里 5 个是 231 条旧数据, 只有写入方 260 条)。
-   *  为什么必须**原地**刷新(delete + assign): 插件在 activate() 里 `const cfg = ctx.config` 抓住了对象引用,
-   *  整对象换引用它看不到(auth-cardkey/auth-user 还要靠自己的 cfgLive() 兜底, 原地刷新后它们也自动同步)。
-   *  fromKey: 写入方自己跳过(state.cfg 就是它写进去的那份)。 */
+/** Bump the config version and sync the latest config **in place** to other instances of the same plugin (multi-instance consistency, 2026-09-18)
+*  Background: plugin config is global-shared by default (no scope in manifest -> stored under `_global` in plugins-config/<id>.json),
+   *  but each instance's plugin grabs an **independent** ctx.config at activate(), and the kernel never refreshes it ->
+   *  instance A saved, but B still held the stale copy (measured: 5 of 6 instances had 231 old entries; only the writer had 260).
+   *  why refresh must be **in place** (delete + assign): plugins captured the object reference in activate() via `const cfg = ctx.config`,
+   *  swapping the whole object reference is invisible to them (auth-cardkey/auth-user also had their own cfgLive() fallback; after in-place refresh they sync automatically too).
+   *  fromKey: the writer skips itself (state.cfg is exactly what it wrote). */
   bumpCfgRev(pluginId, fromKey) {
     const rev = (this._cfgRev.get(pluginId) || 0) + 1;
     this._cfgRev.set(pluginId, rev);
@@ -724,7 +724,7 @@ class PluginManager {
   }
   flushAll() { for (const [, s] of this.active) this.flushData(s); this._flushSecAll(); }
 
-  /* ---------- 意图安全协议存储 (plugins-data/<uid>/.gc-security.json) ---------- */
+  /* ---------- Intent security protocol store (plugins-data/<uid>/.gc-security.json) ---------- */
   _secFile(uid) { return path.join(this.dataDir, String(uid), '.gc-security.json'); }
   _loadSec(uid) {
     let s = this._secCache.get(uid);
@@ -749,7 +749,7 @@ class PluginManager {
     }
   }
 
-  /* 意图验签 (Gay Core §3): HMAC_SHA256(token, ts\nnonce\nseq\nintentId\nMETHOD\npathname\nsha256(body)) */
+  /* intent signature (Gay Core §3): HMAC_SHA256(token, ts\nnonce\nseq\nintentId\nMETHOD\npathname\nsha256(body)) */
   verifyIntent(state, req, params) {
     const h = (req && req.headers) || {};
     const token = (params && params.token) || '';
@@ -761,7 +761,7 @@ class PluginManager {
     const sign = String(h['x-gc-sign'] || '');
     if (!ts || !nonce || !seq || !intentId || !sign) return { ok: false, status: 400, error: '缺少签名头 (X-GC-Timestamp/Nonce/Seq/Intent-Id/Sign)' };
     if (Math.abs(Date.now() - ts) > 5 * 60 * 1000) return { ok: false, status: 401, error: '时间戳超出 ±5 分钟窗口' };
-    /* 归属校验: 请求必须落在本插件命名空间 (/<branch>/plugins/<id>/...) */
+    /* ownership check: the request must land in this plugin's namespace (/<branch>/plugins/<id>/...) */
     const pathname = String((req && req.url) || '').split('?')[0];
     if (!pathname.includes('/plugins/' + state.pluginId + '/')) return { ok: false, status: 403, error: '插件实例归属不匹配' };
     const sec = this._loadSec(state.uid);
@@ -774,7 +774,7 @@ class PluginManager {
     const expect = crypto.createHmac('sha256', token).update([ts, nonce, seq, intentId, String(req.method || '').toUpperCase(), pathname, bodyHash].join('\n')).digest('hex');
     const a = Buffer.from(expect), b = Buffer.from(sign);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { ok: false, status: 401, error: '验签失败' };
-    /* 认证: 确认卡密有效 (经 AuthChain) */
+    /* auth: confirm the key card is valid (via AuthChain) */
     let keyRecord = null;
     if (this.authChain && state._instCfg) {
       const r = this.authChain.check(state._instCfg, req, new URL(req.url, 'http://localhost').searchParams);
@@ -790,10 +790,10 @@ class PluginManager {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const rec = sec.keys[tokenHash] || { lastSeq: 0, nonces: [], intents: {} };
     if (seq > (rec.lastSeq || 0)) rec.lastSeq = seq;
-    rec.nonces = (rec.nonces || []).concat(nonce).slice(-200); // nonce 保最近 200
+    rec.nonces = (rec.nonces || []).concat(nonce).slice(-200); // keep the latest 200 nonces
     rec.intents = rec.intents || {};
     rec.intents[intentId] = { ts: Date.now(), response };
-    /* 幂等缓存裁剪: 只留 24h 内/最近 100 条 */
+    /* idempotency cache trimming: keep only entries within 24h / the latest 100 */
     const now = Date.now();
     const entries = Object.entries(rec.intents).filter(([, v]) => now - (v.ts || 0) < 86400e3).slice(-100);
     rec.intents = Object.fromEntries(entries);
@@ -801,14 +801,14 @@ class PluginManager {
     sec.dirty = true;
   }
 
-  /* ---------- 停用 ---------- */
+  /* ---------- Disable ---------- */
   deactivateByKey(key) {
     const state = this.active.get(key);
     if (!state) return;
     for (const t of state.timers) { try { clearInterval(t); } catch {} }
     this.flushData(state);
-    // 注销该插件注册的认证策略与扩展端点/顶层路由/全局卡
-    /* ★按对象注销 (不能按 name: 多实例下同名策略会被一起摘掉, 导致其它实例的卡密 401) */
+    // unregister this plugin's auth strategies and extended endpoints / top-level routes / global cards
+    /* *unregister by object (not by name: in multi-instance, same-named strategies would be stripped together, 401-ing other instances' cards) */
     if (this.authChain) for (const s of [...this.authChain.strategies, ...this.authChain.adminStrategies]) {
       if (s._pluginId === state.pluginId && String(s._uid) === String(state.uid)) this.authChain.unregisterAuthObj(s);
     }
@@ -816,9 +816,9 @@ class PluginManager {
     for (const [k, v] of [...this.topRoutes]) if (v.pluginId === state.pluginId && v.uid === state.uid) this.topRoutes.delete(k);
     if (this._gwApisByUid) { const ga = this._gwApisByUid.get(state.uid); if (ga && ga.pluginId === state.pluginId) this._gwApisByUid.delete(state.uid); }
     for (const [k, v] of [...this.globalKeys]) if (v.pluginId === state.pluginId && v.uid === state.uid) this.globalKeys.delete(k);
-    /* 摘掉该插件贡献的管理端页面（停用/重载后不残留） */
+    /* remove this plugin's contributed admin pages (nothing lingers after disable/reload) */
     for (const k of [...this._adminUiPages.keys()]) if (k.startsWith(String(state.uid) + '/' + state.pluginId + '/')) this._adminUiPages.delete(k);
-    /* 摘掉该插件贡献的能力 (与 effect 回收语义一致: 插件卸载 → 注册回滚) */
+    /* remove this plugin's contributed capabilities (same reclamation semantics as effects: uninstall -> registration rollback) */
     for (const [ck, cv] of [...this._capabilities]) {
       if (cv.pluginId === state.pluginId && (String(cv.uid) === String(state.uid) || cv.globalFrom !== undefined)) {
         this._capabilities.delete(ck);
@@ -834,16 +834,16 @@ class PluginManager {
     for (const key of [...this.active.keys()]) if (key.startsWith(uid + '/')) this.deactivateByKey(key);
   }
 
-  /* ---------- 插件贡献的管理端页面 ---------- */
-  /** 某实例的插件页面表（按插件注册顺序；同名 id 后注册者覆盖）
-   *  ★2026-10-07: 每个页面定义的 render 被包一层 —— 把 App 能力视图作为**第 4 参数**注入,
-   *  插件因此能在生成页面前自检("这台 App 认不认 segmented"), 而不是撞上未知组件才降级。 */
+  /* ---------- Plugin-contributed admin pages ---------- */
+/** A plugin-page table for one instance (in registration order; later registration wins on duplicate ids)
+*  ★2026-10-07: every page's render is wrapped -- the App capability view is injected as the **4th argument**,
+   *  plugins can therefore self-check before generating a page ("does this App know segmented") instead of degrading upon hitting an unknown component. */
   adminPages(uid) {
     const out = [], seen = new Set();
     const pre = String(uid) + '/';
     for (const [k, v] of [...this._adminUiPages].reverse()) {
       if (!k.startsWith(pre)) continue;
-      if (seen.has(v.id)) continue;   // 后注册的优先
+      if (seen.has(v.id)) continue;   // later registrations win
       seen.add(v.id); out.push(v);
     }
     return out.reverse().map(v => {
@@ -854,18 +854,18 @@ class PluginManager {
       });
     });
   }
-  /** 查一个插件页（渲染用）；没有 → null */
+/** Look up a plugin page (for rendering); none -> null */
   adminPage(uid, id) {
     return this.adminPages(uid).find(p => p.id === id) || null;
   }
 
-  /* ---------- 管理端点代调声明 (2026-10-07 去硬编码) ----------
-   * 读插件 manifest 的 adminApi 数组(路径前缀)。返回 null = 该插件未声明(禁止代调);
-   * 返回数组 = 允许代调的前缀(空数组同样禁止)。内核不再持有任何插件名常量。 */
+  /* ---------- Admin-endpoint proxy-call declarations (de-hardcoded 2026-10-07) ----------
+* Read a plugin manifest's adminApi array (path prefixes). null = the plugin declared none (proxy calls forbidden);
+* an array = prefixes allowed for proxy calls (empty array forbids too). The core no longer holds any plugin-name constants. */
   adminApiDecl(pluginId, uid) {
     const id = String(pluginId || '');
     if (!id) return null;
-    /* 必须同时"已安装"且"该实例已启用/运行" —— 未运行的插件没有端点可调 */
+/* Must be both "installed" and "enabled/running on that instance" -- a plugin that is not running has no endpoints to call */
     const inst = this.installed.get(id);
     if (!inst) return null;
     const list = Array.isArray(inst.manifest.adminApi) ? inst.manifest.adminApi : null;
@@ -873,25 +873,25 @@ class PluginManager {
     return list.map(x => String(x || '')).filter(Boolean);
   }
 
-  /* ---------- 能力注册表 (Capability Registry, 2026-10-07) ----------
-   * 对标 Minecraft Forge 的 Capability / DSH 的 ctx 服务 seam:
-   *   提供方: ctx.provideCapability(name, impl)   任意插件都能提供, 不要求是某个特定插件
-   *   消费方: ctx.requireCapability(name)         拿不到返回 null(可降级), 不抛异常打断渲染
-   *   内核:   listCapabilities(uid)               只按能力名查, 永不按插件名查
-   * 语义(与 Forge 的 LazyOptional 对齐): 能力缺席 = null 让消费方降级, 而不是抛错 ——
-   *   "缺能力"是正常状态(用户没装那个插件), 不是故障。
+  /* ---------- Capability Registry (2026-10-07) ----------
+* Modeled on Minecraft Forge's Capability / DSH's ctx service seam:
+   *   provider: ctx.provideCapability(name, impl)   any plugin may provide it; no specific plugin is required
+   *   consumer: ctx.requireCapability(name)         returns null when unavailable (degrade gracefully); never throws and interrupts rendering
+   *   kernel:   listCapabilities(uid)               queries by capability name only, never by plugin name
+* Semantics (aligned with Forge's LazyOptional): a missing capability = null so the consumer can degrade, instead of throwing --
+   *   "capability missing" is a normal state (the user has not installed that plugin), not a fault.
    */
   _capKey(uid, name) { return String(uid) + '\u0000' + String(name); }
 
-  /** 注册能力。impl 任意(对象/函数皆可, 由提供方与消费方自行约定)。
-   *  ★global 能力(manifest.dataScope==='global')同时注册到 uid=0 层, 供全局逻辑查询。 */
+/** Register a capability. impl is arbitrary (object or function, whatever provider and consumer agree on).
+   *  *global capabilities (manifest.dataScope==='global') also register at the uid=0 layer for global logic to query. */
   provideCapability(uid, name, impl, pluginId, isGlobal) {
     const n = String(name || '').trim();
     if (!n) throw new Error('provideCapability: 缺少能力名');
     if (impl == null) throw new Error('provideCapability: 能力 ' + n + ' 的实现为空');
     const rec = { uid, name: n, impl, pluginId: pluginId || null, seq: ++this._capSeq };
     this._capabilities.set(this._capKey(uid, n), rec);
-    /* 全局能力额外挂到 uid=0 层(同一 impl 引用, 不复制) */
+    /* global capabilities additionally mount at the uid=0 layer (same impl reference, not copied) */
     if (isGlobal && String(uid) !== '0') {
       this._capabilities.set(this._capKey(0, n), Object.assign({}, rec, { uid: 0, globalFrom: uid }));
       this._globalCaps.add(String(uid) + '\u0000' + n);
@@ -899,8 +899,8 @@ class PluginManager {
     return true;
   }
 
-  /** 取能力实现; 没有 → null (消费方据此降级)。同实例同能力多次注册时后注册者优先。
-   *  ★回退顺序: 实例层 → 全局层(uid=0) —— 插件只注册在实例下时, 全局查询仍能拿到。 */
+/** Get a capability implementation; none -> null (consumers degrade on that). With multiple registrations on one instance, the latest wins.
+*  ★Fallback order: instance layer -> global layer (uid=0) -- when a plugin registers only under an instance, global lookups still find it. */
   requireCapability(uid, name) {
     const r = this._capabilities.get(this._capKey(uid, name));
     if (r) return r.impl;
@@ -911,16 +911,16 @@ class PluginManager {
     return null;
   }
 
-  /** 记录某实例最近一次请求的客户端能力视图(供 ctx.clientCaps() 与插件页 render 第4参数读取)。
-   *  传 null 表示"这次请求没上报能力"(网页端) —— 仍记录, 让插件据此回退保守写法。 */
+/** Record the client capability view of an instance's most recent request (read by ctx.clientCaps() and plugin-page render's 4th argument).
+*  Passing null means "this request reported no capabilities" (web side) -- still recorded, so plugins can fall back to conservative rendering. */
   rememberCaps(uid, caps) {
-    /* ★键一律 String(uid): 踩过 —— Map 的键 Number(1) 与 '1' 不相等,
-     *  写入用 String、读取用 Number 会**静默查不到**(表现为"能力永远是 null")。 */
+/* ★Keys are always String(uid): learned the hard way -- Map keys Number(1) and '1' are not equal,
+     *  writing as String and reading as Number **silently misses** (showing up as "the capability is always null"). */
     if (caps) this._lastCaps.set(String(uid), caps);
     else this._lastCaps.delete(String(uid));
   }
 
-  /** 依赖健康报告(供管理端展示): 缺依赖 / 成环 / 拓扑顺序 */
+/** Dependency health report (for admin display): missing deps / cycles / topological order */
   dependsReport(uid, cfg) {
     const list = this.store.pluginEnableList(cfg);
     const enabled = list.filter(pc => pc && pc.enable && pc.id);
@@ -930,16 +930,16 @@ class PluginManager {
     return { order: r.order.map(e => e[0].id), missing: r.missing, cycles: r.cycles };
   }
 
-  /** 某实例已注册的能力清单(名字+提供者), 供管理端展示 / 插件自检 */
+/** List of capabilities registered by an instance (name + provider), for admin display / plugin self-checks */
   listCapabilities(uid) {
     const out = [];
     for (const v of this._capabilities.values()) {
       if (String(v.uid) !== String(uid)) continue;
-      /* ★api (2026-10-07): 能力可自带一份**可序列化的端点说明**(impl.api() 返回普通对象)。
-       *  为什么: App 的原生管理页原来把 `/plugins/auth-user/admin/users` 这类**具体插件端点**
-       *  写死在源码里 → 换插件实现/新插件接管同名能力, App 都不认(违背"App 为未知插件服务")。
-       *  现在能力自带端点说明, App 按**能力名**查端点, 永不按插件名。
-       *  ★向后兼容: impl 没有 api() → 该字段为 null(老 App/老插件都不受影响)。 */
+      /* *api (2026-10-07): a capability may carry a **serializable endpoint description** (impl.api() returns a plain object).
+       *  why: the App's native admin pages used to hardcode **specific plugin endpoints** like /plugins/auth-user/admin/users
+       *  hardcoding them in source -> a different plugin (or a new one taking over the same capability) would be rejected by the App (violating "serve unknown plugins").
+       *  capabilities now carry their own endpoint descriptions; the App looks endpoints up by **capability name**, never by plugin name.
+       *  *backward compatible: impl without api() -> the field is null (old Apps/plugins unaffected). */
       let api = null;
       try { if (v.impl && typeof v.impl.api === 'function') api = v.impl.api() || null; } catch (_) { api = null; }
       out.push({ name: v.name, pluginId: v.pluginId, global: v.globalFrom !== undefined, api });
@@ -947,7 +947,7 @@ class PluginManager {
     return out;
   }
 
-  /* ---------- 查询 ---------- */
+  /* ---------- Queries ---------- */
   listForInstance(uid, cfg) {
     this.scanInstalled();
     const cfgMap = new Map(this.store.pluginEnableList(cfg).map(p => [p.id, p]));
@@ -964,16 +964,16 @@ class PluginManager {
         sha256: inst.sha256 || '',
         hasUserPage: !!inst.manifest.userPage, hasAdminPage: !!inst.manifest.adminPage,
         userPage: inst.manifest.userPage || null, adminPage: inst.manifest.adminPage || null,
-        /* App UI 注册 (Gay Core): provides 能力声明 / appUi 界面注册点 / theme 配色数据 */
+        /* App UI registration (Gay Core): provides capability declarations / appUi UI slots / theme palette data */
         provides: Array.isArray(inst.manifest.provides) ? inst.manifest.provides : [],
-        /* 运行期真正注册的能力(与 manifest 的静态 provides 分开: provides 是"意图", 这里是"事实") */
+        /* capabilities actually registered at runtime (separate from manifest's static provides: provides = intent, this = fact) */
         capabilities: this.listCapabilities(uid).filter(c => c.pluginId === id).map(c => c.name),
         appUi: (inst.manifest.appUi && typeof inst.manifest.appUi === 'object') ? inst.manifest.appUi : null,
         theme: (inst.manifest.type === 'theme' && inst.manifest.theme && typeof inst.manifest.theme === 'object') ? inst.manifest.theme : null,
         permissions: Array.isArray(inst.manifest.permissions) ? inst.manifest.permissions : [],
         enable: pc ? !!pc.enable : false, running,
         schema: Array.isArray(inst.manifest.configSchema) ? inst.manifest.configSchema : [],
-        /* ★主题插件读**管理端那份**（listForInstance 的结果只被管理端消费；用户端 bootstrap 不下发 config） */
+        /* *theme plugins read the **admin copy** (listForInstance output is consumed by the admin side only; the user-side bootstrap ships no config) */
         config: this.store.getPluginConfig(id, uid, inst.manifest.type === 'theme' ? 'admin' : undefined) || (pc ? (pc.config || {}) : {}),
       });
     }
@@ -984,8 +984,8 @@ class PluginManager {
       .map(p => ({ id: p.id, name: p.name, icon: p.icon, description: p.description, userPage: p.userPage }));
   }
 
-  /* 实例可用主题列表 (Gay Core): 已安装的 theme 插件默认可用, cfg.plugins 里显式 enable:false 才隐藏;
-   * theme-md3 (内置默认主题) 强制在列, 不可隐藏/卸载。 */
+  /* instance-available theme list (Gay Core): installed theme plugins are usable by default; hidden only by an explicit enable:false in cfg.plugins;
+* theme-md3 (built-in default theme) is always listed, cannot be hidden/uninstalled. */
   themesForInstance(uid, cfg, scope) {
     this.scanInstalled();
     const cfgMap = new Map(this.store.pluginEnableList(cfg).map(p => [p.id, p]));
@@ -993,31 +993,31 @@ class PluginManager {
     for (const [id, inst] of this.installed) {
       if (inst.manifest.type !== 'theme' || !inst.manifest.theme) continue;
       const pc = cfgMap.get(id);
-      /* ★声明式(2026-10-07): 默认主题由 manifest.theme.default 声明, 内核不再点名 theme-md3。
-       *  兼容: 旧内置 theme-md3 若无该字段, 按"builtin 且 locked"仍强制在列。 */
+      /* *declarative (2026-10-07): the default theme is declared by manifest.theme.default; the kernel no longer names theme-md3.
+       *  compatibility: the old built-in theme-md3 without this field is still forced listed as "builtin and locked". */
       const isDefault = (inst.manifest.theme && inst.manifest.theme.default === true)
         || (inst.manifest._builtin === true && inst.manifest.locked === true);
       const forced = isDefault;
       if (!forced && pc && pc.enable === false) continue;
       const t = inst.manifest.theme;
-      /* ★插件自定义主色: config.seed / seedDark (填一个颜色, 服务端生成整套调色板覆盖静态配色)。
-       *  与 App 端「自定义主色」的关系: App 本机设置优先, 未设时用这里的插件配色。 */
+      /* *plugin custom primary: config.seed / seedDark (one color in; the server derives a full palette overriding the static scheme).
+       *  relation to the App's "custom primary color": the App's local setting wins; this plugin palette applies when unset. */
       let dark = t.dark || {}, light = t.light || {};
       let cssVars = Object.assign({}, t.cssVars || {});
       try {
-        /* ★配色参数按端分开读（_theme_admin / _theme_user）：用户端与 bootstrap 走 user，
-         *  管理端在 plugin-config 里显式传 scope=admin —— 这样两端可以有不同的配色与圆角。 */
+        /* *palette params read per side (_theme_admin / _theme_user): the user side and bootstrap use user,
+         *  the admin side passes scope=admin explicitly in plugin-config -- so the two ends can have different palettes and radii. */
         const pc2 = this.store.getPluginConfig(id, uid, scope) || {};
         const seedLight = normalizeSeed(pc2.seed);
         const seedDark = normalizeSeed(pc2.seedDark) || seedLight;
         const scheme = String(pc2.scheme || 'standard');
         if (seedDark) { let p = paletteFromSeed(seedDark, true); if (p) dark = Object.assign({}, dark, applyScheme(p, scheme, true)); }
         if (seedLight) { let p = paletteFromSeed(seedLight, false); if (p) light = Object.assign({}, light, applyScheme(p, scheme, false)); }
-        /* Compose 主题扩展: cardStyle / cornerScale / strokeWidth / scheme → cssVars */
+        /* Compose theme extensions: cardStyle / cornerScale / strokeWidth / scheme -> cssVars */
         const cardStyle = String(pc2.cardStyle || cssVars['gc-card-style'] || 'outlined');
         const cornerScale = Math.max(0.5, Math.min(2, Number(pc2.cornerScale) || 1));
-        /* ★回退链统一(2026-10-08): 用户配置(空串=跟随默认) → manifest 静态默认 → 硬编码兜底。
-         *  旧写法 strokeWidth 的回退是硬编码 1, 用户清空参数后 manifest 的 1.5px 永远不生效。 */
+        /* *unified fallback chain (2026-10-08): user config (empty string = follow default) -> manifest static default -> hardcoded fallback.
+         *  the old strokeWidth fallback was hardcoded 1, so a cleared user param kept the manifest's 1.5px from ever applying. */
         const strokeW = Math.max(0, Math.min(4, Number(pc2.strokeWidth)
           || Number(String(cssVars['gc-stroke-width'] || '').replace(/[^0-9.]/g, '')) || 1));
         const r = (base) => Math.round(base * cornerScale) + 'px';
@@ -1028,20 +1028,20 @@ class PluginManager {
         cssVars['gc-stroke-width'] = strokeW + 'px';
         cssVars['gc-card-style'] = cardStyle;
         cssVars['gc-scheme'] = scheme;
-      } catch (_) { /* 配置读取失败: 用静态配色 */ }
+      } catch (_) { /* config read failed: use the static palette */ }
       out.push({
         id, name: t.name || inst.manifest.name || id, builtin: !!inst.manifest._builtin,
         locked: forced, dark, light, cssVars,
-        /* ★2026-10-07: 声明式默认主题标记 —— core.js 据此决定要不要补内核兜底主题,
-         *  内核因此不再点名 theme-md3。旧 App 忽略未知字段, 行为不变。 */
+        /* *2026-10-07: declarative default-theme flag -- core.js uses it to decide whether to add the kernel fallback theme,
+         *  the kernel no longer names theme-md3. Older Apps ignore unknown fields; behavior unchanged. */
         isDefault: !!isDefault,
       });
     }
-    out.sort((a, b) => (b.locked ? 1 : 0) - (a.locked ? 1 : 0)); // md3 排最前
+    out.sort((a, b) => (b.locked ? 1 : 0) - (a.locked ? 1 : 0)); // md3 first
     return out;
   }
 
-  /* ---------- 安装 / 卸载 / 配置 ---------- */
+  /* ---------- Install / uninstall / configure ---------- */
   installPackage(buf, expectedSha256) {
     const actualSha = crypto.createHash('sha256').update(buf).digest('hex');
     if (expectedSha256 && actualSha !== String(expectedSha256).toLowerCase()) {
@@ -1078,7 +1078,7 @@ class PluginManager {
     return this.installPackage(buf, sha256);
   }
 
-  /* 拉取市场索引 (供 market API 用) */
+  /* fetch market indexes (for the market API) */
   async downloadIndex(url, proxyUrl) {
     const buf = await downloadBuf(url, 2 * 1024 * 1024, 5, proxyUrl || null);
     return buf;
@@ -1095,14 +1095,14 @@ class PluginManager {
           if (fs.existsSync(f)) fs.rmSync(f, { force: true });
         }
       } catch {}
-      // 插件配置一并清 (卸载=干净, §6.3)
+      // plugin configs cleared too (uninstall = clean, §6.3)
       try { fs.rmSync(this.store.pluginConfigFile(pluginId), { force: true }); } catch {}
     }
     this.scanInstalled();
     return true;
   }
 
-  /** 插件的配置表单：`scope='admin'` 时读**管理端那份**（主题插件按端分开存）。 */
+/** A plugin's config form: with `scope='admin'`, read the **admin-side copy** (theme plugins store per side). */
   configSchema(uid, pluginId, cfg, scope) {
     const inst = this.installed.get(pluginId);
     if (!inst) return null;
@@ -1115,7 +1115,7 @@ class PluginManager {
     };
   }
 
-  /* ---------- HTTP 分发 (/plugins[/<id>[/<path...>]]) ---------- */
+  /* ---------- HTTP dispatch (/plugins[/<id>[/<path...>]]) ---------- */
   async handle(cfg, req, res, u, p, body) {
     const uid = req._uid != null ? req._uid : (cfg._uid != null ? cfg._uid : 1);
     const segs = p.split('/').filter(Boolean);
@@ -1125,7 +1125,7 @@ class PluginManager {
       res.end(s);
     };
 
-    if (segs.length === 1) { // GET /plugins → 插件中心页(HTML) 或 JSON
+    if (segs.length === 1) { // GET /plugins -> the plugin center page (HTML) or JSON
       if (req.method !== 'GET') return json(405, { error: 'Method Not Allowed' });
       const list = this.userPlugins(uid, cfg);
       const accept = String(req.headers.accept || '');
@@ -1144,8 +1144,8 @@ class PluginManager {
     const subPath = '/' + segs.slice(2).join('/');
     const state = this.active.get(uid + '/' + pluginId);
     if (!state) return json(404, { error: `插件未启用: ${pluginId}` });
-    /* ★多实例一致性(2026-09-18): 全局作用域插件的运行数据, 若本实例没有未落盘改动而别的实例写过,
-     *  先原地重读磁盘再分发 —— 免得读到旧快照(如 billing 规则、卡密用量)。见 maybeReloadData。 */
+    /* *multi-instance consistency (2026-09-18): for global-scope plugin runtime data, when this instance has no un-flushed changes but others wrote,
+*  re-read disk in place before dispatch -- avoids stale snapshots (billing rules, card-key usage). See maybeReloadData. */
     this.maybeReloadData(pluginId, uid);
 
     const handler = state.routes.get(req.method.toUpperCase() + ' ' + subPath);
@@ -1155,21 +1155,21 @@ class PluginManager {
         body: tryJson(body),
         rawBody: body,
         headers: req.headers,
-        /* ★客户端能力(2026-10-07): App 上报的 X-GCUI-* 解析成"能用什么"的视图。
-         *  插件可在渲染前自检 —— 拿不到头(网页端/旧 App) → null, 插件应回退保守写法。 */
+        /* *client capabilities (2026-10-07): the App's X-GCUI-* headers parsed into a "what it can render" view.
+         *  plugins can self-check before rendering -- no header (web/old App) -> null; plugins should render conservatively. */
         clientCaps: (() => {
           try {
             const adminUi = require('./admin-ui');
             return adminUi.capsView(adminUi.parseCaps(req.headers));
           } catch (_) { return null; }
         })(),
-        /* 管理端鉴权: 插件管理端点用 (authAdmin() → {ok, ...}) */
-        /* 管理端鉴权: 插件管理端点用 (authAdmin() → {ok, ...}) */
+        /* Admin auth: for plugin admin endpoints (authAdmin() -> {ok, ...}) */
+        /* Admin auth: for plugin admin endpoints (authAdmin() -> {ok, ...}) */
         authAdmin: () => this.authChain ? this.authChain.checkAdmin(cfg, req, u.searchParams) : { ok: true },
-        /* ★用户密钥(认证链结果) —— 插件页面/意图用它鉴权。
-         *  为什么要单独给: 插件原来用 apis().findKey(token) 从**卡密列表**里找, 而
-         *  「管理员密钥当用户密钥」(auth-adminkey 插件) 是由认证链认领的, 不在卡密列表里
-         *  → 管理员用密钥访问模型广场/个人资料会 401「需要卡密登录」。走认证链就都能认。 */
+        /* *user key (the auth chain's result) -- plugin pages/intents authenticate with it.
+         *  why a separate one: plugins used apis().findKey(token) to search the **card list**, but
+         *  "admin key as user key" (auth-adminkey plugin) is claimed by the auth chain, not present in the card list
+         *  -> admins browsing the model square / profile would get 401 "key card login required". Going through the auth chain recognizes both. */
         userKey: (() => {
           try {
             if (!this.authChain) return null;
@@ -1183,7 +1183,7 @@ class PluginManager {
           return req.headers['x-api-key'] || u.searchParams.get('key') || '';
         })(),
       };
-      /* 记录本次请求的客户端能力, 供 ctx.clientCaps() 同步读取 */
+      /* record this request's client capabilities for synchronous ctx.clientCaps() reads */
       if (params.clientCaps) this._lastCaps.set(String(uid), params.clientCaps);
       try { await handler(req, res, params); }
       catch (e) { this.log(`[${pluginId}] ${subPath} 处理异常:`, e.stack || e.message); if (!res.headersSent) json(500, { error: '插件内部错误: ' + e.message }); }
@@ -1205,7 +1205,7 @@ class PluginManager {
 
 function tryJson(s) { if (!s) return null; try { return JSON.parse(s); } catch { return null; } }
 
-/** 插件中心页（浏览器访问 /plugins 时） */
+/** the plugin center page (when browsers hit /plugins) */
 function renderPluginIndex(list, instName) {
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const base = (instName === 'default' ? '' : '/' + encodeURIComponent(instName)) + '/plugins/';

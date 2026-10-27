@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>多语言 · 翻译管理</title>
 <style>
-  /* ★配色全部走 CSS 变量：App 管理端 WebView 会注入 :root 覆盖实现跟随主题换肤 */
+  /* ★All colors go through CSS variables: the App admin's WebView injects :root overrides to reskin along with the theme */
   :root{
     --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
     --md-sys-color-surface:#141218; --md-sys-color-on-surface:#E6E1E5;
@@ -96,8 +96,8 @@
 <div class="msg" id="msg"></div>
 
 <script>
-/* 与本插件 server.js 通信：同源 fetch（相对路径 → /plugins/i18n/…）。
- * ★BASE 用路径推导，兼容“带实例名前缀”的部署（/实例名/plugins/i18n/pages/admin.html）。 */
+/* Talks to this plugin's server.js via same-origin fetch (relative paths -> /plugins/i18n/...).
+ * ★BASE is derived from the path, compatible with "instance-prefixed" deployments (/instance/plugins/i18n/pages/admin.html). */
 const BASE = location.pathname.replace(/\/pages\/.*$/, '');
 const LANGS = ['zh-CN', 'en', 'zh-TW'];
 
@@ -137,7 +137,7 @@ function allKeys() {
   return [...s].sort((a, b) => a.localeCompare(b, 'zh'));
 }
 
-/* ★行内 onclick 不塞中文串(HTML 属性引号会截断), 全部用下标 KEYS[i] 寻址 */
+/* ★Inline onclick never embeds Chinese strings (HTML attribute quotes would truncate); everything is addressed via KEYS[i] */
 let KEYS = [];
 
 function render() {

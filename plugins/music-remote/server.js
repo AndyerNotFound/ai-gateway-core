@@ -1,22 +1,22 @@
 'use strict';
-/* music-remote v2 - 音乐远程播放
+/** music-remote v2 - remote music playback
  *
- * 数据源: Android 系统媒体会话 (dumpsys media_session), 经 Shizuku(shell 权限) 读取。
- *   - 任何播放器都支持 (VLC / 椒盐音乐 SaltPlayer / ...)
- *   - 拿到: 包名 / 播放状态 / 进度 / 速度 / 媒体元数据描述
- * 音频源: 按曲名在本地音乐目录里匹配文件, 服务器端 Range 流式输出。
- * 控制:  cmd media_session dispatch <play|pause|play-pause|next|previous|stop>
+   * data source: the Android system media session (dumpsys media_session), read via Shizuku (shell permission).
+ *   - Works with any player (VLC / SaltPlayer / ...)
+ *   - Gets: package name / play state / position / speed / media metadata description
+   * audio source: match files in the local music dir by song name; server-side Range streaming output.
+   * control:  cmd media_session dispatch <play|pause|play-pause|next|previous|stop>
  *
- * 端点:
- *   GET  /ui/player       - gcui 页面 (App 端)
- *   GET  /data/now-playing - JSON 状态 (web 播放器轮询)
- *   GET  /stream          - 音频流 (Range)
- *   GET  /art             - 封面 (曲目同目录图片)
- *   GET  /player          - HTML 播放器
- *   GET  /library         - JSON 音乐库
- *   GET  /debug           - 诊断信息
- *   POST /control         - 播放控制 (Bearer 鉴权)
- *   POST /intent/control  - 播放控制 (意图签名)
+   * endpoints:
+ *   GET  /ui/player       - gcui page (App side)
+ *   GET  /data/now-playing - JSON state (polled by the web player)
+ *   GET  /stream          - audio stream (Range)
+ *   GET  /art             - cover art (images from the track's folder)
+ *   GET  /player          - HTML player
+ *   GET  /library         - JSON music library
+ *   GET  /debug           - diagnostics
+ *   POST /control         - playback control (Bearer auth)
+ *   POST /intent/control  - playback control (signed intent)
  */
 const fs = require('fs');
 const path = require('path');
@@ -48,7 +48,7 @@ function fmtTime(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
-/* 归一化: 只留字母数字 (跨语言) */
+/** normalize: keep alphanumerics only (language-independent) */
 function norm(s) {
   return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
@@ -63,14 +63,14 @@ module.exports.activate = (ctx) => {
 
   const rishPath = () => cfg.rishPath || (HOME + '/Shizuku/rish');
 
-  /* ---------- 1. 读媒体会话 ---------- */
+  /* ---------- 1. Read the media session ---------- */
   function rish(cmd, timeout) {
     const r = spawnSync('sh', [rishPath(), '-c', cmd], {
       env: Object.assign({}, process.env, { RISH_APPLICATION_ID: 'com.termux' }),
       encoding: 'utf8', timeout: timeout || 12000, maxBuffer: 32 * 1024 * 1024
     });
     if (r.error) throw new Error('rish 调用失败: ' + r.error.message);
-    /* rish 的输出会随机走 stdout / stderr，两个都收 */
+    /* rish output randomly lands on stdout/stderr; capture both */
     return (r.stdout || '') + (r.stderr || '');
   }
 
@@ -109,12 +109,12 @@ module.exports.activate = (ctx) => {
     const upLine = (out.split('\n').find(l => /^\d+\.\d+\s+\d+\.\d+\s*$/.test(l.trim())) || '').trim();
     const uptimeMs = upLine ? parseFloat(upLine.split(/\s+/)[0]) * 1000 : null;
 
-    /* 只保留有播放状态的活跃会话 */
+    /* keep only active sessions with playback state */
     const cands = parseSessions(out).filter(s => s.active && (s.state === 'PLAYING' || s.state === 'PAUSED'));
     cands.sort((a, b) => {
       const ap = a.state === 'PLAYING' ? 1 : 0, bp = b.state === 'PLAYING' ? 1 : 0;
-      if (ap !== bp) return bp - ap;              /* 播放中优先 */
-      return (b.updated || 0) - (a.updated || 0); /* 其次最近更新的 */
+      if (ap !== bp) return bp - ap;              /* currently playing first */
+      return (b.updated || 0) - (a.updated || 0); /* then most recently updated */
     });
     const s = cands[0];
 
@@ -142,7 +142,7 @@ module.exports.activate = (ctx) => {
     return data;
   }
 
-  /* 进度换算: basePosition + (uptimeNow - updated) * speed */
+  /* Position math: basePosition + (uptimeNow - updated) * speed */
   function positionOf(np) {
     if (!np || !np.playing) return 0;
     let elapsed = 0;
@@ -152,7 +152,7 @@ module.exports.activate = (ctx) => {
     return Math.max(0, Math.round(pos));
   }
 
-  /* ---------- 2. 音乐库索引 + 匹配 ---------- */
+  /* ---------- 2. Music library index + matching ---------- */
   let libCache = { at: 0, files: [] };
 
   const DEFAULT_ROOTS = '/storage/emulated/0/Music,/storage/emulated/0/岸听/Music';
@@ -162,7 +162,7 @@ module.exports.activate = (ctx) => {
       .split(/[,\n]/).map(x => x.trim().replace(/\/+$/, '')).filter(Boolean);
   }
 
-  /* 校验路径在配置的音乐目录内 (防目录穿越) */
+  /* verify the path stays inside the configured music directory (path-traversal guard) */
   function inRoots(fp) {
     const abs = path.resolve(fp);
     return roots().some(r => abs === r || abs.startsWith(r + '/'));
@@ -185,10 +185,10 @@ module.exports.activate = (ctx) => {
     return files;
   }
 
-  /* ---------- 2b. 音频标签索引 (标签优先匹配) ----------
-   * 播放器显示的是**标签**(TITLE/ARTIST/ALBUM)，文件名经常对不上
-   * (例：文件 丑.flac，标签 TITLE=丑；也有 制作人 之类的过场轨)。
-   * metaflac 读 FLAC 约 13ms/个 → 400 首约 5s，一次性、可缓存。 */
+  /* ---------- 2b. Audio tag index (tags matched first) ----------
+   * The player shows **tags** (TITLE/ARTIST/ALBUM), which often disagree with file names
+   * (e.g. file Chou.flac with tag TITLE=Chou; there are also interlude tracks like Producer).
+   * metaflac reads a FLAC in ~13ms -> ~5s for 400 tracks; one-time and cacheable. */
   const TAG_CACHE_FILE = HOME + '/.music-remote-tags.json';
   let tagCache = null;      // { at, entries: [{file,title,artist,album}] }
   let tagBuilding = false;
@@ -198,12 +198,12 @@ module.exports.activate = (ctx) => {
     try {
       const j = JSON.parse(fs.readFileSync(TAG_CACHE_FILE, 'utf8'));
       if (j && Array.isArray(j.entries)) { tagCache = j; return tagCache; }
-    } catch (e) { /* 没有缓存 */ }
+    } catch (e) { /* nothing cached */ }
     tagCache = { at: 0, entries: [] };
     return tagCache;
   }
 
-  /* 用 shell 批量读标签 (单进程 + 位置参数，避免文件名里的空格/引号出问题) */
+  /* Batch-read tags via shell (single process + positional args, sidestepping spaces/quotes in file names) */
   function readTagsBatch(files, cmd) {
     const out = {};
     if (!files.length) return out;
@@ -248,7 +248,7 @@ module.exports.activate = (ctx) => {
     return data;
   }
 
-  /* 后台构建一次 (不阻塞请求); 已缓存且库没变大就直接用 */
+  /* build once in the background (never blocking requests); reuse the cache when the library has not grown */
   function ensureTagIndex() {
     const c = readTagCache();
     if (c.entries.length) return c;
@@ -270,19 +270,19 @@ module.exports.activate = (ctx) => {
     }, 10);
   }
 
-  /* 匹配: 标签优先, 文件名兜底; 返回 {file, score, by}
-   * ★错配比不匹配更糟 —— 规则必须保守:
-   *   - 绝不用「歌手相同」当匹配依据 (一个歌手几十首歌, 等于随机挑)
-   *   - 短标题(1 个字)不参与精确匹配
-   *   - 子串类规则要求长度够 (CJK 至少 4 字)
-   *   - 低于 MIN_SCORE 直接判为"没匹配到" */
+  /* matching: tags first, filename as fallback; returns {file, score, by}
+   * ★A wrong match is worse than no match -- the rules must stay conservative:
+   *   - never use "same artist" as a match basis (an artist has dozens of songs; that is random picking)
+   *   - one-character titles are excluded from exact matching
+   *   - substring-style rules require sufficient length (at least 4 CJK chars)
+   *   - below MIN_SCORE it simply counts as "no match" */
   const MIN_SCORE = 500;
 
-  /* 媒体描述拆候选 (标题, 歌手) 对。
-   * ⚠️ 各播放器塞进 description 的东西不一样:
+  /* split the media description into (title, artist) candidate pairs.
+   * ⚠️ Players stuff different things into description:
    *   VLC        : "Title, Artist, Album"
-   *   SaltPlayer : "<当前歌词行>, Artist - Title, Album"   ← 开桌面歌词时第一段是歌词!
-   *   所以不能假设"第一段=标题", 要把每段都当候选, "A - B" 再拆成 (标题=B, 歌手=A)。 */
+   *   SaltPlayer : "<current lyric line>, Artist - Title, Album"   <- with desktop lyrics on, the first segment is a lyric!
+   *   so never assume "first segment = title"; treat every segment as a candidate and split "A - B" into (title=B, artist=A). */
   function candidatesFromDesc(desc) {
     const out = [];
     const seen = new Set();
@@ -304,7 +304,7 @@ module.exports.activate = (ctx) => {
     let best = null;
     const take = (score, file, by, entry) => { if (score > 0 && (!best || score > best.score)) best = { score, file, by, entry: entry || null }; };
 
-    /* --- 标签索引 (候选对匹配) --- */
+    /* --- tag index (candidate-pair matching) --- */
     const idx = ensureTagIndex();
     if (idx.entries.length) {
       const cands = candidatesFromDesc(desc);
@@ -324,17 +324,17 @@ module.exports.activate = (ctx) => {
           else if (ct.length === 1 &&
                    ((ea.length >= 3 && nd.includes(ea)) || (eal.length >= 4 && nd.includes(eal))))
             take(18000, e.file, 'tag', e);   /* 单字标题: 只有描述里能对上歌手/专辑才敢用 */
-          /* 其余单字标题 → 太危险, 不要 */
+          /* other single-character titles -> too risky, skip */
         }
       }
-      /* 兜底: 长标题直接是描述的子串 (描述格式完全未知时) */
+      /* fallback: the long title is a substring of the description (when the description format is entirely unknown) */
       for (const e of idx.entries) {
         const et = norm(e.title);
         if (et.length >= 4 && nd && nd.includes(et)) take(2600 + et.length, e.file, 'tag');
       }
     }
 
-    /* --- 文件名兜底 --- */
+    /* --- filename fallback --- */
     for (const f of library()) {
       const base = f.split('/').pop().replace(/\.[^.]+$/, '');
       const nb = norm(base);
@@ -347,7 +347,7 @@ module.exports.activate = (ctx) => {
     return best && best.score >= MIN_SCORE ? best : null;
   }
 
-  /* 汇总: 现在播放 + 匹配到的文件 */
+  /* Summary: now-playing + the matched file */
   function snapshot(force) {
     const np = readNowPlaying(force);
     const out = Object.assign({}, np);
@@ -357,11 +357,11 @@ module.exports.activate = (ctx) => {
       const q = () => matchFile(np.description || np.title, np.title, np.artist);
       let hit = q();
       if (!hit) { library(true); hit = q(); }
-      if (!hit && readTagCache().entries.length === 0) { ensureTagIndex(); hit = q(); }  /* 等索引建好再试一次 */
+      if (!hit && readTagCache().entries.length === 0) { ensureTagIndex(); hit = q(); }  /* retry once once the index exists */
       if (hit) {
         out.matched = hit.file; out.matchScore = hit.score; out.matchBy = hit.by;
-        /* 媒体会话给的标题可能被播放器污染 (SaltPlayer 开桌面歌词时塞的是歌词行),
-         * 匹配到文件后就用文件标签显示, 更准 */
+        /* the media session's title may be polluted by the player (SaltPlayer with desktop lyrics stuffs the lyric line in),
+ * once a file matches, display its tags; more accurate */
         if (hit.entry) {
           out.rawTitle = out.title;
           if (hit.entry.title) out.title = hit.entry.title;
@@ -373,7 +373,7 @@ module.exports.activate = (ctx) => {
     return out;
   }
 
-  /* ---------- 3. 控制 ---------- */
+  /* ---------- 3. Control ---------- */
   function dispatch(key) {
     const allow = ['play', 'pause', 'play-pause', 'next', 'previous', 'stop'];
     if (allow.indexOf(key) < 0) return { ok: false, error: '不支持的命令: ' + key };
@@ -383,12 +383,12 @@ module.exports.activate = (ctx) => {
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
-  /* ---------- 4. gcui 页面 ---------- */
-  /* 局域网 IP (Termux 里 App 走 127.0.0.1, 直接抄 Host 得到的地址没法分享给别人) */
+  /* ---------- 4. gcui pages ---------- */
+  /* LAN IP (on Termux the App uses 127.0.0.1; copying the Host header yields an address nobody else can open) */
   function lanHost(port) {
     try {
       const ifaces = os.networkInterfaces();
-      /* 网卡优先级: wlan > eth/ap > 其他 > tun/vpn (vpn 网段别人根本连不上) */
+      /* NIC priority: wlan > eth/ap > others > tun/vpn (nobody can reach a VPN subnet anyway) */
       const score = (n) => {
         if (/^wlan\d*$/.test(n)) return 100;
         if (/^(eth|ap|wifi)\d*$/.test(n)) return 90;
@@ -415,13 +415,13 @@ module.exports.activate = (ctx) => {
     const h = (req && req.headers) || {};
     let host = h.host || 'localhost';
     const proto = h['x-forwarded-proto'] || (req && req.connection && req.connection.encrypted ? 'https' : 'http');
-    /* 配置了对外地址 (局域网 IP / 隧道域名) 就用它 */
+    /* use the configured public address (LAN IP / tunnel domain) when present */
     const conf = String(cfg.publicBaseUrl || '').replace(/\/+$/, '');
     if (conf) {
       if (/\/plugins\/music-remote$/.test(conf)) return conf;
       return conf + '/plugins/music-remote';
     }
-    /* 没配 + 请求来自本机 → 换成局域网 IP, 否则分享出去的地址别人打不开 */
+    /* unset + request from localhost -> substitute the LAN IP, otherwise the shared address does not open for others */
     const hn = host.split(':')[0];
     if (hn === '127.0.0.1' || hn === 'localhost' || hn === '::1') {
       const port = host.split(':')[1] || '16484';
@@ -508,7 +508,7 @@ module.exports.activate = (ctx) => {
     return { gcui: 1, title: '音乐远程播放', root: { type: 'column', gap: 12, children } };
   }
 
-  /* ---------- 5. 路由 ---------- */
+  /* ---------- 5. Routes ---------- */
   ctx.registerRoute('GET', '/ui/player', (req, res, p) => {
     jsonRes(res, 200, buildGcuiPage(snapshot(), baseUrlOf(req)));
   });
@@ -527,7 +527,7 @@ module.exports.activate = (ctx) => {
 
   ctx.registerRoute('GET', '/stream', (req, res, p) => {
     const snap = snapshot();
-    /* 显式指定文件 (音乐库浏览/回退用); 必须落在配置目录内 */
+    /* explicitly specify a file (for library browsing/fallback); it must stay inside the configured directory */
     const qs = String(req.url || '').split('?')[1] || '';
     const qf = (qs.match(/(?:^|&)file=([^&]*)/) || [])[1];
     let fp = null;
@@ -606,7 +606,7 @@ module.exports.activate = (ctx) => {
     try { out.raw = rish('cat /proc/uptime; dumpsys media_session', 12000).slice(0, 8000); }
     catch (e) { out.rawError = e.message; }
     out.snap = snapshot(true);
-    /* 诊断: 用给定描述试跑文件匹配 (不依赖"正在播放") */
+    /* diagnostics: trial-run file matching against the given description (no dependence on "now playing") */
     const qs = String(req.url || '').split('?')[1] || '';
     const dq = qs.match(/(?:^|&)desc=([^&]*)/);
     if (dq && dq[1]) {
@@ -641,13 +641,13 @@ module.exports.activate = (ctx) => {
       }
       const snap = snapshot(true);
       const req2 = { headers: req.headers, url: req.url, connection: req.connection };
-      /* nav:'replace' = 播放/暂停/上一首/下一首都是"同一页就地刷新",
-       * 以前 App 会当成新子页压栈 → 按几次控制键就要按几次返回才出得去(2026-09-17 修) */
+      /* nav:'replace' = play/pause/prev/next all refresh "the same page in place",
+       * the App used to push a new sub-page -> N control taps meant N backs to escape (fixed 2026-09-17) */
       return { ok: true, nav: 'replace', ui: buildGcuiPage(snap, baseUrlOf(req2)) };
     })
   );
 
-  /* 启动后后台建一次标签索引 (不阻塞) */
+  /* build the tag index once in the background after boot (non-blocking) */
   ensureTagIndex();
 
   ctx.log('音乐远程播放 v2 已激活 (媒体会话 + 标签/文件名匹配, 轮询 ' + (pollMs / 1000) + 's)');

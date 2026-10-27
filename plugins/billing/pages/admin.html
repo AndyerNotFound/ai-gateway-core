@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>动态计费 · 管理页</title>
 <style>
-  /* ★配色全部走 CSS 变量：App 管理端 WebView 会注入 :root 覆盖实现跟随主题换肤。
-     不要硬编码深色/浅色（硬编码会导致"App 里是浅色、页面还是暗色"的割裂感）。 */
+  /* *all colors go through CSS variables: the App admin's WebView injects :root overrides so skins follow the theme.
+     do not hardcode dark/light (hardcoding splits the look: "light in the App, dark on the page"). */
   :root{
     --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
     --md-sys-color-primary-container:#4F378B; --md-sys-color-on-primary-container:#EADDFF;
@@ -144,9 +144,9 @@
 </div>
 
 <script>
-/* 与本插件 server.js 通信：同源，直接 fetch('admin/xxx')（相对路径 → /plugins/billing/admin/xxx）。
- * 管理端点鉴权由网关的 p.authAdmin() 负责（同源 cookie / App 注入的 adminKey cookie）。
- * ★BASE 用路径推导，兼容"带实例名前缀"的部署（/实例名/plugins/billing/pages/admin.html）。 */
+/*/* talking to this plugin's server.js: same origin, fetch('admin/xxx') directly (relative path -> /plugins/billing/admin/xxx).
+   * admin endpoint auth is handled by the gateway's p.authAdmin() (same-origin cookie / the App-injected adminKey cookie).
+   * *BASE is derived from the path, supporting deployments "with an instance-name prefix" (/<instance>/plugins/billing/pages/admin.html). */
 const BASE = location.pathname.replace(/\/pages\/.*$/, '');
 
 async function api(path, method, body) {
@@ -166,7 +166,7 @@ const $ = id => document.getElementById(id);
 
 let TRIGGERS = [], EFFECTS = [], RULES = [], SETTINGS = {};
 
-/* ==================== 总览 ==================== */
+/*/* ==================== Overview ==================== */
 async function loadOverview() {
   try {
     const j = await api('admin/status');
@@ -199,7 +199,7 @@ function kv(k, v) { return '<div class="kv"><span class="k">' + esc(k) + '</span
 function syncModeUi() { $('rateWrap').style.display = $('setMode').value === 'money' ? '' : 'none'; }
 $('setMode').addEventListener('change', syncModeUi);
 
-/* ==================== 设置 ==================== */
+/*/* ==================== Settings ==================== */
 async function saveSettings() {
   $('setMsg').textContent = '';
   const disc = {};
@@ -224,7 +224,7 @@ async function saveSettings() {
   } catch (e) { $('setMsg').className = 'msg e'; $('setMsg').textContent = '保存失败：' + e.message; }
 }
 
-/* ==================== 规则列表 ==================== */
+/*/* ==================== Rule list ==================== */
 async function loadRules() {
   try {
     const j = await api('admin/rules');
@@ -294,7 +294,7 @@ const moveRule = (i, d) => postRule({ action: 'move', index: i, to: i + d });
 function delRule(i) { if (confirm('删除规则「' + (RULES[i].note || i + 1) + '」？')) postRule({ action: 'delete', index: i }); }
 function clearRules() { if (confirm('清空全部全局规则？模型自带的规则不受影响。')) postRule({ action: 'clear' }); }
 
-/* ==================== 规则编辑（「触发 → 效果」标签式） ==================== */
+/*/* ==================== Rule editing ("trigger -> effect" tag style) ==================== */
 function triggerOptions(sel) {
   return TRIGGERS.map(t => '<option value="' + t.k + '"' + (t.k === sel ? ' selected' : '') + '>' + esc(t.label) + '</option>').join('');
 }
@@ -390,7 +390,7 @@ function editRule(i) {
   };
 }
 
-/* 轻量弹窗（不依赖任何库；配色跟随 CSS 变量） */
+/*/* lightweight dialogs (no library deps; colors follow CSS variables) */
 function mkDialog(title, content, okText) {
   const mask = document.createElement('div');
   mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;z-index:99';
@@ -420,7 +420,7 @@ function mkDialog(title, content, okText) {
 }
 function addRule() { editRule(-1); }
 
-/* ==================== 试算 ==================== */
+/*/* ==================== Trial calculation ==================== */
 async function simulate() {
   $('simResult').className = 'msg';
   $('simResult').textContent = '计算中…';
@@ -440,7 +440,7 @@ async function simulate() {
   } catch (e) { $('simResult').className = 'msg e'; $('simResult').textContent = '试算失败：' + e.message; }
 }
 
-/* ==================== 启动 ==================== */
+/*/* ==================== Boot ==================== */
 loadOverview().then(loadRules);
 </script>
 </body>

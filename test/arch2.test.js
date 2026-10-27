@@ -1,5 +1,5 @@
 'use strict';
-/* 深度改造 第二批验证 (2026-10-07): A 注册能力 / B depends 拓扑 / C 能力协商 */
+/** deep refactor, second validation batch (2026-10-07): A capability registration / B depends topology / C capability negotiation */
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
@@ -12,7 +12,7 @@ function stripComments(src) {
 }
 let pass = 0, fail = 0;
 const _queue = [];
-/** 支持 async 用例: 同步的立即跑, 异步的排队(末尾统一 await) */
+/** supports async cases: sync ones run immediately, async ones queue (awaited together at the end) */
 function T(n, fn) {
   if (fn && fn.constructor && fn.constructor.name === 'AsyncFunction') {
     _queue.push(async () => {
@@ -139,7 +139,7 @@ T('递归覆盖 template 内部(list 模板)', () => {
 
 console.log('\n[C2] async 页面的能力协商 (踩过的坑)');
 T('★async 页面(users)的协商不被 Promise 吞掉', async () => {
-  /* 回归: render 原来对 async build 直接 negotiate(Promise) → `!page.root` 跳过协商, 静默失效 */
+  /* regression: render used to negotiate(Promise) directly on an async build -> `!page.root` skipped negotiation, failing silently */
   const gw = { store: {}, pool: { instances: new Map() }, plugins: { requireCapability: () => null, listForInstance: () => [], adminPages: () => [] } };
   const cfg = { _uid: 1, _name: 'default' };
   const caps = adminUi.parseCaps({ 'x-gcui-version': '1', 'x-gcui-components': 'column,text,row' });

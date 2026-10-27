@@ -1,5 +1,5 @@
 'use strict';
-/* 验证: model-square 的 model-edit 页在"老 App"下把 segmented 降级成 input */
+/** verify: model-square's model-edit page degrades segmented into an input on "old Apps" */
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
@@ -29,7 +29,7 @@ function countType(node, t) {
 
   console.log('\n[真实插件用例: model-square 的规则编辑器]');
 
-  /* 让 model-square 真正激活(用真实插件目录) */
+  /* Make model-square actually activate (using the real plugin directory) */
   const realStore = Object.assign({}, store, { pluginsDir: path.join(__dirname, '..', 'plugins') });
   const realPm = new PluginManager(realStore, { log: () => {} });
   realPm.installed = realPm.installed || new Map();
@@ -51,7 +51,7 @@ function countType(node, t) {
   const pageDef = realPm._adminUiPages.get('1/model-square/model-edit');
   if (!pageDef) { console.log('  (跳过: 未注册 model-edit 页)'); process.exit(0); }
 
-  /* 用 adminPages(注入 caps) 取包装后的 render */
+  /* Use adminPages (caps injected) to get the wrapped render */
   const q = new Map([['instance', 'default'], ['channel', 'ch1'], ['model', 'gpt-4o']]);
 
   T('新 App(认 segmented) → 保持 segmented', () => {

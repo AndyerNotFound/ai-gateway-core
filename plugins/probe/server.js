@@ -1,8 +1,8 @@
 'use strict';
-/* probe 插件 - 渠道成功率探测
- * 配置: { enable, intervalMin: 10, mode: 'models'|'chat' }
- * 数据: ctx.data.probe = { <chName>: {total, ok, lastAt, lastOk, lastErr} }
- * 端点: /plugins/probe/status, POST /plugins/probe/run
+/** the probe plugin - channel success-rate probing
+   * config: { enable, intervalMin: 10, mode: 'models'|'chat' }
+   * data: ctx.data.probe = { <chName>: {total, ok, lastAt, lastOk, lastErr} }
+   * endpoints: /plugins/probe/status, POST /plugins/probe/run
  */
 function jsonRes(res, code, o) { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(o)); }
 
@@ -56,7 +56,7 @@ module.exports.activate = (ctx) => {
   if (cfg.enable) {
     const iv = Math.max(1, Number(cfg.intervalMin) || 10) * 60000;
     ctx.cron('probe-round', iv, probeRound);
-    setTimeout(probeRound, 20000).unref(); // 启动 20s 先探一轮
+    setTimeout(probeRound, 20000).unref(); // probe once 20s after boot
   }
 
   ctx.registerRoute('GET', '/status', (req, res) => {

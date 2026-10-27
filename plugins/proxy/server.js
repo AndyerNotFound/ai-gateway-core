@@ -1,6 +1,6 @@
-/* 代理设置插件 —— scope: instance (代理配置跟随当前实例)
- * 真相源: 插件自己的 config(不经过实例配置的打码, 密码不会丢)
- * 同时镜像写进实例配置的 cfg.proxies, 内核 proxy.js 的 getAgents() 会按 ch.proxy 的名字取用
+/* Proxy settings plugin -- scope: instance (proxy config follows the current instance)
+   * source of truth: the plugin's own config (bypasses instance-config masking; passwords never lost)
+   * also mirrored into the instance config's cfg.proxies; the kernel proxy.js getAgents() fetches them by ch.proxy name
  */
 module.exports = {
   activate(ctx) {
@@ -14,7 +14,7 @@ module.exports = {
   const saveList = (l) => {
     ctx.config.proxies = l;
     ctx.setPluginConfig(ctx.config);
-    /* 镜像到实例配置 —— 内核按名字引用 */
+    /* Mirrored into the instance config -- the core references it by name */
     const obj = {};
     for (const p of l) {
       if (!p || !p.name) continue;
@@ -52,7 +52,7 @@ module.exports = {
       const idx = list.findIndex(x => x.name === nm);
       if (idx < 0) return send(res, 404, { error: '代理不存在: ' + nm });
       list.splice(idx, 1);
-      /* 同时清掉引用它的渠道 */
+      /* also clear channels referencing it */
       try {
         ctx.gateway.saveInstanceConfig((cfg) => {
           for (const ch of (cfg.channels || [])) if (ch && ch.proxy === nm) delete ch.proxy;
@@ -74,7 +74,7 @@ module.exports = {
     if (b.password) obj.password = String(b.password);
     const idx = list.findIndex(x => x.name === name);
     if (idx >= 0) {
-      /* 密码留空 = 保持原密码 */
+      /* empty password = keep the current one */
       if (b.password === undefined || b.password === null || b.password === '') {
         if (list[idx].password) obj.password = list[idx].password;
       }
@@ -84,7 +84,7 @@ module.exports = {
     send(res, 200, { ok: true, proxies: list });
   });
 
-  /* 连通性测试: TCP 拨到代理主机 */
+  /* Connectivity test: TCP dial to the proxy host */
   ctx.registerRoute('POST', '/admin/test', (req, res, p) => {
     const a = p.authAdmin ? p.authAdmin() : { ok: false };
     if (!a.ok) return send(res, 401, { error: '需要管理员密钥' });

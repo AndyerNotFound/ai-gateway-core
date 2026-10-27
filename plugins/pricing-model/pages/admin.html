@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>计费模型 · 管理页</title>
 <style>
-  /* 颜色全部走 CSS 变量 —— App 管理员模式 WebView 会注入 :root 换肤 */
+  /* All colors via CSS variables -- the App admin-mode WebView injects :root overrides to reskin */
   :root {
     --md-sys-color-surface: #14141a;
     --md-sys-color-on-surface: #e4e2e6;
@@ -75,7 +75,7 @@
 </div>
 
 <script>
-/* BASE 用路径推导，兼容「带实例名前缀」的部署（/实例名/plugins/pricing-model/pages/admin.html） */
+/*/* BASE is derived from the path, supporting deployments "with an instance-name prefix" (/<instance>/plugins/pricing-model/pages/admin.html) */
 const BASE = location.pathname.replace(/\/pages\/.*$/, '');
 const KEYS = ['a','s','T','c','b','rA','rS','lam','NA','NS','uA','uS','NC','tC'];
 const LABEL = {

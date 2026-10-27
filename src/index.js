@@ -1,5 +1,5 @@
 'use strict';
-/* index.js - ai-gateway-core 主出口 */
+/** index.js - ai-gateway-core main export */
 const { Gateway, CORE_VERSION } = require('./core');
 const { Store, RESERVED_PATHS, INST_NAME_RE } = require('./store');
 const { AuthChain } = require('./auth');

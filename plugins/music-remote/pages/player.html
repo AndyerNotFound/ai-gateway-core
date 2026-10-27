@@ -78,7 +78,7 @@ audio{display:none}
 const $ = i => document.getElementById(i);
 const audio = $('audio');
 let curKey = '';           // 当前曲目标识
-let phonePos = 0;          // 手机进度(秒)
+letlet phonePos = 0;          // phone playback position (seconds)
 let lastTitle = '';
 let muted = false;
 let pollTimer = null;
@@ -90,12 +90,12 @@ $('keysave').onclick = () => {
   updateCtl();
 };
 
-/* --- 本地播放控制 --- */
+/*/* --- local playback control --- */
 $('play').onclick = () => { if (audio.paused) audio.play().catch(()=>{}); else audio.pause(); };
 audio.onplay  = () => { $('play').textContent='⏸'; $('play').classList.remove('nudge'); };
 audio.onpause = () => { $('play').textContent='▶'; };
 audio.onerror = () => { if (curKey) setSt('<span class="err">音频加载失败</span>'); };
-/* 浏览器自动播放策略会拦首次播放: 给个明显的提示 */
+/*/* browser autoplay policies block first playback: show a clear notice */
 function tryPlay(){
   audio.play().then(()=>{ $('play').classList.remove('nudge'); }).catch(()=>{
     $('play').classList.add('nudge');
@@ -104,19 +104,19 @@ function tryPlay(){
 }
 setInterval(()=>{ if (curKey && audio.paused && !$('play').classList.contains('nudge') && audio.currentTime === 0) tryPlay(); }, 2500);
 
-/* --- 静音 / 音量 --- */
+/*/* --- mute / volume --- */
 $('mute').onclick = () => { muted = !muted; audio.muted = muted; $('mute').textContent = muted ? '🔇' : '🔊'; };
 $('vol').oninput = () => { audio.volume = $('vol').value/100; if (+$('vol').value > 0 && muted){ muted=false; audio.muted=false; $('mute').textContent='🔊'; } };
 audio.volume = 0.8;
 
-/* --- 进度条拖动(本地) --- */
+/*/* --- progress bar scrubbing (local) --- */
 $('bar').onclick = e => {
   if (!audio.duration) return;
   const r = $('bar').getBoundingClientRect();
   audio.currentTime = Math.max(0, Math.min(1, (e.clientX-r.left)/r.width)) * audio.duration;
 };
 
-/* --- 手机侧控制 --- */
+/*/* --- phone-side control --- */
 async function ctl(cmd){
   const k = localStorage.getItem('mr_key') || '';
   if (!k) { setSt('<span class="err">需要密钥才能控制手机</span>'); return; }
@@ -138,7 +138,7 @@ function updateCtl(){
 function setSt(html){ $('st').innerHTML = html; }
 function fmt(s){ if(!s||!isFinite(s)||s<0) return '0:00'; const m=Math.floor(s/60),x=Math.floor(s%60); return m+':'+String(x).padStart(2,'0'); }
 
-/* 本地播放进度刷新 */
+/*/* local playback progress refresh */
 setInterval(()=>{
   if (!audio.duration) return;
   $('fill').style.width = (audio.currentTime/audio.duration*100)+'%';
@@ -146,7 +146,7 @@ setInterval(()=>{
   $('tot').textContent = fmt(audio.duration);
   if (!audio.paused && $('sync').checked && phonePos > 0) {
     const drift = Math.abs(audio.currentTime - phonePos);
-    if (drift > 10) audio.currentTime = phonePos;   // 漂移太大才校正
+    if (drift > 10) audio.currentTime = phonePos;   // correct only when drift is large
   }
 }, 500);
 

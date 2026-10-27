@@ -1,10 +1,10 @@
 'use strict';
-/* crypt.js - AGWENC1 字段级加密 (文档 §5.3)
- * 算法: AES-256-GCM, 密钥由口令经 scrypt(N=16384,r=8,p=1) 派生, 每值独立随机 salt+iv
- * 密文格式: "AGWENC1:" + base64(salt[16] | iv[12] | authTag[16] | ciphertext)
- * 口令来源: 环境变量 AGW_CRYPT_PASS 或密钥文件 <数据目录>/.agwkey
- * 与旧版差异: 旧版整文件加密; 本版只加密敏感字段(apiKey/adminKey/密码哈希等),
- *             非敏感字段明文, 主索引 instances.json 全程明文。
+/** crypt.js - AGWENC1 field-level encryption (doc §5.3)
+   * algorithm: AES-256-GCM; the key is derived from the passphrase via scrypt (N=16384,r=8,p=1); each value gets its own random salt+iv
+   * ciphertext format: "AGWENC1:" + base64(salt[16] | iv[12] | authTag[16] | ciphertext)
+   * passphrase source: env AGW_CRYPT_PASS or the key file <data dir>/.agwkey
+   * vs the old version: the old one encrypted whole files; this one encrypts only sensitive fields (apiKey/adminKey/password hashes etc.),
+ *             non-sensitive fields stay plaintext, and the main index instances.json is plaintext throughout.
  */
 const fs = require('fs');
 const path = require('path');
@@ -17,10 +17,10 @@ function deriveKey(pass, salt) {
 }
 function isEncText(t) { return typeof t === 'string' && t.startsWith(MAGIC); }
 
-/* ★解密缓存 (2026-09-18)：每个密文自带随机 salt ⇒ 每次解密都要独立跑一次 scrypt(~50ms)。
- *  而"解锁/重载实例/重载插件"会**反复解密同一批密文**（实测把网关阻塞到无响应：一次重载要解几千次）。
- *  这里按 (口令指纹, 密文) 缓存明文 —— 口令一变指纹就变、旧缓存自动失效；条数上限兜底防内存膨胀。
- *  注意：只缓存解密（加密必须保持随机 salt，不能缓存）。 */
+/** *decryption cache (2026-09-18): each ciphertext carries its own random salt => every decryption is an independent scrypt run (~50ms).
+   *  while "unlock / reload instance / reload plugin" **repeatedly decrypts the same ciphertext** (measured: one reload = thousands of decrypt runs, blocking the gateway).
+ *  Plaintext is cached by (passphrase fingerprint, ciphertext) -- changing the passphrase changes the fingerprint and invalidates old entries; a count cap backstops memory growth.
+   *  note: cache decryption only (encryption must keep a fresh random salt; never cached). */
 const CACHE_MAX = 8000;
 const _dcache = new Map();
 let _dcacheTag = null;
@@ -47,14 +47,14 @@ function decryptText(enc, pass) {
   return plain;
 }
 
-/* 口令: env 优先, 其次数据目录 .agwkey (权限600) */
+/** passphrase: env first, then the data dir's .agwkey (mode 600) */
 function loadPass(dir) {
   if (process.env.AGW_CRYPT_PASS) return process.env.AGW_CRYPT_PASS;
   const kf = path.join(dir || process.cwd(), '.agwkey');
   try { const t = fs.readFileSync(kf, 'utf8').trim(); return t || null; } catch (_) { return null; }
 }
 
-/* ---- 字段级加解密: 遍历对象, 对命中"敏感字段名"的字符串值加密/解密 ---- */
+/** ---- field-level encrypt/decrypt: walk the object, encrypting/decrypting string values under "sensitive field names" ---- */
 const SENSITIVE_KEYS = /^(apiKey|adminKey|secondKey|password|passwordHash|secret|token|accessToken|refreshToken|privateKey|key)$/i;
 
 function encryptFields(obj, pass, keyRe = SENSITIVE_KEYS) {
@@ -82,7 +82,7 @@ function decryptFields(obj, pass, keyRe = SENSITIVE_KEYS) {
   return walk(obj, null);
 }
 
-/* 打码显示 (给 getInstanceConfig 用): 密文→"已加密", 明文敏感值→sk-t****st-a */
+/** masked display (for getInstanceConfig): ciphertext -> "encrypted", plaintext secrets -> sk-t****st-a */
 function maskFields(obj, keyRe = SENSITIVE_KEYS) {
   const walk = (v, key) => {
     if (typeof v === 'string' && key && keyRe.test(key) && v) {

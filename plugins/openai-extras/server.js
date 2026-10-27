@@ -1,8 +1,8 @@
 'use strict';
-/* openai-extras 插件 - OpenAI 扩展端点直通 (从旧版 handleExtraEndpoint 搬运)
- * 端点: /v1/images/generations|edits|variations /v1/embeddings /v1/audio/speech|transcriptions|translations
+/** the openai-extras plugin - OpenAI extended endpoint passthrough (moved from the old handleExtraEndpoint)
+   * endpoints: /v1/images/generations|edits|variations /v1/embeddings /v1/audio/speech|transcriptions|translations
  *       /v1/completions /v1/moderations
- * 特性: 仅 openai 渠道, JSON 端点 modelMap 改名, multipart 原样透传, 故障切换+连接重试
+   * features: openai channels only, modelMap renames on JSON endpoints, verbatim multipart passthrough, failover + connection retries
  */
 const { joinUrl, upstreamRequest, isConnErr, RETRYABLE } = require('../../src/router.js');
 
@@ -77,7 +77,7 @@ module.exports.activate = (ctx) => {
           upRes.on('error', () => tryNext());
           return;
         }
-        /* 透传响应(含二进制) */
+        /* passthrough response (binary included) */
         res.writeHead(upRes.statusCode, {
           'Content-Type': upRes.headers['content-type'] || 'application/octet-stream',
           'Access-Control-Allow-Origin': '*',

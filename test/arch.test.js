@@ -1,6 +1,6 @@
 'use strict';
-/* 深度改造验证 (2026-10-07): 能力注册表 + 声明式 adminApi
- * 目标: 证明"内核不再需要知道插件名"这个命题成立。
+/** deep refactor validation (2026-10-07): the capability registry + declarative adminApi
+   * goal: prove the claim "the kernel no longer needs to know plugin names".
  */
 const assert = require('assert');
 const path = require('path');
@@ -8,17 +8,17 @@ const fs = require('fs');
 const os = require('os');
 const { PluginManager } = require(path.join(__dirname, '..', 'src', 'plugins.js'));
 
-/** 剥掉 JS 注释后再断言 —— 否则"我改了代码但注释里还留着旧名字"会误报 */
+/** Strip JS comments before asserting -- otherwise "I changed the code but old names linger in comments" false-positives */
 function stripComments(src) {
   return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // block comments
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1'); // 行注释(避开 http://)
 }
 
 let pass = 0, fail = 0;
 function T(n, fn) { try { fn(); console.log('  ✓ ' + n); pass++; } catch (e) { console.log('  ✗ ' + n + '\n      ' + e.message); fail++; } }
 
-/* 用临时目录, 绝不碰线上 data/ */
+/** use a temp dir; never touch the live data/ */
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-arch-'));
 const store = {
   dir: tmp,

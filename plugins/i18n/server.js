@@ -1,23 +1,23 @@
 'use strict';
-/* i18n 插件 - 多语言基础服务
- * 端点(全部管理端):
- *   GET  /plugins/i18n/admin/state        译文字典 + 默认语言 + 偏好统计
- *   POST /plugins/i18n/admin/save-key     增改一条译文 { src, en, tw } (空串=删除该语言译文)
- *   POST /plugins/i18n/admin/del-key      整条删除 { src }
- *   POST /plugins/i18n/admin/default-lang 改默认语言 { lang }
- *   POST /plugins/i18n/admin/reseed       重新合并种子译文(只补缺, 不覆盖手改)
+/* i18n plugin -- multilingual foundation service
+ * Endpoints (all admin-side):
+ *   GET  /plugins/i18n/admin/state        translation dictionary + default language + preference stats
+ *   POST /plugins/i18n/admin/save-key     add/update one translation { src, en, tw } (empty string = delete that language's entry)
+ *   POST /plugins/i18n/admin/del-key      delete the whole entry { src }
+ *   POST /plugins/i18n/admin/default-lang change the default language { lang }
+ *   POST /plugins/i18n/admin/reseed       re-merge seed translations (fills gaps only, never overwrites manual edits)
  *
- * 用户语言偏好: auth-user 的「个人页」里切语言 → intent → 事件总线
- *   auth-user ctx.emit('setLang', {fkey, lang}) → 这里 ctx.on('auth-user:setLang') 落盘。
- *   (emit 是同步的, 切完语言 auth-user 立即重渲染个人页, 新语言当场生效)
+ * User language preference: switching in auth-user's "profile page" -> intent -> event bus
+ *   auth-user ctx.emit('setLang', {fkey, lang}) -> persisted here via ctx.on('auth-user:setLang').
+ *   (emit is synchronous: after the switch auth-user re-renders the profile page immediately, so the new language lands instantly)
  *
- * 存储: 全部在本插件配置里(scope:global 全实例共享) —— 其它插件用
- *   ctx.getPluginConfig('i18n') 读(经 lib.js 的 bundle() 封装, 每次渲染读一次)。
- *   configSchema 留空: 配置里存的是数据(字典/偏好), 不放表单设置项,
- *   避免管理端表单保存时整体替换把字典冲掉(model-square 同款先例)。
+ * Storage: everything lives in this plugin's config (scope:global, shared across instances) -- other plugins use
+ *   ctx.getPluginConfig('i18n') to read (wrapped by lib.js's bundle(), one read per render).
+ *   configSchema is left empty: the config holds data (dictionary/preferences), not form settings,
+ *   preventing the admin form save's whole-object replace from wiping the dictionary (same precedent as model-square).
  *
- * 字典结构: { "en": { "中文原文": "English" }, "zh-TW": { "中文原文": "繁體中文" } }
- *   键 = 简中原文; zh-CN 不需要表(键即原文), 没查到译文一律回退原文。 */
+ * Dictionary shape: { "en": { "中文原文": "English" }, "zh-TW": { "中文原文": "繁體中文" } }
+ *   key = the simplified-Chinese original; zh-CN needs no table (key = original), and any missed lookup falls back to the original. */
 const fs = require('fs');
 const path = require('path');
 
@@ -29,8 +29,8 @@ function jsonRes(res, code, o) {
 module.exports = { activate(ctx) {
   const LANGS = require('./lib').LANGS;   /* ['zh-CN','en','zh-TW'] */
 
-  /* ★配置代理(与 auth-user 同款): 每次访问按内核版本号判断要不要重读,
-   *   保证多实例下其它实例/本实例写完立刻能看到最新值。 */
+  /* ★Config proxy (same as auth-user): every access checks the core's version to decide whether to re-read,
+   *   guaranteeing that once any instance writes, everyone sees the fresh value immediately. */
   let _cfgCache = null, _cfgRev = -1;
   const cfgFresh = () => {
     const r = ctx.configRev ? ctx.configRev() : 0;
@@ -49,12 +49,12 @@ module.exports = { activate(ctx) {
     ownKeys: () => Reflect.ownKeys(cfgFresh()),
     getOwnPropertyDescriptor: (_, k) => Object.getOwnPropertyDescriptor(cfgFresh(), k),
   });
-  /* 归一化 */
+  /* Normalization */
   if (!LANGS.includes(cfg.defaultLang)) cfg.defaultLang = 'zh-CN';
   cfg.prefs = (cfg.prefs && typeof cfg.prefs === 'object' && !Array.isArray(cfg.prefs)) ? cfg.prefs : {};
   cfg.dict = (cfg.dict && typeof cfg.dict === 'object' && !Array.isArray(cfg.dict)) ? cfg.dict : {};
 
-  /* ★写盘用内存快照(不把 Proxy 交给内核), 写完同步本地版本号(见 auth-user 注释) */
+  /* ★Disk writes use an in-memory snapshot (never hand the Proxy to the core), then sync the local version (see the auth-user comment) */
   const save = () => {
     const snap = {};
     for (const k of Object.keys(cfg)) snap[k] = cfg[k];
@@ -62,7 +62,7 @@ module.exports = { activate(ctx) {
     if (ctx.configRev) _cfgRev = ctx.configRev();
   };
 
-  /* ---------- 种子译文: 只补缺, 不覆盖手改(激活时合并一次) ---------- */
+  /* ---------- Seed translations: fill gaps only, never overwrite manual edits (merged once at activation) ---------- */
   const seedFile = path.join(__dirname, 'dict-seed.json');
   const loadSeed = () => {
     try { return JSON.parse(fs.readFileSync(seedFile, 'utf8')) || {}; } catch (_) { return {}; }
@@ -80,7 +80,7 @@ module.exports = { activate(ctx) {
   if (seeded > 0) save();
   ctx.log('[i18n] 已激活: 种子译文 en=' + seedCount.en + ' 条 / zh-TW=' + seedCount['zh-TW'] + ' 条, 本次补缺 ' + seeded + ' 条');
 
-  /* ---------- 用户切换语言(auth-user 经事件总线送来, 同步生效) ---------- */
+  /* ---------- User language switch (sent by auth-user over the event bus, effective synchronously) ---------- */
   ctx.on('auth-user:setLang', (d) => {
     try {
       if (!d || !d.fkey) return;
@@ -92,13 +92,13 @@ module.exports = { activate(ctx) {
     } catch (e) { ctx.log('[i18n] setLang 失败: ' + e.message); }
   });
 
-  /* ---------- 管理端点(全部 authAdmin) ---------- */
+  /* ---------- Admin endpoints (all authAdmin) ---------- */
   const adminOnly = (p, res) => {
     const a = p.authAdmin();
     if (!a || !a.ok) { jsonRes(res, (a && a.status) || 401, { error: (a && a.error) || 'unauthorized' }); return false; }
     return true;
   };
-  /** 写后回读校验: 确认真的写进去了(不假装成功) */
+  /** Write-then-read verification: confirm it truly landed (never fake success) */
   const verifyKey = (src, lang) => {
     try {
       const c = ctx.getPluginConfig('i18n') || {};
@@ -133,7 +133,7 @@ module.exports = { activate(ctx) {
       else if (cfg.dict[lang][src] !== undefined) { delete cfg.dict[lang][src]; changed++; }
     }
     if (changed > 0) save();
-    /* 写后回读: 只校验非空写入真的进了盘 */
+    /* Write-then-read: verify only that non-empty writes really reached disk */
     const okEn = vals.en ? verifyKey(src, 'en') : true;
     const okTw = vals['zh-TW'] ? verifyKey(src, 'zh-TW') : true;
     if (!okEn || !okTw) return jsonRes(res, 500, { error: '写入后回读不一致(en=' + okEn + ', tw=' + okTw + ')' });

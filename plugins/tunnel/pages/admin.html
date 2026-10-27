@@ -75,7 +75,7 @@ async function api(p, method){
 async function load(){
   try {
     const r = await api('/status');
-    /* ★v1.4.0: running 已是"真连上才算真"; procAlive 才是"进程活着" */
+    /* *v1.4.0: running now means "really connected"; procAlive means "the process is alive" */
     const st = r.connected ? '已连接' : (r.retrying ? '重试中' : (r.procAlive ? '连接中…' : '未运行'));
     $('stBadge').textContent = st;
     $('stBadge').className = 'badge ' + (r.connected ? 'on' : 'off');

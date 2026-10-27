@@ -1,16 +1,16 @@
 'use strict';
-/* model-sync 插件 v1.1.1 - 模型列表自动同步
- * 定期拉上游 /models 合并进渠道 models 列表(只增不减), 改实例配置并热重载
- * 配置: { enable, intervalHours: 24 }
- * 端点:
- *   GET  /plugins/model-sync/models        各渠道当前模型 + 上次同步结果 (管理)
- *   POST /plugins/model-sync/run           立即同步; body { channel?: '渠道名' } 只同步该渠道 (管理)
- *   ★GET  /admin/models  POST /admin/run  同一实现的别名 (2026-09-19)
- *     为什么: SDUI 管理页的 adminApi 只能打内核 /admin/*，插件端点要经
- *     /admin/api/plugin-call 代调，而该代理**只放行插件的 /admin/ 子路径** —— 所以
- *     要让「模型分组」SDUI 页能点「立即同步」就必须有 /admin/ 路径。
- *     /admin/run 额外做 8 秒软超时：超时就返回 pending（同步继续在后台跑），
- *     避免被 plugin-call 的 10 秒自请求超时掐成 502。
+/** the model-sync plugin v1.1.1 - automatic model list sync
+   * periodically pull upstream /models, merge into the channel's models list (add-only), update the instance config and hot-reload
+   * config: { enable, intervalHours: 24 }
+   * endpoints:
+ *   GET  /plugins/model-sync/models        each channel's current models + last sync result (admin)
+ *   POST /plugins/model-sync/run           sync now; body { channel?: 'name' } syncs only that channel (admin)
+ *   ★GET /admin/models  POST /admin/run  aliases of the same implementation (2026-09-19)
+ *     Why: the SDUI admin page's adminApi can only hit the core's /admin/*; plugin endpoints must go through
+ *     /admin/api/plugin-call proxy calls, and that proxy **only forwards the plugin's /admin/ sub-paths** -- so
+ *     for the "model groups" SDUI page's "sync now" button to work, an /admin/ path is required.
+ *     /admin/run adds an 8-second soft timeout: on expiry it returns pending (the sync keeps running in the background),
+ *     avoiding the 502 that plugin-call's 10-second self-request timeout would cause.
  */
 const { joinUrl, upstreamRequest } = require('../../src/router.js');
 
@@ -20,7 +20,7 @@ module.exports.activate = (ctx) => {
   const cfg = ctx.config;
   let lastRun = ctx.data.get('lastRun') || null;
 
-  /* 拉渠道上游模型列表 */
+  /* fetch a channel's upstream model list */
   const fetchModels = (ch) => new Promise((resolve, reject) => {
     const base = String(ch.baseUrl || '').replace(/\/+$/, '');
     if (!base) return reject(new Error('渠道未配置 Base URL'));
@@ -51,7 +51,7 @@ module.exports.activate = (ctx) => {
     }, 'GET');
   });
 
-  /* 同步一轮: only 为渠道名时只同步该渠道; 合并 models(只增不减) → 落盘+热重载 */
+  /* sync one round: when only is a channel name, sync just that channel; merge models (add-only) -> persist + hot reload */
   const syncAll = async (only) => {
     const results = {};
     let changed = false;
@@ -90,7 +90,7 @@ module.exports.activate = (ctx) => {
     ctx.cron('model-sync', iv, () => { syncAll().catch(e => ctx.log('[model-sync]', e.message)); });
   }
 
-  /* 查询: 各渠道当前模型 + 分组 + 上次同步结果 (App 用来展示模型总览) */
+  /* query: each channel's current models + group + last sync result (the App uses it for the model overview) */
   const hGetModels = (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const list = (ctx.gateway && ctx.gateway.instanceChannels) ? ctx.gateway.instanceChannels() : ctx.pickChannels().map(x => x.ch);
@@ -107,7 +107,7 @@ module.exports.activate = (ctx) => {
   ctx.registerRoute('GET', '/models', hGetModels);
   ctx.registerRoute('GET', '/admin/models', hGetModels);
 
-  /** 同步结果 → 一句人话（管理端 toast 用） */
+  /** Sync result -> one human-readable sentence (for the admin toast) */
   const summarize = (only, results) => {
     const names = Object.keys(results || {});
     let okN = 0, addN = 0; const bad = [];
@@ -125,8 +125,8 @@ module.exports.activate = (ctx) => {
     const only = p.body && p.body.channel ? String(p.body.channel) : null;
     try {
       const job = syncAll(only);
-      /* ★8 秒软超时：单渠道同步通常 1~2 秒；全量渠道可能更久，超时就让它继续在后台跑，
-       *   先回 pending —— 否则会被内核 plugin-call 的 10s 自请求超时掐成 502（管理页只看到报错）。 */
+      /* *8s soft timeout: single-channel sync usually takes 1-2s; a full sync may take longer -- on timeout let it keep running in the background,
+       *   reply pending first -- otherwise the kernel plugin-call's 10s self-request timeout turns it into a 502 (the admin page just sees an error). */
       const pending = await Promise.race([job.then(r => ({ results: r })), new Promise(r => setTimeout(() => r(null), 8000))]);
       if (!pending) {
         job.catch(e => ctx.log('[model-sync]', '后台同步失败: ' + e.message));

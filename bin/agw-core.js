@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 'use strict';
 /* agw-core CLI:
- *   start [--dir D] [--port P]   启动网关 (默认 <项目根>/data)
- *   ↑ 2026-09-16: 默认数据目录曾用 process.cwd() 推导 —— 从别的目录跑绝对路径时
- *     会把那个目录下的 data/ 当数据目录, 造成"首次启动/0 渠道/默认 16384 撞旧版网关"。
- *     现改为「脚本所在目录的上一级(项目根)/data」, 与 cwd 解耦 (见下方 DIR)。
- *   status [实例名|uid]          实例状态总览
- *   migrate [--from DIR]         旧版 ai-gateway config.*.json 迁移
- *   migrate --verify [--from D]  校验迁移完整性
- *   uid-reset <实例名>           重置 UID (断插件配置, 强制确认)
- *   list                         列出实例
- *   plugin-list                  列出已安装插件
- *   plugin-install <url|路径> [--sha256 X] [--proxy http://127.0.0.1:7890]  安装插件包(tar.gz)
- *   plugin-remove <id>           卸载插件(内置插件不可卸载)
+ *   start [--dir D] [--port P]   start the gateway (default <project root>/data)
+ *   up 2026-09-16: the default data dir used to be derived from process.cwd() -- when launched
+ *     from another directory by absolute path, that directory's data/ was treated as the data dir, causing
+ *     "first boot / 0 channels / default port 16384 colliding with the old gateway". Now it is
+ *   status [instance|uid]        instance status overview
+ *   migrate [--from DIR]         migrate old ai-gateway config.*.json files
+ *   migrate --verify [--from D]  verify migration integrity
+ *   uid-reset <instance>         reset the UID (breaks plugin configs; forced confirmation)
+ *   list                         list instances
+ *   plugin-list                  list installed plugins
+ *   plugin-install <url|path> [--sha256 X] [--proxy http://127.0.0.1:7890]  install a plugin package (.tar.gz)
+ *   plugin-remove <id>           uninstall a plugin (built-ins cannot be uninstalled)
  */
 const path = require('path');
 const fs = require('fs');
@@ -26,13 +26,13 @@ function opt(name, dflt) {
   const i = args.indexOf('--' + name);
   return (i >= 0 && args[i + 1] && !args[i + 1].startsWith('--')) ? args[i + 1] : dflt;
 }
-/* ★默认数据目录 = 项目根目录下的 data/ (与「当前工作目录」无关)
- *   历史 bug: 原为 path.join(process.cwd(), 'data') → cwd 不在项目根时会指向别处。 */
+/* *Default data dir = data/ under the project root (independent of the current working directory)
+ *   historical bug: it was path.join(process.cwd(), 'data') -> pointed elsewhere when cwd was not the project root. */
 const DIR = path.resolve(opt('dir', process.env.AGW_DIR || path.join(__dirname, '..', 'data')));
 
 async function main() {
   if (cmd === 'start') {
-    log('[init] 数据目录: ' + DIR);   // ★启动即打印实际数据目录, 便于发现 cwd 指错(2026-09-16 事故)
+    log('[init] data dir: ' + DIR);   // *print the real data dir at boot to catch wrong-cwd mistakes (2026-09-16 incident)
     const gw = new Gateway(DIR, { port: opt('port') });
     process.on('unhandledRejection', e => logErr('unhandledRejection:', (e && e.message) || e));
     process.on('uncaughtException', e => logErr('uncaughtException:', (e && e.message) || e));
@@ -131,7 +131,7 @@ async function main() {
       return;
     }
     if (args.includes('--rollback')) {
-      // 回滚: 恢复 .bak-migrate 文件, 清空新存储
+      // rollback: restore .bak-migrate files and clear the new storage
       const files = fs.readdirSync(from).filter(f => f.endsWith('.json.bak-migrate'));
       for (const f of files) fs.renameSync(path.join(from, f), path.join(from, f.replace(/\.bak-migrate$/, '')));
       console.log('已恢复 ' + files.length + ' 个旧配置文件。新存储(instances.json/instances/)请手动确认后删除。');
@@ -160,7 +160,7 @@ async function main() {
     meta.uid = store.index.nextUid || 1;
     store.index.nextUid = meta.uid + 1;
     meta.file = 'instances/' + meta.uid + '.json';
-    // 旧配置文件内容搬过去
+    // carry the old config file's content over
     const oldFile = path.join(DIR, 'instances', uid + '.json');
     const newFile = path.join(DIR, 'instances', meta.uid + '.json');
     if (fs.existsSync(oldFile)) fs.renameSync(oldFile, newFile);

@@ -1,8 +1,8 @@
 'use strict';
-/* auth-user 插件 (type:auth) - 用户体系: 注册/账密登录/自助发卡/资料编辑
- * 配置: { users: [{uid,name,passwordHash,nickname,avatar,note,createdAt}], registration: {...} }
- * 依赖: auth-cardkey 插件 (经 gateway.authApis() 操作卡密)
- * 顶层端点: POST /auth/login /auth/register, GET /auth/register /auth/me /v1/branches,
+/** the auth-user plugin (type:auth) - user system: registration/credential login/self-service cards/profile editing
+   * config: { users: [{uid,name,passwordHash,nickname,avatar,note,createdAt}], registration: {...} }
+   * depends on: the auth-cardkey plugin (card operations via gateway.authApis())
+   * top-level endpoints: POST /auth/login /auth/register, GET /auth/register /auth/me /v1/branches,
  *           POST /auth/profile, GET|POST /auth/mykeys, POST /auth/mykeys-update /auth/mykeys-delete
  */
 const crypto = require('crypto');
@@ -11,8 +11,8 @@ const net = require('net');
 const tls = require('tls');
 const { hashPassword, verifyPassword } = require('../../src/auth');
 
-/* ---- 多语言(i18n 插件公共库): require 失败/读配置失败 → 一律回退中文原文。
- *   auth 插件激活失败会 fail-closed 阻断全部插件, 这里必须万无一失。 ---- */
+/** ---- i18n shared library (the i18n plugin): require/config read failures always fall back to the original Chinese text.
+ *   A failed auth plugin activation fail-closed blocks every plugin, so this path must be bulletproof. ---- */
 let i18nBundle = null;
 try { i18nBundle = require('../i18n/lib').bundle; } catch (_) { i18nBundle = null; }
 
@@ -21,7 +21,7 @@ function jsonRes(res, code, o) {
   res.end(JSON.stringify(o));
 }
 
-/* ---------- 极简 SMTP 客户端 (AUTH LOGIN, 支持 smtps://465 与 smtp://587 STARTTLS) ---------- */
+/** ---------- minimal SMTP client (AUTH LOGIN; supports smtps://465 and smtp://587 STARTTLS) ---------- */
 function smtpSend(smtpUrl, from, to, subject, text) {
   return new Promise((resolve, reject) => {
     let mu;
@@ -38,7 +38,7 @@ function smtpSend(smtpUrl, from, to, subject, text) {
     const finish = () => { if (!done) { done = true; clearTimeout(timer); try { sock && sock.end(); } catch (_) {} resolve(true); } };
     const send = (line) => { try { sock.write(line + '\r\n'); } catch (e) { fail(e.message); } };
     const expect = (codes, next) => ({ codes, next });
-    /* 状态机: 序列推进 */
+    /* state machine: sequence advancement */
     let steps;
     const buildSteps = () => {
       steps = [
@@ -50,7 +50,7 @@ function smtpSend(smtpUrl, from, to, subject, text) {
         }),
       ];
       if (!isSsl) steps.push(expect([220], () => {
-        /* STARTTLS 升级 */
+        /* STARTTLS upgrade */
         const tlsSock = tls.connect({ socket: sock, servername: host, rejectUnauthorized: false }, () => {
           sock = tlsSock; send('EHLO gateway.local');
         });
@@ -90,7 +90,7 @@ function smtpSend(smtpUrl, from, to, subject, text) {
       let i;
       while ((i = buf.indexOf('\r\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2); onLine(line); }
     };
-    const onConnect = () => { /* 等 220 横幅 */ };
+    const onConnect = () => { /* wait for the 220 banner */ };
     const s0 = isSsl
       ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, onConnect)
       : net.connect({ host, port }, onConnect);
@@ -101,7 +101,7 @@ function smtpSend(smtpUrl, from, to, subject, text) {
   });
 }
 
-/* 邮箱验证码 (内存态, 10 分钟过期, 每邮箱 60s 冷却) */
+/** email verification codes (in-memory, 10-minute expiry, 60s cooldown per address) */
 const emailCodes = new Map(); // email -> {code, exp, lastSent}
 function newEmailCode(email) {
   const code = String(crypto.randomInt(100000, 999999));
@@ -118,17 +118,17 @@ function checkEmailCode(email, code) {
 }
 
 module.exports.activate = (ctx) => {
-  /* ★多语言: 每次页面渲染取一次 bundle(内部只读一次 i18n 配置), t() 复用;
-   *   任何异常回退中文原文, 绝不因 i18n 影响认证。 */
+  /* *i18n: fetch the bundle once per page render (internally reads the i18n config once); t() reuses it;
+   *   any error falls back to the original Chinese text; i18n must never affect auth. */
   const mkT = (uk) => {
     try { if (i18nBundle) return i18nBundle(ctx, uk); } catch (_) {}
     const t = function (s) { return (typeof s === 'string') ? s : s; };
     t.lang = 'zh-CN';
     return { lang: 'zh-CN', t: t };
   };
-  /* ★多实例一致性: 用户表/分组是全局配置, 但每个实例各有一份内存副本。
-   * cfg 用 Proxy 包一层, 每次访问都先按内核配置版本号判断是否需要重新读盘,
-   * 这样任一实例改了用户/分组, 其它实例立刻看到最新值。 */
+  /* *multi-instance consistency: users/groups are global config, yet each instance holds its own memory copy.
+   * cfg is wrapped in a Proxy; every access first checks the core's config version to decide whether to re-read disk,
+   * so when any instance changes users/groups, every other instance sees the fresh values immediately. */
   let _cfgCache = null, _cfgRev = -1;
   const cfgFresh = () => {
     const r = ctx.configRev ? ctx.configRev() : 0;
@@ -149,39 +149,39 @@ module.exports.activate = (ctx) => {
   });
   cfg.users = Array.isArray(cfg.users) ? cfg.users : [];
   cfg.registration = cfg.registration && typeof cfg.registration === 'object' ? cfg.registration : {};
-  /* 用户分组: 给用户打标签(默认/VIP/内部…), 模型广场按分组筛选可用模型 */
+  /* User groups: tag users (default/VIP/internal...); the model plaza filters available models by group */
   cfg.groups = (Array.isArray(cfg.groups) && cfg.groups.length) ? cfg.groups.map(String) : ['默认'];
   if (cfg.defaultGroup === undefined) cfg.defaultGroup = '默认';
   if (!Array.isArray(cfg._groupsSaved)) { cfg.groups = cfg.groups.slice(); }
   const groupOf = (u) => (u && u.group) || cfg.defaultGroup || '默认';
-  const reg = cfg.registration || {};   /* 兼容未配置注册的情况(默认: 注册关闭 + 零额度) */
-  /* ★写盘用「内存快照」, 不要直接把 Proxy 交给内核。
-   *  cfg 是 Proxy, 序列化时的 ownKeys 会回调 cfgFresh(); 而 ctx.setPluginConfig() 内部会把配置版本号 +1,
-   *  于是同一次请求里的第二次 save() 会因为"版本号变了"从磁盘重读, 把**尚未落盘的改动**覆盖掉
-   *  (最典型: 自动建档时刚填的昵称/头像) → 表现为"点保存提示成功, 刷新却变回空"。
-   *  快照成普通对象后不再触发重读; 写盘后再把本地版本号同步到最新, 免得下次 cfgFresh 白重读一次。 */
+  const reg = cfg.registration || {};   /* tolerates a missing registration config (default: registration off + zero quota) */
+  /* *persist from a **plain in-memory snapshot**; never hand the Proxy straight to the kernel.
+   *  cfg is a Proxy; ownKeys during serialization re-enters cfgFresh(), and ctx.setPluginConfig() internally bumps the config version,
+   *  so a second save() in the same request re-read disk because "the version changed", clobbering **changes not yet flushed**
+   *  (the classic case: a nickname/avatar just entered during auto-provisioning) -> "save says success, but a refresh shows empty".
+   *  once snapshotted into a plain object it stops triggering re-reads; after persisting, sync the local version to the newest so cfgFresh does not re-read for nothing. */
   const save = () => {
     const snap = {};
     for (const k of Object.keys(cfg)) snap[k] = cfg[k];
     ctx.setPluginConfig(snap);
     if (ctx.configRev) _cfgRev = ctx.configRev();
   };
-  const apis = () => ctx.gateway.authApis(); // auth-cardkey 提供
+  const apis = () => ctx.gateway.authApis(); // provided by auth-cardkey
 
-  /* ---- 额度语义(与 auth-cardkey 一致): 0 = 零额度(不可用) / -1 = 不限 / >0 = 具体额度 ----
-   * ★零额度只是「余额不足, 调不了模型」, **不是「什么都干不了」** ——
-   *   发子卡 / 改权限 / 看模型 / 保存资料 等自助操作一律照常。
-   *   但要防止越权: 子卡额度绝不能超过父卡能给的量(父卡 0 → 子卡只能是 0)。 */
+  /* ---- Quota semantics (same as auth-cardkey): 0 = zero quota (unusable) / -1 = unlimited / >0 = a concrete amount ----
+   * ★Zero quota only means "balance too low to call models", **not "the account is dead"** --
+   *   self-service operations (issuing sub-cards / editing permissions / browsing models / saving profiles) all proceed normally.
+   *   but guard against privilege escalation: a sub-card's quota may never exceed what the parent can give (parent 0 -> sub-card 0). */
   const parentRemaining = (uk) => (Number(uk.quotaTokens) === -1
     ? -1
     : Math.max(0, (Number(uk.quotaTokens) || 0) - (uk.usedTokens || 0)));
 
-  /** 申请额度 → 实际批给子卡的额度(已按父卡剩余裁剪)。
-   *  未指定: 父卡不限则子卡不限, 否则给到父卡剩余。
-   *  -1 = 想要不限: 父卡不限才给不限, 否则给到父卡剩余。
-   *  0  = 显式零额度(保留, 别自作主张改成不限)。 */
+  /** Requested quota -> quota actually granted to the child card (already trimmed by the parent's remaining balance).
+   *  Unspecified: an unlimited parent grants unlimited, otherwise up to the parent's remainder.
+   *  -1 = wants unlimited: granted only when the parent is unlimited, otherwise capped at the parent's remainder.
+   *  0  = explicit zero quota (keep it; never silently upgrade to unlimited). */
   const clampQuota = (uk, requested) => {
-    const rem = parentRemaining(uk);                 /* -1 = 父卡不限 */
+    const rem = parentRemaining(uk);                 /* -1 = unlimited parent */
     const none = (requested === undefined || requested === null || requested === '');
     let raw = none ? null : Number(requested);
     if (raw !== null && !isFinite(raw)) raw = null;
@@ -211,8 +211,8 @@ module.exports.activate = (ctx) => {
     return r.userKey;
   };
 
-  /* ---- POST /auth/login {username|uid,password} → 该用户卡密 ----
-   * 兼容: 先按 username 查, 再按 uid 查 (旧账号) */
+  /* ---- POST /auth/login {username|uid,password} -> that user's key cards ----
+   * Compatibility: look up by username first, then by uid (legacy accounts) */
   ctx.registerTopRoute('POST', '/auth/login', ({ res, body }) => {
     const loginId = String((body && (body.username || body.uid)) || '').trim();
     const user = cfg.users.find(x => x.username === loginId || x.uid === loginId || x.name === loginId);
@@ -223,7 +223,7 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, uid: user.uid, username: user.username || user.name || '', name: user.name || '', nickname: user.nickname || '', avatar: user.avatar || '', keys: keys.map(k => Object.assign({ key: k.key, isMain: !!k.isMain }, apis().creditsJSON(k))) });
   });
 
-  /* POST /auth/password 改密码 (需登录态) */
+  /* POST /auth/password changes the password (requires a login session) */
   ctx.registerTopRoute('POST', '/auth/password', ({ res, auth, body }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     if (!uk.uid) return jsonRes(res, 400, { error: mkT(uk).t('卡密未绑定账号, 无法改密码') });
@@ -238,9 +238,9 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true });
   });
 
-  /* POST /auth/rotate-main {username|uid, password} → 凭密码(带外凭据)轮换主卡
-   *  用于: 主卡泄漏时, 用户不需管理员介入即可让旧卡失效并拿到新卡。
-   *  ★关键: 用密码验证(不是泄漏的主卡) —— 拿到泄漏主卡的攻击者无法轮换。 */
+  /* POST /auth/rotate-main {username|uid, password} -> rotate the primary card using the password (an out-of-band credential)
+   *  Purpose: when a main card leaks, the user can void the old card and get a new one without admin help.
+   *  ★Key point: verify with the password (not the leaked main card) -- an attacker holding the leaked card cannot rotate it. */
   ctx.registerTopRoute('POST', '/auth/rotate-main', ({ res, body }) => {
     const loginId = String((body && (body.username || body.uid)) || '').trim();
     const user = cfg.users.find(x => x.username === loginId || x.uid === loginId || x.name === loginId);
@@ -251,7 +251,7 @@ module.exports.activate = (ctx) => {
     const old = all.find(k => k && k.uid === user.uid && k.isMain);
     if (!old) return jsonRes(res, 404, { error: '未找到主卡, 请联系管理员' });
     const newKey = apis().genKey();
-    /* 保留原主卡的额度/权限, 只换 key 值; 旧用量统计随旧 key 注销(额度本身不变) */
+    /* keeps the primary card's quota/permissions, swapping only the key value; old usage stats retire with the old key (quota itself unchanged) */
     const f = {};
     ['name','enable','quotaTokens','uid','models','branches','isMain','by','redact','note','groups','expiresAt'].forEach(kk => { if (old[kk] !== undefined) f[kk] = old[kk]; });
     f.key = newKey;
@@ -262,11 +262,11 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, key: newKey, uid: user.uid, message: '主卡已轮换, 旧卡立即失效' });
   });
 
-  /* ---- 注册 ---- */
+  /* ---- Registration ---- */
   ctx.registerTopRoute('GET', '/auth/register', ({ res }) => {
     jsonRes(res, 200, { enable: !!reg.enable, captchaProvider: reg.captchaProvider || 'none', captchaSiteKey: reg.captchaSiteKey || '', minPasswordLen: reg.minPasswordLen || 8, emailVerify: !!(reg.emailVerify && reg.emailVerify.enable) });
   });
-  /* POST /auth/email-code {email} 发送验证码 (需开启 emailVerify) */
+  /* POST /auth/email-code {email} sends a verification code (needs emailVerify enabled) */
   ctx.registerTopRoute('POST', '/auth/email-code', async ({ res, body }) => {
     if (!reg.enable) return jsonRes(res, 403, { error: '该服务器未开放注册' });
     const ev = reg.emailVerify || {};
@@ -293,7 +293,7 @@ module.exports.activate = (ctx) => {
     if (!/^[A-Za-z0-9_-]{3,32}$/.test(username)) return jsonRes(res, 400, { error: '用户名需 3-32 位字母/数字/下划线' });
     if (pw.length < (reg.minPasswordLen || 8)) return jsonRes(res, 400, { error: '密码至少 ' + (reg.minPasswordLen || 8) + ' 位' });
     if (cfg.users.some(x => x.username === username || x.name === username)) return jsonRes(res, 409, { error: '该用户名已被注册' });
-    /* 邮箱验证 */
+    /* email verification */
     const ev = reg.emailVerify || {};
     let email = '';
     if (ev.enable) {
@@ -317,18 +317,18 @@ module.exports.activate = (ctx) => {
       });
       if (!okT) return jsonRes(res, 403, { error: '人机验证失败' });
     }
-    /* UID 随机生成 (不暴露给用户, 防止删号后同 UID 继承资产) */
+    /* UID is random (never exposed to users, so a deleted account's UID cannot inherit assets) */
     const uid = 'u' + crypto.randomBytes(4).toString('hex');
     const user = { uid, username, name: username, group: cfg.defaultGroup, passwordHash: hashPassword(pw), nickname: '', avatar: '', email, banned: false, note: '注册', createdAt: new Date().toISOString() };
     cfg.users.push(user);
     save();
-    // 发默认卡
+    // issue the default card
     let mainKey = null;
     if (apis().addKey) {
       const dq = Math.floor(Number(reg.defaultQuota) || 0);
-      /* defaultQuota>0 = 新用户自动获得该额度; 默认 0/未设 = 零额度卡(-1), 需管理员充值后才可用 */
-      /* 约定: quotaTokens 0 = 零额度(不可用) / -1 = 不限 / >0 = 具体额度。
-       * 新用户默认给「零额度」, 管理员充值后才可用 —— 之前写成 -1 等于白送不限额度。 */
+      /* defaultQuota>0 = new users get that quota automatically; default 0/unset = zero-quota card (-1), usable after an admin tops it up */
+      /* convention: quotaTokens 0 = zero quota (unusable) / -1 = unlimited / >0 = a concrete amount.
+       * new users default to zero quota, usable after an admin tops up -- it used to be -1, i.e. unlimited quota for free. */
       mainKey = { key: apis().genKey(), name: username + ' 的主卡', enable: true, quotaTokens: dq > 0 ? dq : 0, uid, models: [], branches: [], isMain: true, by: 'auto', createdAt: new Date().toISOString() };
       apis().addKey(mainKey);
     }
@@ -358,8 +358,8 @@ module.exports.activate = (ctx) => {
     if (uk.uid) {
       let user = cfg.users.find(x => x.uid === uk.uid);
       if (!user) {
-        /* ★首次: 该身份还没有用户记录(如管理员密钥) —— 自动建立一条,
-         *  否则下面的写入全被跳过, 接口却返回 ok:true(静默失败)。 */
+        /* *first time: this identity has no user record yet (e.g. an admin key) -- auto-create one,
+         *  otherwise every write below is skipped while the API still returns ok:true (silent failure). */
         user = {
           uid: uk.uid,
           username: uk.name || uk.uid,
@@ -378,14 +378,14 @@ module.exports.activate = (ctx) => {
       if (j.avatar !== undefined) user.avatar = String(j.avatar).slice(0, 300);
       save();
     } else {
-      /* 没有 uid = 无法定位记录, 明确报错而不是假装成功 */
+      /* no uid = cannot locate the record; error explicitly instead of faking success */
       return jsonRes(res, 400, { error: mkT(uk).t('该身份没有用户记录, 无法保存资料') });
     }
     if (j.cardName !== undefined && apis().updateKey) apis().updateKey(uk.key, { name: String(j.cardName).slice(0, 64) });
     jsonRes(res, 200, { ok: true });
   });
 
-  /* ---- 我的卡密 ---- */
+  /* ---- My key cards ---- */
   ctx.registerTopRoute('GET', '/auth/mykeys', ({ res, auth }) => {
     const uk = requireUser(auth, res); if (!uk) return;
     const keys = myKeysOf(uk.uid, uk.key);
@@ -398,10 +398,10 @@ module.exports.activate = (ctx) => {
     const models = Array.isArray(j.models) ? j.models.map(String).filter(m => !pm.length || pm.includes(m)) : [];
     const groups = Array.isArray(j.groups) ? j.groups.map(String).filter(x => !(uk.groups || []).length || (uk.groups || []).includes(x)) : [];
     const branches = Array.isArray(j.branches) ? j.branches.map(String).filter(b => !pb.length || pb.includes(b)) : [];
-    /* 额度为 0 的卡也能发子卡(子卡同样是 0 额度, 调模型时才提示余额不足) */
+    /* even a zero-quota card can issue sub-cards (sub-cards are zero-quota too; the out-of-balance message appears only when calling models) */
     const quota = clampQuota(uk, j.quotaTokens);
     if (Number(uk.quotaTokens) > 0 && quota > 0) {
-      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); /* 从主卡扣除 */
+      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); /* deduct from the primary card */
     }
     const nk = { key: apis().genKey(), name: String(j.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, groups, branches, note: String(j.note || '用户自助').slice(0, 200), by: 'user', createdAt: new Date().toISOString() };
     apis().addKey(nk);
@@ -421,10 +421,10 @@ module.exports.activate = (ctx) => {
     let quotaSkipped = false;
     if (j.quotaTokens !== undefined) {
       if (j.key === uk.key) {
-        /* 主卡额度不允许自助改(管理员的事); 之前静默跳过还返回 ok —— 用户以为改成功了 */
+        /* primary-card quota cannot be self-served (that is an admin job); previously it silently skipped yet returned ok -- users believed the change stuck */
         quotaSkipped = true;
       } else {
-        /* ★安全: 子卡额度永远不得超过父卡剩余 —— 否则零额度用户随手给自己发一张有额度的子卡 */
+        /* *security: a sub-card's quota may never exceed the parent's remainder -- otherwise zero-quota users mint themselves a funded sub-card */
         patch.quotaTokens = clampQuota(uk, j.quotaTokens);
       }
     }
@@ -447,17 +447,17 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { branches: branchesOf(r.userKey) });
   });
 
-  /* ================= Gay Core SDUI: 个人中心 (provides: user-system) =================
-   * UI = 服务端动态生成的 gcui JSON; 交互 = 签名意图 (ctx.security.guard)。客户端零业务状态。 */
+  /* ================= Gay Core SDUI: profile center (provides: user-system) =================
+   * UI = gcui JSON generated dynamically by the server; interaction = signed intents (ctx.security.guard). The client holds zero business state. */
   const ukOf = (p) => {
     const t = (p && p.token) || '';
     if (!t || !apis().findKey) return null;
-    /* ★优先用认证链结果: 管理员密钥(auth-adminkey 认领)不在卡密列表里, findKey 找不到 */
+    /* *prefer the auth chain's result: the admin key (claimed by auth-adminkey) is not in the card list, so findKey misses it */
     const uk = (p && p.userKey) ? p.userKey : apis().findKey(null, t);
     if (!uk || uk.enable === false) return null;
     return uk;
   };
-  /* 额度数字本地化: en 用 K/M, 繁中 億/萬, 简中 亿/万; null = 不限 */
+  /* Quota number localization: en uses K/M, traditional Chinese 億/萬, simplified Chinese 亿/万; null = unlimited */
   const fmtTok = (t, n) => {
     if (n == null) return t('不限');
     if (t.lang === 'en') return n >= 1e8 ? (n / 1e6).toFixed(0) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(0) + 'K' : String(n);
@@ -465,7 +465,7 @@ module.exports.activate = (ctx) => {
     const mid = t.lang === 'zh-TW' ? ' 萬' : ' 万';
     return n >= 1e8 ? (n / 1e8).toFixed(2) + big : n >= 1e4 ? (n / 1e4).toFixed(1) + mid : String(n);
   };
-  /* 零额度只是「调模型要充值」, 其它自助功能照常 —— 文案别写得像账号被停用 */
+  /* Zero quota only means "top up to call models"; every other self-service feature keeps working -- never word it like a suspended account */
   const creditText = (t, cd) => cd.zeroLimited ? t('零额度 · 调用模型需充值') : cd.unlimited ? t('不限量') : null;
   const keyState = (t, k, mainKey) => {
     const cd = apis().creditsJSON(k);
@@ -483,21 +483,21 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /* ===== 卡密「访问权限」编辑 (SDUI) =====
-   * 为什么要服务端做: App 的 SDUI 渲染器只认 gcui JSON, 改这里不用重编 App。
-   * 交互: 个人页「权限」chip → intent(key-edit-open) → 返回整个编辑页(App 压栈 = 真子页)。
-   *       权限用 list+columns 网格多选 chip, 每次点选都是 intent → 服务端返回新页。
-   *       ★每次点选都必须标 nav:'replace'(同页就地刷新) —— 否则 App 会当成"新子页"压栈,
-   *         点 N 个 chip 就要按 N 次返回才出得去(2026-09-17 修: "嵌套打开 / 返回要按很多次")。 */
+  /* ===== key card "access permissions" editing (SDUI) =====
+   * Why the server does it: the App's SDUI renderer only understands gcui JSON, so edits here need no App rebuild.
+   * Interaction: profile page "permissions" chip -> intent(key-edit-open) -> returns the full edit page (the App pushes it = a real sub-page).
+       * permissions use a list+columns grid of multi-select chips; every tap is an intent -> the server returns a new page.
+   *       ★Every tap must set nav:'replace' (refresh in place on the same page) -- otherwise the App pushes it as a "new sub-page",
+   *         N chip taps meant N backs to escape (fixed 2026-09-17: "nested opens / too many backs needed"). */
 
-  /** 可勾选清单: 编辑子卡时用父卡范围裁剪; 编辑主卡(无父)时全量 */
+  /** Checkable list: trimmed to the parent card's scope when editing a child card; full list when editing a main card (no parent) */
   const accessOptions = (parent, targetKey) => {
     let o = { groups: [], models: [], instances: [] };
     const scope = (parent && targetKey && targetKey !== parent.key) ? parent : null;
     try { o = Object.assign(o, apis().accessOptions ? apis().accessOptions(scope) : {}); } catch (_) { }
     return o;
   };
-  /** 子卡权限绝不能比父卡宽: 与父卡白名单取交集(父卡为空则该维度不限) */
+  /** A child card's permissions must never exceed the parent's: intersect with the parent whitelist (empty parent = unrestricted on that dimension) */
   const clampPerm = (parent, mode, groups, models) => {
     const pg = Array.isArray(parent && parent.groups) ? parent.groups : [];
     const pm = Array.isArray(parent && parent.models) ? parent.models : [];
@@ -524,7 +524,7 @@ module.exports.activate = (ctx) => {
     return parts.join(' · ');
   };
 
-  /** 编辑页 (整个页面服务端生成; 每次点 chip 都由 intent 返回新页 + nav:'replace' → App 原地换页) */
+  /** Edit page (generated entirely server-side; every chip tap returns a new page via intent + nav:'replace' -> the App swaps in place) */
   const editKeyPage = (uk, targetKey, mode, groups, models, q) => {
     const { t } = mkT(uk);
     const opts = accessOptions(uk, targetKey);
@@ -588,7 +588,7 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /** 个人页 (个人页/权限编辑返回都复用它) */
+  /** Profile page (reused for both the profile view and the permissions-edit return) */
   const buildPersonalPage = (uk) => {
     const { t, lang } = mkT(uk);
     const user = uk.uid ? cfg.users.find(x => x.uid === uk.uid) : null;
@@ -601,7 +601,7 @@ module.exports.activate = (ctx) => {
     const quotaTone = cd.zeroLimited ? 'error' : cd.unlimited ? 'primary' : 'success';
     const quotaCap = cd.zeroLimited ? t('零额度 · 请联系管理员充值') : cd.unlimited ? t('不限量') : t('总额度 {0}', fmtTok(t, cd.quotaTokens));
     const children = [
-      /* 资料头: 头像 + 昵称 + 状态徽章 + 键值 */
+      /* Profile header: avatar + nickname + status badge + key-values */
       { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: [
         { type: 'row', gap: 14, children: [
           { type: 'avatar', text: initial, size: 56, url: (user && user.avatar) || '' },
@@ -617,7 +617,7 @@ module.exports.activate = (ctx) => {
         { type: 'kv', label: t('卡密'), value: uk.key.slice(0, 8) + '…' + uk.key.slice(-4) },
         ...(cd.expiresAt ? [{ type: 'kv', label: t('到期'), value: cd.expiresAt }] : []),
       ] },
-      /* 额度: 大数字 + 状态徽章 + 进度 */
+      /* Quota: big number + status badge + progress */
       { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: [
         { type: 'row', gap: 8, children: [
           { type: 'column', weight: 1, gap: 4, children: [
@@ -630,7 +630,7 @@ module.exports.activate = (ctx) => {
         { type: 'kv', label: t('说明'), value: quotaCap },
         { type: 'kv', label: t('已使用'), value: fmtTok(t, cd.usedTokens) },
       ] },
-      /* 卡密列表: chip 操作 + 状态徽章 */
+      /* key card list: chip actions + status badges */
       { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, title: t('我的卡密 ({0})', keys.length), children: [
         { type: 'list', items: '{{state.keys}}', template: { type: 'column', gap: 10, children: [
           { type: 'row', gap: 6, children: [
@@ -647,7 +647,7 @@ module.exports.activate = (ctx) => {
         ] } },
         { type: 'button', text: t('发子卡'), style: 'filled', shape: 'pill', icon: 'msym:add', action: { type: 'open', target: 'page:create-key' } },
       ] },
-      /* 账号 */
+      /* Account */
       { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, title: t('账号'), children: [
         { type: 'row', gap: 8, children: [
           { type: 'button', text: t('编辑资料'), style: 'outlined', shape: 'pill', weight: 1, action: { type: 'open', target: 'page:edit-profile' } },
@@ -655,7 +655,7 @@ module.exports.activate = (ctx) => {
         ] },
         ...(uk.uid ? [{ type: 'button', text: t('注销账号'), style: 'outlined', shape: 'pill', icon: 'msym:delete', action: { type: 'open', target: 'page:delete-account' } }] : []),
       ] },
-      /* 语言(i18n 插件): 选完记住, 所有插件页面跟随; 选项名固定不翻(各自代表自己) */
+      /* language (i18n plugin): remembered on selection; every plugin page follows; option names stay untranslated (each represents itself) */
       { type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, title: t('语言 / Language'), children: [
         { type: 'radio', text: '简体中文', checked: lang === 'zh-CN', selected: lang === 'zh-CN', action: { type: 'intent', endpoint: './intent/set-lang', body: { lang: 'zh-CN' } } },
         { type: 'radio', text: 'English', checked: lang === 'en', selected: lang === 'en', action: { type: 'intent', endpoint: './intent/set-lang', body: { lang: 'en' } } },
@@ -761,15 +761,15 @@ module.exports.activate = (ctx) => {
     ] } });
   });
 
-  /* ---- 签名意图端点 (security.guard: 验签+防重放+防回滚+幂等) ---- */
+  /* ---- Signed intent endpoints (security.guard: signature + anti-replay + anti-rollback + idempotency) ---- */
   ctx.registerRoute('POST', '/intent/profile', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
     if (!uk) return { ok: false, error: mkT(uk).t('需要用户卡密') };
     const b = p.body || {};
     if (!uk.uid) return { ok: false, error: '该身份没有用户记录, 无法保存资料' };
     let user = cfg.users.find(x => x.uid === uk.uid);
     if (!user) {
-      /* 与 /auth/profile 一致: 该身份还没有用户记录(如管理员密钥 uadmin)时自动建档,
-       * 否则这里会静默跳过写入却回 ok:true (App 侧表现为"保存成功但昵称头像被重置")。 */
+      /* same as /auth/profile: auto-create a record when the identity has none yet (e.g. admin key uadmin),
+       * otherwise this silently skips the write yet returns ok:true (on the App it looks like "saved, but nickname/avatar reset"). */
       user = {
         uid: uk.uid, username: uk.name || uk.uid, name: uk.name || uk.uid,
         nickname: '', avatar: '', group: cfg.defaultGroup || '默认',
@@ -805,12 +805,12 @@ module.exports.activate = (ctx) => {
     const branches = Array.isArray(b.branches) ? b.branches.map(String).filter(x => !pb.length || pb.includes(x)) : [];
     const quota = clampQuota(uk, b.quotaTokens);
     if (Number(uk.quotaTokens) > 0 && quota > 0) {
-      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); /* 从主卡扣除 */
+      apis().updateKey(uk.key, { quotaTokens: Number(uk.quotaTokens) - quota }); /* deduct from the primary card */
     }
     const nk = { key: apis().genKey(), name: String(b.name || uk.name || '子卡').slice(0, 64), enable: true, quotaTokens: quota, uid: uk.uid || '', models, groups, branches, note: 'App 自助', by: 'user', createdAt: new Date().toISOString() };
     apis().addKey(nk);
-    /* 创建后直接进入「访问权限」页, 顺手把权限设好 */
-    /* nav:'push' = 真子页(发子卡页 → 新卡权限页); 带副作用, 不可作刷新来源 */
+    /* jump straight to the "access permissions" page after creation and set permissions while at it */
+    /* nav:'push' = a real sub-page (issue-card page -> new-card permissions page); side-effecting, not a refresh source */
     return { ok: true, toast: mkT(uk).t('子卡已创建: {0}', nk.key.slice(0, 8) + '…'), nav: 'push', ui: editKeyPage(uk, nk.key, 'all', [], [], '') };
   }));
 
@@ -823,7 +823,7 @@ module.exports.activate = (ctx) => {
     return { ok: true, toast: mkT(uk).t('已删除') };
   }));
 
-  /* ---- 卡密「访问权限」编辑意图 (SDUI: 每次点选都由服务端返回整页) ---- */
+  /* ---- key card "access permissions" edit intent (SDUI: every tap gets a full page back from the server) ---- */
   const permDraft = (b) => ({
     key: String((b && b.key) || ''),
     mode: ['all', 'group', 'model'].includes(String(b && b.mode)) ? String(b.mode) : 'all',
@@ -837,7 +837,7 @@ module.exports.activate = (ctx) => {
     if (!uk) return { ok: false, error: mkT(uk).t('需要用户卡密') };
     const t = targetOf(uk, String((p.body && p.body.key) || ''));
     if (!t) return { ok: false, error: mkT(uk).t('卡密不存在或不属于你') };
-    /* 只读 → 允许 App 刷新该页时重跑本意图 */
+    /* read-only -> the App may re-run this intent when refreshing the page */
     return { ok: true, ui: editKeyPage(uk, t.key, effMode(t), t.groups || [], t.models || [], ''), refresh: 'intent' };
   }));
 
@@ -879,7 +879,7 @@ module.exports.activate = (ctx) => {
     return { ok: true, back: true, ui: buildPersonalPage(uk) };
   }));
 
-  /* ---- 卡密改名 (SDUI: input 页 + 保存) ---- */
+  /* ---- key card rename (SDUI: input page + save) ---- */
   const renamePage = (uk, key) => {
     const { t } = mkT(uk);
     const t2 = (myKeysOf(uk.uid, uk.key).find(k => k.key === key) || {});
@@ -914,19 +914,19 @@ module.exports.activate = (ctx) => {
     return { ok: true, back: true, ui: buildPersonalPage(uk) };
   }));
 
-  /* ---- 语言切换(i18n 插件): 个人页「语言」卡 → 偏好经事件总线同步落盘 → 原地重渲染 ----
-   * 事件名 = 'auth-user:setLang' (emit 自动带本插件 id 前缀); emit 同步送达,
-   * 下方重取 bundle 时已能读到新语言 → toast 和新页面都直接是新语言。 */
+  /* ---- Language switch (i18n plugin): the profile page's "language" card -> the preference syncs to disk via the event bus -> re-render in place ----
+   * Event name = 'auth-user:setLang' (emit auto-prefixes this plugin's id); emit delivers synchronously,
+   * so the bundle re-fetch below already sees the new language -> toast and the fresh page come out in the new language right away. */
   ctx.registerRoute('POST', '/intent/set-lang', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
     if (!uk) return { ok: false, error: mkT(uk).t('需要用户卡密') };
     const lang = String((p.body && p.body.lang) || '');
     if (!['zh-CN', 'en', 'zh-TW'].includes(lang)) return { ok: false, error: mkT(uk).t('不支持的语言') + ': ' + lang };
     try { ctx.emit('setLang', { fkey: uk.uid || uk.key, lang: lang }); } catch (e) { ctx.log('[auth-user] setLang 事件发送失败: ' + e.message); }
-    const { t } = mkT(uk);   /* emit 已同步生效, 这里拿到的已是新语言 */
+    const { t } = mkT(uk);   /* emit applies synchronously; the language here is already the new one */
     return { ok: true, toast: t('已切换语言'), nav: 'replace', ui: buildPersonalPage(uk) };
   }));
 
-  /* ---- 注销账号: 删除用户+所有卡密+用量记录 ---- */
+  /* ---- Account deletion: remove the user + all their cards + usage records ---- */
   ctx.registerRoute('GET', '/ui/delete-account', (req, res, p) => {
     const uk = ukOf(p);
     if (!uk) return jsonRes(res, 401, { error: mkT(null).t('需要卡密登录') });
@@ -952,12 +952,12 @@ module.exports.activate = (ctx) => {
     const user = cfg.users.find(x => x.uid === uk.uid);
     if (!user) return { ok: false, error: '账号不存在' };
     if (!verifyPassword(String((p.body && p.body.password) || ''), user.passwordHash)) return { ok: false, error: mkT(uk).t('密码错误') };
-    /* 删除该用户所有卡密 (含主卡+子卡) + 全局注销 */
+    /* delete all of the user's cards (primary + sub) + global revocation */
     if (apis().deleteKeysOf) apis().deleteKeysOf(uk.uid);
     const i = cfg.users.findIndex(x => x.uid === uk.uid);
     if (i >= 0) cfg.users.splice(i, 1);
     save();
-    /* nav:'reset' = 终结页: 账号已不存在, 返回键不该再回到个人中心 */
+    /* nav:'reset' = terminal page: the account no longer exists; back must not return to the profile */
     const { t } = mkT(uk);
     return { ok: true, toast: t('账号已注销'), nav: 'reset', ui: { gcui: 1, title: t('已注销'), root: { type: 'column', gap: 14, children: [
       { type: 'card', variant: 'outlined', shape: 'extraLarge', children: [
@@ -967,8 +967,8 @@ module.exports.activate = (ctx) => {
     ] } } };
   }));
 
-  /* ---- 管理端点 ---- */
-  /* ---- 用户分组: 列表 / 增删改 ---- */
+  /* ---- Admin endpoints ---- */
+  /* ---- User groups: list / add / edit / remove ---- */
   const groupCounts = () => {
     const out = {};
     for (const g of cfg.groups) out[g] = 0;
@@ -1040,7 +1040,7 @@ module.exports.activate = (ctx) => {
     if (j.action === 'delete') {
       const i = cfg.users.findIndex(x => x.uid === j.uid);
       if (i < 0) return jsonRes(res, 404, { error: '用户不存在' });
-      if (apis().deleteKeysOf) apis().deleteKeysOf(j.uid); /* 连带删该用户的卡 */
+      if (apis().deleteKeysOf) apis().deleteKeysOf(j.uid); /* delete the user's cards too */
       cfg.users.splice(i, 1); save();
       return jsonRes(res, 200, { ok: true });
     }
@@ -1081,8 +1081,8 @@ module.exports.activate = (ctx) => {
     const newGroup = cfg.groups.includes(String(j.group || '')) ? String(j.group) : cfg.defaultGroup;
     cfg.users.push({ uid: newUid, username, name: username, group: newGroup, passwordHash: hashPassword(String(j.password || 'changeme')), nickname: String(j.nickname || ''), avatar: '', email: String(j.email || ''), banned: false, note: String(j.note || ''), createdAt: new Date().toISOString() });
     save();
-    /* 默认同时发一张主卡 —— 否则用户登录不上(客户端要求账号至少有一张卡密)。
-     * 额度: 显式传 quotaTokens 优先, 否则用注册默认额度; 都没有 = 零额度(-1), 管理员再充值。 */
+    /* Issue a main card together by default -- otherwise the user cannot log in (the client requires at least one card key per account).
+     * quota: explicit quotaTokens wins, else the registration default; neither = zero quota (-1), topped up later by an admin. */
     let mainKey = null;
     if (apis().addKey && j.noCard !== true) {
       const raw = j.quotaTokens !== undefined ? j.quotaTokens : (reg && reg.defaultQuota);
@@ -1093,14 +1093,14 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, uid: newUid, username, key: mainKey ? mainKey.key : null });
   });
 
-  /* 首次归一化后落盘: 让其它插件/管理端能读到分组列表 */
+  /* Persist right after the first normalization: lets other plugins / the admin side read the group list */
   if (!cfg._groupsPersisted) { cfg._groupsPersisted = true; save(); }
-  /* ★能力注册 (2026-10-07): 用户分组数据不再只能靠"知道 auth-user 这个名字"来拿 */
-  /* ★能力注册 (2026-10-07): 用户管理能力 —— 内核「用户」页据此取数据, 不再写死 'auth-user' */
+  /* *capability registration (2026-10-07): user-group data is no longer reachable only by "knowing the name auth-user" */
+  /* ★Capability registration (2026-10-07): the user-management capability -- the core "Users" page pulls data by it instead of hard-coding 'auth-user' */
   ctx.provideCapability('user-admin', {
     listUsers: () => { try { return cfg.users.map(u => ({ uid: u.uid, name: u.name, nickname: u.nickname, email: u.email, note: u.note, avatar: u.avatar || '', banned: !!u.banned, banReason: u.banReason })); } catch (_) { return []; } },
     adminApi: () => ({ pluginId: ctx.id, list: '/admin/users' }),
-    /* ★api (2026-10-07): 同上 —— App 按能力名查端点, 不再写死 /plugins/auth-user/... */
+    /* ★api (2026-10-07): same idea -- the App resolves endpoints by capability name, no more hard-coded /plugins/auth-user/... */
     api: () => ({
       endpoints: {
         list:   '/admin/users',   // GET  列表
@@ -1109,9 +1109,9 @@ module.exports.activate = (ctx) => {
     }),
   });
 
-  /* ★能力注册 (2026-10-07): 注册配置公示 —— 内核 bootstrap 据此填 auth.registration,
-   *  不再写死 'auth-user'。★字段形状与旧版**逐字段一致**(App Models.kt 的 RegistrationInfo 依赖它),
-   *  secret(captchaSiteKey 之外的一切)绝不外泄。 */
+  /* ★Capability registration (2026-10-07): publicizing the registration config -- the core bootstrap fills auth.registration from it,
+   *  no longer hardcodes 'auth-user'. *the field shape matches the old version **field for field** (the App's Models.kt RegistrationInfo depends on it),
+   *  secret (everything except captchaSiteKey) never leaks. */
   ctx.provideCapability('user-registration', {
     info: () => {
       try {

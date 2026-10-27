@@ -1,12 +1,12 @@
 /**
- * 由「主色种子」生成整套 Material 3 调色板 (服务端版, 与 App 端 ThemeEngine.dynamicPalette 同算法)。
+   * derives a full Material 3 palette from a "primary seed" (server-side; same algorithm as the App's ThemeEngine.dynamicPalette).
  *
- * 用途: 主题插件 (theme-md3) 支持自定义主色 —— 用户只填一个颜色, 服务端算出整套
- * primary/secondary/tertiary/容器色/表面层级/描边, 经 bootstrap 的 themes 下发,
- * App 与网页端都直接使用 (不用重装 App)。
+ * Purpose: the theme plugin (theme-md3) supports custom primary colors -- the user fills one color and the server derives the whole
+   * primary/secondary/tertiary/container colors/surface levels/outlines, shipped via bootstrap's themes,
+   * used directly by both the App and the web UI (no app reinstall needed).
  *
- * 规则 (和 App 一致): 种子色的色相 + 低饱和度中性色; 灰白种子(s<0.12)兜底饱和度 0.35,
- * 避免整套配色变灰。深浅两套分别算。
+   * rules (matching the App): the seed's hue + low-saturation neutrals; gray/white seeds (s<0.12) get a 0.35 saturation fallback,
+   * prevents the whole palette from going gray. Dark and light sets are computed separately.
  */
 
 function hexToRgb(hex) {
@@ -45,7 +45,7 @@ function hsvToHex(h, s, v) {
   return '#' + to(r) + to(g) + to(b);
 }
 
-/** 校验种子色, 返回规范化 hex 或 null */
+/** validate a seed color; returns normalized hex or null */
 function normalizeSeed(raw) {
   const rgb = hexToRgb(raw);
   if (!rgb) return null;
@@ -54,9 +54,9 @@ function normalizeSeed(raw) {
 }
 
 /**
- * @param {string} seedHex 种子色
- * @param {boolean} dark 深色模式
- * @returns {object|null} 令牌 → #RRGGBB 映射 (与 App 的令牌名一致)
+   * @param {string} seedHex the seed color
+   * @param {boolean} dark dark mode
+   * @returns {object|null} token -> #RRGGBB map (names match the App's tokens)
  */
 function paletteFromSeed(seedHex, dark) {
   const rgb = hexToRgb(seedHex);
@@ -121,9 +121,9 @@ function paletteFromSeed(seedHex, dark) {
 }
 
 /**
- * 配色方案后处理: 在 paletteFromSeed 输出之上调整饱和度/明度, 生成不同风格。
+   * palette post-processing: adjust saturation/lightness on top of paletteFromSeed's output to produce different styles.
  * scheme: standard | expressive | vibrant | muted | monochrome
- * standard=原样; expressive=容器色更鲜明; vibrant=最高饱和; muted=低饱和偏灰; monochrome=纯灰阶
+   * standard = as-is; expressive = livelier containers; vibrant = max saturation; muted = desaturated gray-leaning; monochrome = pure grayscale
  */
 function applyScheme(p, scheme, dark) {
   if (!p || scheme === 'standard') return p;

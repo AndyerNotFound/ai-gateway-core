@@ -1,23 +1,23 @@
 'use strict';
-/* auth.js - 认证 hook 链 + 默认 gatewayKey + TOTP + setup 模式 (文档 §3)
+/** auth.js - the auth hook chain + default gatewayKey + TOTP + setup mode (doc §3)
  *
- * 架构 (类比 Linux PAM / Spring Security AuthenticationProvider):
- *   请求 → 内核 checkAuth(req, query, cfg) 调用注册的认证策略链
- *     ├─ gatewayKey 默认实现(内核内置, 最低优先级)
- *     ├─ 卡密认证插件(若装了) → 查 apiKeys
- *     ├─ TOTP 第二验证插件(若装了) → 验证 adminAuth
- *     └─ ...其他认证策略
- *   链上第一个返回非 null 的策略生效; 全 null → 401
+   * architecture (cf. Linux PAM / Spring Security AuthenticationProvider):
+ *   Request -> the core's checkAuth(req, query, cfg) walks the registered auth policy chain
+ *     ├─ gatewayKey default implementation (built into the core, lowest priority)
+ *     ├─ card-key auth plugin (if installed) -> looks up apiKeys
+ *     ├─ TOTP second-factor plugin (if installed) -> verifies adminAuth
+ *     └─ ...other auth policies
+ *   The first policy returning non-null wins; all null -> 401
  *
- * 加载顺序: 认证插件(type:'auth') 先于业务插件加载, 失败 fail-closed (由 PluginManager 保证)。
- * setup 模式: 首次安装白名单——只开放 POST /setup/admin, localhost only, 10 分钟超时。
+   * load order: auth plugins (type:'auth') load before business plugins; failure is fail-closed (guaranteed by the PluginManager).
+ * Setup mode: first-install whitelist -- only POST /setup/admin is open, localhost only, 10-minute timeout.
  */
 const crypto = require('crypto');
 const { logErr } = require('./util');
 
-/* ⚠️ 安全警告: 管理密钥经 URL 查询参数(?adminKey=)传递时提示一次。
- * 该通道仅为向后兼容保留 —— URL 会进入浏览器历史 / Referer / 访问日志 / 截图。
- * 60 秒去重, 避免刷屏。 */
+/** *security warning: shown once when the admin key travels in a URL query parameter (?adminKey=).
+ * This channel exists for backward compatibility only -- the URL leaks into browser history / Referer / access logs / screenshots.
+   * 60-second dedup, avoiding notification spam. */
 let _lastQueryKeyWarn = 0;
 function warnQueryAdminKey(req) {
   const now = Date.now();
@@ -28,13 +28,13 @@ function warnQueryAdminKey(req) {
     ' — 密钥会进入浏览器历史 / Referer 头 / 服务器访问日志 / 截图。建议改用 x-admin-key 头或 adminKey cookie。');
 }
 
-/* cookie 值可能被客户端 encodeURIComponent 过；解不开就原样返回（绝不抛错）。 */
+/** the cookie value may have been encodeURIComponent-ed by the client; return it as-is when undecodable (never throws). */
 function decodeURIComponentSafe(v) {
   if (!v) return '';
   try { return decodeURIComponent(v); } catch (_) { return String(v); }
 }
 
-/* ---- TOTP (RFC 6238, SHA1, 30s窗口, 6位) ---- */
+/** ---- TOTP (RFC 6238, SHA1, 30s window, 6 digits) ---- */
 function base32Decode(s) {
   const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   s = String(s || '').toUpperCase().replace(/=+$/, '').replace(/[^A-Z2-7]/g, '');
@@ -75,7 +75,7 @@ function totpVerify(secretB32, code) {
   return false;
 }
 
-/* ---- 密码哈希 (scrypt; 用户体系插件用) ---- */
+/** ---- password hashing (scrypt; used by the user-system plugin) ---- */
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16).toString('base64url');
   const h = crypto.scryptSync(String(pw), salt, 32);
@@ -96,7 +96,7 @@ function genApiKey(len) {
   return 'sk-' + crypto.randomBytes(bytes).toString('base64url').slice(0, n);
 }
 
-/* 提取请求出示的凭证: Bearer / x-api-key / x-goog-api-key / ?key= */
+/** extract the credentials the request presented: Bearer / x-api-key / x-goog-api-key / ?key= */
 function presentedToken(req, query) {
   const h = req.headers;
   const auth = h.authorization || '';
@@ -104,25 +104,25 @@ function presentedToken(req, query) {
   return bearer || h['x-api-key'] || h['x-goog-api-key'] || (query && query.get('key')) || '';
 }
 
-/* ---- checkAuth 策略链 ----
+/** ---- checkAuth strategy chain ----
  * strategy = {
- *   name: 'cardkey',                  // 策略名(日志用)
- *   admin: false,                     // 是否参与管理端鉴权链 (admin 链 / 用户链分开)
+ *   name: 'cardkey',                  // policy name (for logs)
+ *   admin: false,                     // whether to join the admin auth chain (admin and user chains are separate)
  *   check({token, req, query, cfg}) → null | {ok:true, admin?, userKey?} | {ok:false, status, error}
  * }
- * 返回 null = 本策略不认识这个凭证, 继续下一个; 非 null = 定论(通过或拒绝)。
+   * returning null = this strategy does not recognize the credential, move on; non-null = final (allow or deny).
  */
 class AuthChain {
   constructor() {
-    this.strategies = [];      // 用户请求链
-    this.adminStrategies = []; // 管理端链 (含第二验证)
+    this.strategies = [];      // the user request chain
+    this.adminStrategies = []; // the admin chain (second factor included)
   }
 
-  /* 注册策略。opts.admin=true 表示同时参与管理端链。auth 插件经此挂入。 */
+  /* Register a policy. opts.admin=true also joins the admin chain. Auth plugins attach through this. */
   registerAuth(strategy, opts = {}) {
     if (!strategy || typeof strategy.check !== 'function') throw new Error('认证策略必须提供 check()');
     if (!strategy.name) strategy.name = 'strategy-' + this.strategies.length;
-    if (opts.admin) this.adminStrategies.push(strategy); // admin 策略只在管理链, 不拦用户请求
+    if (opts.admin) this.adminStrategies.push(strategy); // admin strategies join the admin chain only; user requests are untouched
     else this.strategies.push(strategy);
     return strategy.name;
   }
@@ -131,10 +131,10 @@ class AuthChain {
     this.adminStrategies = this.adminStrategies.filter(s => s.name !== name);
   }
   /**
-   * 按对象注销 (★多实例必须走这个)。
-   * 为什么: 每个实例都会激活同一份认证插件, 策略名相同(如 'cardkey')。
-   * 旧实现按 name 注销 → 重载某个实例时会把**其它实例**的同名策略一起摘掉,
-   * 结果那张卡在其它实例上认证失败(401 invalid key)。
+   * Unregister by object (★multi-instance setups must use this).
+   * Why: every instance activates the same auth plugin, so policy names collide (e.g. 'cardkey').
+   * The old implementation unregistered by name -> reloading one instance also tore the same-named policy off **other instances**,
+   * so that card failed auth on the other instances (401 invalid key).
    */
   unregisterAuthObj(strategy) {
     if (!strategy) return;
@@ -142,25 +142,25 @@ class AuthChain {
     this.adminStrategies = this.adminStrategies.filter(s => s !== strategy);
   }
 
-  /* 用户请求鉴权: gatewayKey 内置(最高优先) → 注册策略链 → 免密兜底 → 401 */
+  /* User request auth: built-in gatewayKey (highest priority) -> registered policy chain -> keyless fallback -> 401 */
   check(cfg, req, query) {
     const token = presentedToken(req, query);
-    // 内核默认实现: gatewayKey
+    // kernel default impl: gatewayKey
     if (cfg.gatewayKey && token && token === cfg.gatewayKey) return { ok: true, admin: true, strategy: 'gatewayKey' };
-    // 注册策略链
+    // register the strategy chain
     const ctx = { token, req, query, cfg };
     for (const s of this.strategies) {
       let r;
       try { r = s.check(ctx); } catch (e) { r = { ok: false, status: 500, error: '认证策略 ' + s.name + ' 异常: ' + e.message }; }
       if (r) { r.strategy = s.name; return r; }
     }
-    // 免密兼容: 无 gatewayKey 且没有任何策略"认领" → 放行
+    // keyless compat: no gatewayKey and no strategy "claims" the request -> allow
     if (!cfg.gatewayKey && !this.strategies.length) return { ok: true, admin: true, strategy: 'none' };
     return { ok: false, status: 401, error: 'invalid key' };
   }
 
-  /* 管理端鉴权: adminKey 主验证 (Bearer / x-admin-key / ?adminKey= / cookie) → admin 策略链(第二验证等)
-   * 无 adminKey = 免密管理(局域网自用, 兼容旧版; setup 模式创建的实例必有 adminKey) */
+  /* Admin auth: adminKey primary check (Bearer / x-admin-key / ?adminKey= / cookie) -> admin policy chain (second factor etc.)
+   * No adminKey = keyless admin (LAN personal use, legacy-compatible; instances created in setup mode always have an adminKey) */
   checkAdmin(cfg, req, query) {
     const h = req.headers;
     const auth = h.authorization || '';
@@ -169,12 +169,12 @@ class AuthChain {
     const cookieRaw = (cookie.match(/(?:^|;\s*)adminKey=([^;]+)/) || [])[1] || '';
     const queryKey = (query && query.get('adminKey')) || '';
     if (queryKey) warnQueryAdminKey(req);
-    /* 候选凭证: 头/查询参数优先, cookie 两种形式(解码后 + 原始)兜底。
-     * ★为什么两种: web/admin.html 用 encodeURIComponent 写 cookie, 密钥含 } > ^ + : ? 等符号时
-     *   会写成 %7D%3E… 形式 —— 若只取原始值去比对必然 401; 而插件管理页(iframe)只带 cookie、
-     *   不带 x-admin-key 头, 于是表现为「主面板正常、插件管理页全部提示需要 adminkey」。
-     *   同时保留未编码裸 cookie 的兼容(旧客户端/其它工具)。
-     * 匹配策略: 设了 adminKey 时优先取能匹配上的候选, 否则退回第一个候选(交给下面统一判 401)。 */
+    /* candidate credentials: header/query params first; both cookie forms (decoded + raw) as fallback.
+     * *why both: web/admin.html writes the cookie with encodeURIComponent; when a key contains } > ^ + : ? characters
+     *   it is written as %7D%3E... -- comparing the raw value would 401 for sure; plugin admin pages (iframe) carry only the cookie,
+     *   the x-admin-key header was missing, so the main panel worked while every plugin admin page demanded an adminkey.
+     *   while keeping compatibility with unencoded raw cookies (old clients / other tools).
+     * matching strategy: when an adminKey is set, prefer a candidate that matches; otherwise fall back to the first (the code below 401s uniformly). */
     const cands = [bearer, h['x-admin-key'], queryKey, decodeURIComponentSafe(cookieRaw), cookieRaw].filter(Boolean);
     const adminToken = (cfg.adminKey && cands.find(t => t === cfg.adminKey)) || cands[0] || '';
     if (cfg.adminKey && adminToken !== cfg.adminKey) return { ok: false, status: 401, error: '需要管理密码(adminKey)' };
@@ -188,8 +188,8 @@ class AuthChain {
   }
 }
 
-/* ---- setup 模式 (文档 §3.3, 白名单) ----
- * 启动时无管理员 → setup 模式: 只开放 POST /setup/admin, localhost only, 限时窗口。 */
+/** ---- setup mode (doc §3.3, whitelist) ----
+   * no admin at startup -> setup mode: only POST /setup/admin exposed, localhost only, time-boxed. */
 function isLocalhost(req) {
   const ip = (req.socket && req.socket.remoteAddress) || '';
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';

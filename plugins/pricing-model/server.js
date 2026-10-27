@@ -1,37 +1,37 @@
 'use strict';
-/* pricing-model 插件 — 计费模型 (填空机)
+/* pricing-model plugin -- pricing model (fill-in-the-blank machine)
  *
- * 定位：**只计量，不改账**。
- *   v0.1 只用内核的 `onUsage` 钩子「旁听」每次请求的真实用量与已扣额度，聚合成
- *   实测的 N（活跃用户数）、人均用量、闲时占比，喂进闭式定价公式。
- *   ★刻意不注册 `billing` hook：内核的 billing 钩子是「最后一个非空结果生效」，
- *     而 billing 插件算完还会往自己的明细账写一行 —— 我们再挂一个竞争钩子，
- *     会出现「扣费按我们的、账本记它的」两本账。要真改扣费，正确通道是给
- *     billing 写规则（hour/ctxLen/cache 触发器），不是再挂一个钩子。
+   * positioning: **meter only; never touch the books**.
+ *   v0.1 only listens in via the core's `onUsage` hook on every request's real usage and deducted quota, aggregating
+ *   measured N (active users), per-user usage, and idle-share, then feeding them into a closed-form pricing formula.
+ *   ★Deliberately does NOT register the `billing` hook: the core's billing hook is "the last non-empty result wins",
+ *     and the billing plugin also appends a line to its own ledger -- adding a competing hook would yield
+ *     "deductions follow ours, the ledger follows theirs" -- two books. To truly change billing, the right channel
+ *     is writing rules for billing (hour/ctxLen/cache triggers), not stacking another hook.
  *
- * 公式：
+   * formula:
  *   X = (a·s/T + c + N_C·t_C·b) / (N_A·α_A + λ·N_S·α_S)
- *   Z = λ·X            α = 1 − r·u       判据: u < 1/r
+ *   Z = λ·X            α = 1 − r·u       criterion: u < 1/r
  *
- * 端点：
- *   GET  /data/summary            实测 + 解出结果（用户可读，零额度卡放行）
- *   GET  /ui/model                App 端 gcui 页面
- *   POST /intent/model/adjust     App 端调参（签名意图）
- *   GET  /admin/summary           管理端总览
- *   POST /admin/params            管理端写入参数（整体合并）
- *   POST /admin/meter-reset       管理端清空计量
+   * endpoints:
+ *   GET  /data/summary            measurements + solved results (user-readable, zero-quota cards allowed)
+ *   GET  /ui/model                gcui page (App side)
+ *   POST /intent/model/adjust     App-side parameter tuning (signed intent)
+ *   GET  /admin/summary           admin overview
+ *   POST /admin/params            admin writes parameters (merged as a whole)
+ *   POST /admin/meter-reset       admin clears the metering data
  */
 const DEF_PARAMS = {
-  a: 3,               // 训练成本 ¥/1M tokens(训练数据)
-  s: 15000000,        // 训练数据量 (M tokens)
-  T: 24,              // 摊销月数
-  c: 3000000,         // 设施成本 ¥/月
-  b: 4,               // 推理成本 ¥/1M
-  rA: 4, rS: 5,       // 额度倍率
-  lam: 4,             // Z/X 比例
+  a: 3,               // training cost CNY/1M tokens (training data)
+  s: 15000000,        // training-data size (M tokens)
+  T: 24,              // amortization months
+  c: 3000000,         // facility cost CNY/month
+  b: 4,               // inference cost CNY/1M
+  rA: 4, rS: 5,       // quota multipliers
+  lam: 4,             // Z/X ratio
   NA: 300000, NS: 50000, uA: 0.15, uS: 0.12,
   NC: 1000000, tC: 1.03,
-  idleWindows: [[23, 7], [12, 14]],   // 闲时窗（跨零点写 [23,7]）
+  idleWindows: [[23, 7], [12, 14]],   // idle windows (crossing midnight is written [23,7])
 };
 const ADJ_KEYS = ['a', 's', 'T', 'c', 'b', 'rA', 'rS', 'lam', 'NA', 'NS', 'uA', 'uS', 'NC', 'tC'];
 const KEEP_DAYS = 45;
@@ -57,8 +57,8 @@ module.exports = {
     const P = () => Object.assign({}, DEF_PARAMS, D().params || {});
     const METER = () => { const m = D().meter; return (m && typeof m === 'object') ? m : { days: {}, users: {} }; };
 
-    /* ==================== 计量（旁听，不改扣费） ==================== */
-    /* 每次请求完成后内核都会调 onUsage，usage 里已经带上了 charged（billing 或老口径算出的最终值）。 */
+    /* ==================== Metering (observe only; never changes billing) ==================== */
+    /* after every request the kernel calls onUsage; usage already carries charged (the final value from billing or the legacy convention). */
     ctx.hook('onUsage', (usage, c) => {
       try {
         const p = P();
@@ -68,7 +68,7 @@ module.exports = {
         const day = m.days[dk] || (m.days[dk] = { req: 0, in: 0, out: 0, cache: 0, charged: 0, idle: 0, hours: new Array(24).fill(0) });
         const tok = (Number(usage.input) || 0) + (Number(usage.output) || 0);
         const ch = (usage.charged != null) ? Number(usage.charged)
-          : ((Number(usage.input) || 0) + (Number(usage.output) || 0));   // 老口径回退
+          : ((Number(usage.input) || 0) + (Number(usage.output) || 0));   // legacy-convention fallback
         const idle = (Array.isArray(p.idleWindows) ? p.idleWindows : DEF_PARAMS.idleWindows)
           .some((w) => inWindow(now.getHours(), w));
 
@@ -92,7 +92,7 @@ module.exports = {
       } catch (e) { ctx.log('计量异常(已忽略):', e.message); }
     });
 
-    /* 计量清理：只留 KEEP_DAYS 天 */
+    /* metering cleanup: keep only KEEP_DAYS days */
     ctx.cron(6 * 3600 * 1000, () => {
       try {
         const m = METER();
@@ -108,7 +108,7 @@ module.exports = {
       } catch (e) { ctx.log('计量清理异常:', e.message); }
     });
 
-    /* ==================== 聚合读数 ==================== */
+    /* ==================== Aggregated reads ==================== */
     function measured() {
       const m = METER();
       const days = m.days || {};
@@ -143,7 +143,7 @@ module.exports = {
       };
     }
 
-    /* ==================== 闭式求解 ==================== */
+    /* ==================== Closed-form solving ==================== */
     function solve(p) {
       const alphaA = 1 - p.rA * p.uA, alphaS = 1 - p.rS * p.uS;
       const train = (p.a * p.s) / (p.T || 1);
@@ -153,8 +153,8 @@ module.exports = {
       const X = (Dd > 0.0001) ? (fixedNoFree + freeCost) / Dd : null;
       const Z = (X == null) ? null : p.lam * X;
       const contrib = (X == null) ? 0 : (p.NA * alphaA * X + p.NS * alphaS * Z);
-      const budget = contrib - fixedNoFree;         // 可分配给免费层的余量
-      const net = budget - freeCost;                // 净利
+      const budget = contrib - fixedNoFree;         // headroom allocatable to the free tier
+      const net = budget - freeCost;                // net profit
       const NCmax = (p.b * p.tC > 0) ? budget / (p.b * p.tC) : 0;
       const payback = (net > 0) ? (p.a * p.s) / net : null;
       return {
@@ -179,7 +179,7 @@ module.exports = {
       return { params: p, solved: r, measured: m };
     }
 
-    /* ==================== App 端 gcui 页面 ==================== */
+    /* ==================== App-side gcui pages ==================== */
     function buildUi() {
       const p = P(), r = solve(p), m = measured();
       const kvs = (arr) => arr.map(([label, value]) => ({ type: 'kv', label, value: String(value) }));
@@ -255,13 +255,13 @@ module.exports = {
       send(res, 200, page);
     }
 
-    /* ==================== 用户只读数据（零额度卡放行路径） ==================== */
+    /* ==================== User read-only data (the zero-quota card allow path) ==================== */
     ctx.registerRoute('GET', '/data/summary', (req, res, p) => {
       const s = snapshot();
       send(res, 200, { ok: true, plugin: ctx.id, instance: ctx.instanceName, params: s.params, solved: s.solved, measured: s.measured });
     });
 
-    /* ==================== App 端意图 ==================== */
+    /* ==================== App-side intents ==================== */
     ctx.registerRoute('POST', '/intent/model/adjust', (req, res, p) =>
       ctx.security.guard(req, p, res, (uk) => {
         if (!uk) return { ok: false, error: '需要登录' };
@@ -283,7 +283,7 @@ module.exports = {
       })
     );
 
-    /* ==================== 管理端 ==================== */
+    /* ==================== Admin side ==================== */
     ctx.registerRoute('GET', '/admin/summary', (req, res, p) => {
       const a = p.authAdmin ? p.authAdmin() : { ok: false };
       if (!a.ok) return send(res, 401, { ok: false, error: '需要管理员密钥' });
@@ -304,7 +304,7 @@ module.exports = {
         cur[k] = v; applied.push(k);
       }
       setD('params', cur);
-      const back = P();   // 回读校验
+      const back = P();   // read-back verification
       const s = snapshot();
       send(res, 200, { ok: true, applied, params: back, solved: s.solved });
     });
@@ -317,7 +317,7 @@ module.exports = {
       send(res, 200, { ok: true, days: Object.keys(back.days || {}).length, users: Object.keys(back.users || {}).length });
     });
 
-    /* 预授权估算钩子：让「冻结额度」也用同一把尺子（可选，v0.1 不介入，返回 null 即不干预） */
+    /* pre-auth estimate hook: lets "quota freezing" use the same ruler (optional; v0.1 does not intervene -- returning null opts out) */
 
     ctx.log('计费模型插件已激活 · 只计量不改扣费 · 闲时窗 ' + JSON.stringify(P().idleWindows));
   },

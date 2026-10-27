@@ -1,7 +1,7 @@
 'use strict';
-/* thinking-summary 插件 - 思考链精简 (从旧版 gateway.js 搬运)
- * 配置: { enable, mode: truncate|summarize, maxCharsPerSegment, summarizeBaseUrl/ApiKey/Model/Prompt, maxSegments }
- * hook: needConvert(强制走 canonical) / wrapWriter(包 writer) / processCanonicalResp(非流式精简)
+/** the thinking-summary plugin - thinking-chain condensing (moved from the old gateway.js)
+   * config: { enable, mode: truncate|summarize, maxCharsPerSegment, summarizeBaseUrl/ApiKey/Model/Prompt, maxSegments }
+   * hooks: needConvert (force canonical) / wrapWriter (wrap a writer) / processCanonicalResp (non-streaming condensing)
  */
 module.exports.activate = (ctx) => {
   const tsCfg = ctx.config;
@@ -11,7 +11,7 @@ module.exports.activate = (ctx) => {
   tsCfg.maxSegments = Math.max(1, Number(tsCfg.maxSegments) || 12);
   if (!tsCfg.summarizePrompt) tsCfg.summarizePrompt = '用一句话中文概括以下思考片段:';
 
-  /* ---- 截断(同步, 零延迟) ---- */
+  /* ---- Truncation (sync, zero latency) ---- */
   function truncateReasoning(text, maxChars) {
     if (!text) return '';
     const out = [];
@@ -33,7 +33,7 @@ module.exports.activate = (ctx) => {
     if (/\/v1$/.test(u)) return u + '/chat/completions';
     return u + '/v1/chat/completions';
   }
-  /* 调 OpenAI 兼容端点单轮文本生成(直连, 不走渠道代理) */
+  /* Call an OpenAI-compatible endpoint for single-turn text generation (direct, not through channel proxies) */
   function callUpstreamText(baseUrl, apiKey, model, prompt) {
     return new Promise((resolve) => {
       const url = normalizeSummarizeUrl(baseUrl);
@@ -100,7 +100,7 @@ module.exports.activate = (ctx) => {
     }
   }
 
-  /* ---- 流式 writer 包装 ---- */
+  /* ---- Streaming writer wrapping ---- */
   function wrapTS(writer) {
     if (!tsCfg.enable) return writer;
     const mode = tsCfg.mode;
@@ -135,7 +135,7 @@ module.exports.activate = (ctx) => {
       };
     }
 
-    // summarize 模式: 分段流式总结 + 顺序保证(reasoning 在正文前) + 10s 超时兜底
+    // summarize mode: streaming per-segment summaries + ordering guarantee (reasoning before content) + a 10s timeout fallback
     let buf = '', saw = false, closed = false, reasoningClosed = false, textFlushed = false;
     let pending = 0, pendingEnd = null, textQ = null;
     const flushEnd = () => { if (pendingEnd && pending === 0) { const e = pendingEnd; pendingEnd = null; closed = true; writer.onEvent(e); } };
@@ -167,7 +167,7 @@ module.exports.activate = (ctx) => {
     };
   }
 
-  /* ---- hook 注册 ---- */
+  /* ---- hook registration ---- */
   ctx.hook('needConvert', () => tsCfg.enable);
   ctx.hook('wrapWriter', (writer) => wrapTS(writer));
   ctx.hook('processCanonicalResp', (cresp, c) => {

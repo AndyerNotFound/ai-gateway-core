@@ -1,31 +1,31 @@
 'use strict';
-/* tunnel 插件 - cloudflared 公网隧道(免费临时域名)
- * 端点:
- *   GET  /plugins/tunnel/status        管理端: 状态(含连通真相 connected/phase/strategy)
- *   POST /plugins/tunnel/start|stop    管理端: 启停
- *   GET  /ui/tunnel                    用户端 SDUI(gcui v1) 页面 —— App 原生渲染, 零重编
- *   POST /intent/start|stop            用户端 SDUI 意图端点(签名守卫 ctx.security.guard)
- * 注意: 单进程多实例共享一条隧道(指向主监听端口), 全局单例
+/** the tunnel plugin - the cloudflared public tunnel (free temporary domains)
+   * endpoints:
+ *   GET  /plugins/tunnel/status        admin: status (with the connectivity truth: connected/phase/strategy)
+ *   POST /plugins/tunnel/start|stop    admin: start/stop
+ *   GET  /ui/tunnel                    user-side SDUI (gcui v1) page -- natively rendered by the App, zero rebuilds
+ *   POST /intent/start|stop            user-side SDUI intent endpoints (signed, guarded by ctx.security.guard)
+   * note: one tunnel shared by all instances in the single process (pointing at the main listening port); a global singleton
  *
- * ★v1.1.1 orphan fix: 用 pgrep/pkill 做系统级检查, 不只靠 G.proc。
- * ★v1.2.0: URL 解析排除保留名 / 退出自动重试 / 强制 IPv4 / 域名持久化 / 端口解析去掉 `|| 16384` /
- *          pgrep 过滤僵尸 / stop 等待真退出。
- * ★v1.3.0: 默认 http2; watchdog 以 `Registered tunnel connection` 判定真正连上; 换策略阶梯;
- *          /status 暴露 connected/phase/strategy/protocol/location。
+   * *v1.1.1 orphan fix: system-level checks via pgrep/pkill, not just G.proc.
+   * *v1.2.0: URL parsing excludes reserved names / auto-retry on exit / forced IPv4 / domain persistence / port parsing dropped `|| 16384` /
+ *          pgrep filters zombies / stop waits for a real exit.
+   * *v1.3.0: http2 by default; the watchdog treats `Registered tunnel connection` as truly connected; strategy ladder swapped in;
+ *          /status exposes connected/phase/strategy/protocol/location.
  * ★v1.4.0 (2026-09-15):
- *   ① **诚实化**: /status 的 `running` 改为"真的连上才算真"(= connected && 有 url), 另给 `procAlive`
- *      与 `pendingUrl`。原因: App 管理端的隧道页是**硬编码 Kotlin**(AdminPages.buildTunnel), 它只读
- *      `running`/`url`/`log` —— 以前只要进程活着就显示"运行中", 页面因此骗人。服务端改语义后,
- *      **不用重编 App 就能让那个页面说真话**。
- *   ② **configSchema**: App 管理端「插件详情」自动出原生设置表单(超时秒数/协议顺序/重试次数/IP 版本)。
- *   ③ **App 用户端 SDUI**: `appUi.pages` + `/ui/tunnel`(gcui v1) + 签名意图端点 → 隧道可在 App 里
- *      以原生界面启停, 改 UI 不用重编 App。页面内做管理员鉴权, 非管理员只看到提示。
- *   另: /start 在"进程活着但没连上"时按**重建**处理(App 那页只有启动/停止按钮, 故障态下得能一键救回)。
+ *   (1) **Honesty**: /status's `running` now means "really connected" (= connected && has url), with `procAlive`
+ *      and `pendingUrl` added. Reason: the App admin's tunnel page is **hard-coded Kotlin** (AdminPages.buildTunnel) and reads only
+ *      `running`/`url`/`log` -- it used to show "running" whenever the process was alive, so the page lied. After the server-side semantic change,
+ *      **that page tells the truth without any App rebuild**.
+ *   (2) **configSchema**: the App admin's "plugin details" auto-generates a native settings form (timeout seconds / protocol order / retry count / IP version).
+ *   (3) **App user-side SDUI**: `appUi.pages` + `/ui/tunnel` (gcui v1) + signed intent endpoints -> the tunnel can be
+ *      started/stopped with a native UI in the App, and UI changes need no rebuild. Admin auth happens in-page; non-admins see only a notice.
+ *   Also: /start treats "process alive but not connected" as a **rebuild** (the App page has only start/stop buttons, so a broken state must be one-tap recoverable).
  */
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 
-/* ---- 多语言(i18n 插件公共库): require/读配置失败 → 一律回退中文原文 ---- */
+/** ---- i18n shared library (the i18n plugin): require/config read failures always fall back to the original Chinese text ---- */
 let i18nBundle = null;
 try { i18nBundle = require('../i18n/lib').bundle; } catch (_) { i18nBundle = null; }
 function mkT(ctx, uk) {
@@ -35,10 +35,10 @@ function mkT(ctx, uk) {
   return { lang: 'zh-CN', t: t };
 }
 
-/* 重试退避基数(毫秒), 后续按 ×2 递增; 次数由配置 maxRetries 决定 */
+/** retry backoff base (ms), doubling each time; the count comes from the configured maxRetries */
 const RETRY_BASE_MS = 3000;
 const MAX_RETRY_ALLOWED = 6;
-/* cloudflared 自身/边缘的保留主机名: 绝不能被当作隧道域名 */
+/** cloudflared's own/edge reserved hostnames: must never be mistaken for tunnel domains */
 const RESERVED_SUBDOMAINS = new Set([
   'api', 'update', 'www', 'help', 'developers', 'blog', 'docs', 'support',
   'region1', 'region2', 'h2', 'v2', 'cftunnel', 'tunnel', 'trycloudflare',
@@ -49,9 +49,9 @@ const CONN_LOST_RE = /Failed to dial|Retrying connection|Connection terminated|n
 
 function jsonRes(res, code, o) { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(o)); }
 
-/* 全局隧道状态(模块级, 跨实例共享) */
+/** global tunnel state (module-level, shared across instances) */
 const G = globalThis.__agwTunnel = globalThis.__agwTunnel || { proc: null, url: '', log: [] };
-/* 老版本/热重载残留字段兜底 */
+/** fallback for fields left over from old versions / hot reloads */
 G.log = G.log || []; G.url = G.url || '';
 if (typeof G.attempt !== 'number') G.attempt = 0;
 if (typeof G.desired !== 'boolean') G.desired = false;
@@ -68,7 +68,7 @@ if (!('plan' in G)) G.plan = null;
 
 const pushLog = (s) => { G.log.push(String(s).slice(0, 300)); if (G.log.length > 50) G.log.shift(); };
 
-/* ---- 配置(来自 configSchema, App 管理端可改; 保存后内核会热重载本插件) ---- */
+/** ---- config (from configSchema; editable on the App admin; the kernel hot-reloads this plugin after saving) ---- */
 function num(v, dflt, min, max) {
   const n = Number(v);
   if (!Number.isFinite(n)) return dflt;
@@ -76,7 +76,7 @@ function num(v, dflt, min, max) {
 }
 function buildPlan(rawCfg) {
   const raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
-  /* 协议顺序: 只认 http2 / quic */
+  /* protocol order: only http2 / quic */
   let protos = String(raw.protocolOrder == null ? 'http2,quic' : raw.protocolOrder)
     .split(',').map(s => s.trim().toLowerCase()).filter(p => p === 'http2' || p === 'quic');
   if (!protos.length) protos = ['http2', 'quic'];
@@ -102,7 +102,7 @@ function buildPlan(rawCfg) {
   return { protos, firstIp, strategies, retryDelays, watchdogMs, raw };
 }
 
-/* ★系统级检查: 正在运行的 cloudflared PID 列表(排除僵尸 Z/<defunct>, 否则会永久"运行中") */
+/** *system-level check: the list of running cloudflared PIDs (exclude zombies Z/<defunct>, or it stays "running" forever) */
 function cloudflaredPids() {
   try {
     const out = execSync('pgrep -x cloudflared', { encoding: 'utf8', timeout: 3000 });
@@ -115,7 +115,7 @@ function cloudflaredPids() {
   } catch (_) { return []; }
 }
 
-/* 杀掉所有 cloudflared 进程(含孤儿)并等待其真正退出, 超时 SIGKILL 兜底 */
+/** kill all cloudflared processes (orphans included) and wait for a real exit; SIGKILL as the timeout fallback */
 function killAllCloudflared(waitMs) {
   try { execSync('pkill -x cloudflared', { timeout: 3000 }); } catch (_) {}
   const deadline = Date.now() + (waitMs == null ? 1500 : waitMs);
@@ -129,7 +129,7 @@ function killAllCloudflared(waitMs) {
   return cloudflaredPids().length === 0;
 }
 
-/* 从一行输出里挑出真正的隧道域名; 保留名(如 api)一律忽略 */
+/** pick the real tunnel domain from one output line; reserved names (like api) are always ignored */
 function pickTunnelUrl(text) {
   URL_RE.lastIndex = 0;
   let m;
@@ -143,9 +143,9 @@ function pickTunnelUrl(text) {
 }
 
 /* ================================================================
- *  用户端 SDUI 页面 (gcui v1) —— 由 Gay Core App 原生渲染
- *  组件/图标/动作全部取自 App 的白名单 (见 gay-core docs/SDUI-COMPONENTS.md
- *  与 sdui/SduiCapabilities.kt), 未知组件会渲染成红色错误块, 所以要严格对齐。
+ *  User-side SDUI page (gcui v1) -- natively rendered by the Gay Core App
+   *  components/icons/actions all come from the App's whitelist (see gay-core docs/SDUI-COMPONENTS.md
+   *  and sdui/SduiCapabilities.kt); unknown components render as red error blocks, so alignment must be strict.
  * ================================================================ */
 function buildUiPage(isAdmin, st, t) {
   if (!isAdmin) {
@@ -162,11 +162,11 @@ function buildUiPage(isAdmin, st, t) {
     };
   }
   const tone = st.connected ? 'success' : (st.procAlive ? 'warning' : 'neutral');
-  /* ★顺手修: snapshot() 从来没有 stateText 字段, 旧代码 st.stateText 渲染成 "undefined"(2026-09-25, 回滚点 .bak-i18n-20260924) */
+  /* *also fixed: snapshot() never had a stateText field; old code rendered st.stateText as "undefined" (2026-09-25, rollback point .bak-i18n-20260924) */
   const stateText = st.connected ? t('连接已注册') : (st.procAlive ? t('启动中') : t('未启动'));
   const children = [];
 
-  /* ---- 状态卡 ---- */
+  /* ---- Status card ---- */
   const statusCard = {
     type: 'card', variant: 'outlined', gap: 8, children: [
       { type: 'row', gap: 10, children: [
@@ -206,7 +206,7 @@ function buildUiPage(isAdmin, st, t) {
   });
   children.push(statusCard);
 
-  /* ---- 日志卡 ---- */
+  /* ---- Logs card ---- */
   const logText = (st.log && st.log.length) ? st.log.slice(-10).join('\n') : t('(空)');
   children.push({
     type: 'card', variant: 'outlined', gap: 6, children: [
@@ -215,7 +215,7 @@ function buildUiPage(isAdmin, st, t) {
     ],
   });
 
-  /* ---- 说明卡 ---- */
+  /* ---- Info card ---- */
   children.push({
     type: 'card', variant: 'outlined', gap: 6, children: [
       { type: 'text', text: t('关于直连被阻断'), style: 'title3' },
@@ -230,15 +230,15 @@ module.exports.activate = (ctx) => {
   const adminOnly = (p, res) => { const a = p.authAdmin(); if (!a.ok) { jsonRes(res, a.status || 401, { error: a.error }); return false; } return true; };
   const isAdmin = (p) => { try { return !!p.authAdmin().ok; } catch (_) { return false; } };
 
-  /* ★② 配置来自 configSchema(App 管理端「插件详情」可改; 保存会热重载本插件) */
+  /* *(2) config comes from configSchema (editable on the App admin's plugin details; saving hot-reloads this plugin) */
   G.plan = buildPlan(ctx.config);
 
-  /* 域名持久化(ctx.data 由内核落盘) */
+  /* domain persistence (ctx.data is flushed by the kernel) */
   const readLastUrl = () => { try { return String(ctx.data.get('lastUrl') || ''); } catch (_) { return ''; } };
   const readLastUrlAt = () => { try { return ctx.data.get('lastUrlAt') || null; } catch (_) { return null; } };
   const persistUrl = (url) => { try { ctx.data.set('lastUrl', url); ctx.data.set('lastUrlAt', Date.now()); } catch (_) {} };
 
-  /* 主端口解析: 本实例有独立端口用它, 否则用主监听端口; 解析不出明确失败(绝不硬编码 16384) */
+  /* main-port resolution: use this instance's own port when it has one, else the main listening port; fail loudly when unresolvable (never hardcode 16384) */
   function resolveTargetPort() {
     let list = [];
     try { list = ctx.gateway.listInstances() || []; } catch (_) { list = []; }
@@ -254,7 +254,7 @@ module.exports.activate = (ctx) => {
     if (G.proc) { G.suppressExit = true; try { G.proc.kill(); } catch (_) {} G.proc = null; }
   }
 
-  /* ★状态快照: 给 /status、SDUI 页面、App 硬编码页共用 */
+  /* *status snapshot: shared by /status, SDUI pages, and the App's hardcoded pages */
   function snapshot() {
     const pids = cloudflaredPids();
     const sysRunning = pids.length > 0;
@@ -273,7 +273,7 @@ module.exports.activate = (ctx) => {
     else if (!procAlive && readLastUrl()) hint = '上次的免费临时域名已失效（重启隧道即变），重新启动可得新域名。';
     return {
       procAlive, connected, orphaned, pidCount: pids.length,
-      hasUrl: connected,                    /* ★SDUI 页面用它决定是否渲染"域名+复制"那一行 */
+      hasUrl: connected,                    /* *SDUI pages use this to decide whether to render the "domain + copy" row */
       phase: G.phase, phaseText, strategy: G.strategy,
       protocol: G.protocol, location: G.location,
       protoText: (G.protocol || '-') + (G.location ? ' @ ' + G.location : ''),
@@ -286,7 +286,7 @@ module.exports.activate = (ctx) => {
     };
   }
 
-  /* ★② 失败/未注册 → 换策略重试 */
+  /* *(2) failure/unregistered -> switch strategy and retry */
   function failover(reason) {
     clearWatchdog(); clearRetry();
     if (!G.desired) return;
@@ -306,7 +306,7 @@ module.exports.activate = (ctx) => {
     }
   }
 
-  /* 启动一次 cloudflared; attempt 决定用策略阶梯里的哪一套参数 */
+  /* start cloudflared once; attempt picks which rung of the strategy ladder to use */
   function spawnOnce(attempt) {
     const plan = G.plan || buildPlan({});
     const strat = plan.strategies[Math.min(attempt, plan.strategies.length - 1)];
@@ -372,7 +372,7 @@ module.exports.activate = (ctx) => {
       failover('未拿到域名(退出码 ' + code + ')');
     });
 
-    /* ★watchdog: 启动后迟迟没注册成功 → 换策略(QUIC 拨不通时进程不会退出, 只能靠这个) */
+    /* *watchdog: when registration keeps failing after boot -> switch strategy (the process will not exit when QUIC cannot dial; only this recovers) */
     clearWatchdog();
     G.watchdogTimer = setTimeout(() => {
       G.watchdogTimer = null;
@@ -384,7 +384,7 @@ module.exports.activate = (ctx) => {
     if (G.watchdogTimer.unref) G.watchdogTimer.unref();
   }
 
-  /* 真正把隧道拉起来(先清孤儿) */
+  /* Actually bring the tunnel up (orphans cleaned first) */
   function beginStart() {
     clearRetry(); clearWatchdog();
     const oldPids = cloudflaredPids();
@@ -396,18 +396,18 @@ module.exports.activate = (ctx) => {
     spawnOnce(0);
   }
 
-  /* ---------------- 管理端端点 ---------------- */
+  /* ---------------- Admin endpoints ---------------- */
   ctx.registerRoute('GET', '/status', (req, res, p) => {
     if (!adminOnly(p, res)) return;
     const s = snapshot();
-    /* ★① running 语义 = 真可用(已注册连接); procAlive 才是"进程活着"。
-     *   App 管理端的硬编码隧道页只读 running/url/log, 这样它就不会再谎报"运行中"。 */
+    /* *(1) running = truly usable (a registered connection); procAlive = "the process is alive".
+     *   the App admin's hardcoded tunnel page reads only running/url/log, so it can no longer lie about "running". */
     jsonRes(res, 200, Object.assign({ running: s.connected }, s));
   });
 
   ctx.registerRoute('POST', '/start', (req, res, p) => {
     if (!adminOnly(p, res)) return;
-    /* 已连上 → 直接返回; 进程活着但没连上(App 那页只有启动/停止按钮) → 按重建处理 */
+    /* already connected -> return directly; process alive but not connected (the App page only has start/stop) -> treat as rebuild */
     if (G.proc && !G.proc.killed && G.connected) {
       return jsonRes(res, 200, { ok: true, url: G.url, running: true, connected: true, already: true });
     }
@@ -435,13 +435,13 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, { ok: true, stopped: old || null, killed: pids.length, restPids: rest });
   });
 
-  /* ---------------- ★③ 用户端 SDUI (App 原生渲染, 零重编) ---------------- */
+  /* ---------------- *(3) user-side SDUI (native App rendering, zero rebuilds) ---------------- */
   ctx.registerRoute('GET', '/ui/tunnel', (req, res, p) => {
     const { t } = mkT(ctx, (p && p.userKey) || null);
     jsonRes(res, 200, buildUiPage(isAdmin(p), snapshot(), t));
   });
 
-  /* 意图端点必须用签名守卫(ctx.security.guard): 验签/时间窗/nonce/序号/幂等 由内核完成 */
+  /* intent endpoints must use the signature guard (ctx.security.guard): signature/time window/nonce/sequence/idempotency are all handled by the kernel */
   ctx.registerRoute('POST', '/intent/start', (req, res, p) =>
     ctx.security.guard(req, p, res, (uk) => {
       const { t } = mkT(ctx, uk);

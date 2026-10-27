@@ -1,7 +1,7 @@
 'use strict';
-/* second-auth 插件 (type:auth) - 管理端第二验证: 第二密码 / TOTP(RFC6238)
- * 配置: { secondKey: '', totpSecret: '' }
- * 注册到管理端链: adminKey 过后再查第二道。
+/** the second-auth plugin (type:auth) - admin second factor: second password / TOTP (RFC6238)
+   * config: { secondKey: '', totpSecret: '' }
+   * registers into the admin chain: checked after the adminKey.
  */
 const crypto = require('crypto');
 const { base32Encode, totpVerify } = require('../../src/auth');
@@ -16,7 +16,7 @@ module.exports.activate = (ctx) => {
     name: 'second-auth',
     check: ({ req, query }) => {
       const aa = { secondKey: cfg.secondKey || '', totpSecret: cfg.totpSecret || '' };
-      if (!aa.secondKey && !aa.totpSecret) return null; // 未配置 = 不需要第二验证
+      if (!aa.secondKey && !aa.totpSecret) return null; // unset = second factor not required
       const h = req.headers;
       if (aa.secondKey && (h['x-admin-key2'] === aa.secondKey || (query && query.get('adminKey2') === aa.secondKey))) return null; // 通过 → 继续(返回 null 让链走完, 最终 adminKey 策略通过)
       if (aa.totpSecret && totpVerify(aa.totpSecret, h['x-totp'] || (query && query.get('totp')))) return null;
@@ -24,7 +24,7 @@ module.exports.activate = (ctx) => {
     },
   }, { admin: true });
 
-  /* 管理端点: 查状态/设第二密码/开关 TOTP */
+  /* Admin endpoints: view status / set second password / toggle TOTP */
   ctx.registerRoute('GET', '/admin/config', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     jsonRes(res, 200, { secondKeySet: !!cfg.secondKey, totpEnabled: !!cfg.totpSecret, totpSecret: cfg.totpSecret || null });

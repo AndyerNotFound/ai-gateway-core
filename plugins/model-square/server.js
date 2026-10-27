@@ -1,15 +1,15 @@
 'use strict';
-/* model-square - 模型广场(带筛选)
+/** model-square - the model square (with filtering)
  *
- * 为什么做成插件页: 页面是服务端渲染的 gcui JSON, App 直接渲染,
- * 所以**改这里不用重编 App** —— 加筛选/改样式只要重启网关。
+   * why a plugin page: the page is server-rendered gcui JSON, rendered directly by the App,
+ * so **editing this file needs no App rebuild** -- adding filters or restyling only requires a gateway restart.
  *
- * 三个筛选维度:
- *   分组(group)     : 客户端可见模型名的"系列"; 管理员配了 modelMap 时, 别名本身就是一个分组
- *   提供商(provider): 渠道名
- *   用户分组(ugroup): 用户在「用户体系」里的分组; 渠道可配 groups:[] 白名单(空=所有分组可用)
+   * three filter dimensions:
+ *   group           : the "family" of client-visible model names; with modelMap configured, an alias itself forms a group
+ *   provider        : the channel name
+ *   user group      : the user's group in the "user system"; a channel may set a groups:[] whitelist (empty = all groups allowed)
  *
- * 筛选状态按 (uid|卡密) 存在插件数据里; 每次点筛选芯片 → intent → 服务端返回整页 → App 原地重渲染。
+   * filter state persists in plugin data per (uid|card); every filter-chip tap -> intent -> a full page back -> the App re-renders in place.
  */
 
 function jsonRes(res, code, o) {
@@ -17,7 +17,7 @@ function jsonRes(res, code, o) {
   res.end(JSON.stringify(o));
 }
 
-/* ---- 多语言(i18n 插件公共库): require/读配置失败 → 一律回退中文原文 ---- */
+/** ---- i18n shared library (the i18n plugin): require/config read failures always fall back to the original Chinese text ---- */
 let i18nBundle = null;
 try { i18nBundle = require('../i18n/lib').bundle; } catch (_) { i18nBundle = null; }
 function mkT(ctx, uk) {
@@ -28,14 +28,14 @@ function mkT(ctx, uk) {
 }
 
 module.exports.activate = (ctx) => {
-  const cfg = ctx.config;   /* ★这个对象引用必须"活的" —— 闭包与 saveCfg 都指着它, 见下面 refreshCfg (永不替换引用) */
+  const cfg = ctx.config;   /* ★this object reference must stay "alive" -- closures and saveCfg both point at it, see refreshCfg below (the reference is never replaced) */
 
-  /* ---------------- 分组 / 模型元数据 ----------------
-   * groups   : [{ name, rate }]  rate = 计费倍率
-   * meta     : { "实例名|渠道名|模型名": { group, alias, price:{in,out,cacheWrite,cacheRead}, perCall } }
-   *            alias    = 对外名称(空 = 用原名)
-   *            price    = 元 / 1M tokens
-   *            perCall  = 数字时表示"使用按次计费"(元/次), null = 不用
+  /* ---------------- Groups / model metadata ----------------
+   * groups   : [{ name, rate }]  rate = billing multiplier
+   * meta     : { "instance|channel|model": { group, alias, price:{in,out,cacheWrite,cacheRead}, perCall } }
+   *            alias    = public name (empty = use the original)
+   *            price    = currency / 1M tokens
+   *            perCall  = a number means "billed per call" (per call); null = disabled
    */
   const DEFAULT_GROUP = 'Default';
   const normalize = () => {
@@ -46,17 +46,17 @@ module.exports.activate = (ctx) => {
   };
   normalize();
 
-  /* ★多实例一致性 (2026-09-18 修; 用户报「进入实例Guili分支配了价格, 切回default分支显示无价格」)
-   *  本插件配置(分组/价格/别名/规则)是**全实例共享**的(manifest 未写 scope → 全局, 存 _global 键),
-   *  但内核 activateOne() 只在插件激活时读一次盘 → 每个实例各持一份内存副本, 之后永不刷新。
-   *  内核早就给了配置版本号 ctx.configRev(任何实例 setPluginConfig 后 +1, 同插件所有实例共享),
-   *  auth-cardkey / auth-user 都按约定实现过 cfgLive()(见它们的「★多实例一致性」注释),
-   *  只有本插件从没用过 → 在 A 实例改完价格, 切到 B 实例看到的还是 B 启动时的旧副本。
-   *  实测(2026-09-18): 除 Guili 外的 5 个实例都只看到 231 条, Guili 的 29 条价格全 null、
-   *  分组退化成名字前缀推导("HY3"); 只有写入方 Guili 实例看到 260 条。
-   *  做法: 每个请求入口先查版本号, 变了就**原地刷新同一个 cfg 对象**(整对象换引用会让闭包和
-   *  saveCfg 继续用旧对象, 所以必须原地 delete+assign), 顺带重跑 normalize()。
-   *  附带好处: 写盘交出的不再是"旧副本", 不会再整对象覆盖掉别实例刚写的数据。 */
+  /* *multi-instance consistency (fixed 2026-09-18; user report: "priced a model on the Guili branch, switching back to default showed no price")
+   *  This plugin's config (groups/pricing/aliases/rules) is **shared across all instances** (no scope in manifest -> global, stored under the _global key),
+   *  but the kernel's activateOne() reads disk once at plugin activation -> each instance holds its own memory copy, never refreshed afterwards.
+   *  the kernel has long provided the config version ctx.configRev (+1 after any instance's setPluginConfig, shared across the plugin's instances),
+   *  auth-cardkey / auth-user both implemented cfgLive() per convention (see their "*multi-instance consistency" comments),
+   *  this plugin alone never used it -> after changing prices on instance A, switching to B still showed B's startup-time stale copy.
+   *  measured (2026-09-18): the 5 instances besides Guili saw only 231 entries; Guili's 29 prices were all null,
+   *  groups degraded to name-prefix inference ("HY3"); only the writer Guili saw all 260.
+   *  approach: check the version at each request entry; on change, **refresh the same cfg object in place** (swapping the whole reference would break closures and
+   *  saveCfg keeps using the old object, so delete+assign must happen in place), and rerun normalize() while at it.
+   *  a side benefit: what gets flushed is no longer a "stale copy", so whole-object writes can no longer clobber data another instance just saved. */
   let cfgRevSeen = -1;
   const refreshCfg = () => {
     const r = ctx.configRev ? ctx.configRev() : 0;
@@ -72,17 +72,17 @@ module.exports.activate = (ctx) => {
     }
     return cfg;
   };
-  /** 所有路由统一包一层: 入口先刷新配置(见上) */
+  /** Every route is wrapped once: the entry refreshes config first (see above) */
   const route = (method, p, handler) => ctx.registerRoute(method, p, (req, res, prm) => {
     refreshCfg();
     return handler(req, res, prm);
   });
   const saveCfg = () => ctx.setPluginConfig(cfg);
-  /* ★键升级为 实例|渠道|模型 (2026-09-12 用户要求"快速分组按 实例+渠道 分板块整理") */
+  /* *key upgraded to instance|channel|model (2026-09-12 user request "organize quick groups into sections by instance+channel") */
   const metaKey = (inst, ch, m) => [String(inst || ''), String(ch), String(m)].join('|');
   const metaOf = (inst, ch, m) => cfg.modelMeta[metaKey(inst, ch, m)] || null;
-  /* ★修复: 无 meta 时返回 '' → 调用点的 || groupOfName(n) 才能按名称前缀推导
-   *  (原来永远返回 Default, 前缀推导永不触发 → 分组芯片只剩 Default 一个) */
+  /* *fix: return '' when there is no meta -> the call site's || groupOfName(n) can then infer from the name prefix
+   *  (it always returned Default, prefix inference never fired -> the group chip offered only Default) */
   const groupNameOf = (inst, ch, m) => (metaOf(inst, ch, m) || {}).group || '';
   const aliasOf = (inst, ch, m) => (metaOf(inst, ch, m) || {}).alias || '';
   const priceOf = (inst, ch, m) => (metaOf(inst, ch, m) || {}).price || null;
@@ -92,16 +92,16 @@ module.exports.activate = (ctx) => {
   };
   const groupNames = () => cfg.groups.map(g => g.name);
 
-  /* ---------- 数据 ---------- */
+  /* ---------- Data ---------- */
   const fkey = (uk) => (uk && (uk.uid || uk.key)) || 'anon';
 
   const allFilter = () => ({ group: '', provider: '', vendor: '', ugroup: '', q: '', sort: '', cols: 1, limit: 150 });
   const filterOf = (uk) => Object.assign(allFilter(), cfg.filters[fkey(uk)] || {});
-  /* 筛选状态序列化 (open GET 路由用: 游客也能筛/排序/切视图, 状态随 URL 携带, 不依赖登录)
-   * ★必须"键驱动": 调用方**显式给了某个键就要写进 URL**(哪怕值是空串) ——
-   *   服务端把"URL 里有没有这个键"当作"要不要改这一项"。
-   *   以前用 if (o.sort) / Number(o.cols) === 2 判真值 → 空排序、cols=1 会被静默吞掉,
-   *   表现就是"点了排序/切视图, 页面刷新了但状态纹丝不动"(2026-09-15 用户报障)。 */
+  /* Filter-state serialization (for open GET routes: guests can filter/sort/switch views too; state rides in the URL, no login needed)
+   * ★Must be "key-driven": when the caller **explicitly passes a key, it goes into the URL** (even if the value is an empty string) --
+   *   the server treats "is this key in the URL" as "should this field be changed".
+   *   truthiness checks like if (o.sort) / Number(o.cols) === 2 silently swallowed empty sorts and cols=1,
+   *   the symptom: "tap sort/switch view, the page refreshes but the state never changes" (user report 2026-09-15). */
   const qs = (f, ov) => {
     const o = Object.assign({}, f, ov || {});
     const P = [];
@@ -118,7 +118,7 @@ module.exports.activate = (ctx) => {
     put('limit', Math.max(1, Number(o.limit) || 150));   /* ★带上"已加载多少"(加载更多后切筛选不该缩回去) */
     return P.join('&');
   };
-  /* 搜索框提交时携带的"其它"筛选(不含 q/view, q 由 {{input.q}} 提供) */
+  /* the "other" filters carried on search submit (excluding q/view; q comes from {{input.q}}) */
   const qsCarry = (f) => {
     const P = [];
     if (f.sort) P.push('sort=' + f.sort);
@@ -142,7 +142,7 @@ module.exports.activate = (ctx) => {
     return cfg.filters[fkey(uk)];
   };
 
-  /** 去重后的渠道列表 (全部渠道, 不再只取 default) */
+  /** Deduplicated channel list (all channels, not just default anymore) */
   const channels = () => {
     const seen = new Map();
     const list = (ctx.gateway && ctx.gateway.instanceChannels) ? ctx.gateway.instanceChannels() : [];
@@ -152,7 +152,7 @@ module.exports.activate = (ctx) => {
     return [...seen.values()];
   };
 
-  /** 客户端可见的模型名: models 列表 ∪ modelMap 的 key(别名) */
+  /** Client-visible model names: the models list ∪ modelMap keys (aliases) */
   const namesOf = (ch) => {
     const mm = (ch.modelMap && typeof ch.modelMap === 'object') ? ch.modelMap : {};
     const set = new Set();
@@ -161,19 +161,19 @@ module.exports.activate = (ctx) => {
     return [...set];
   };
 
-  /** 分组名: 取名字的第一段(gpt-4o→gpt / claude-…→claude); 别名则自身即分组 */
+  /** Group name: the first segment of the name (gpt-4o->gpt / claude-...->claude); an alias is itself its group */
   const groupOfName = (name) => {
     const n = String(name || '').trim();
     const first = n.split(/[-_./: ]+/)[0];
     return first || n;
   };
 
-  /* ---------- 派生分组的自定义规则 group-rules.txt (2026-09-18 用户要求) ----------
-   * 与 avatar-overrides.txt 同风格: 纯文本、一行一条、# 注释、改完刷新页面即生效(mtime 缓存, 不用重启)。
-   *   `前缀*  = 分组名`   前缀匹配(最长优先)
-   *   `精确模型名 = 分组名` 精确匹配
-   *   `mode = override`  让规则**优先于管理端配置**(默认 fallback: 只作用于"没配分组"的模型)
-   * 值留空 = 忽略该行。写错不影响其他行; 语法提示见 GET /group-rules。 */
+  /* ---------- Custom rules for derived groups, group-rules.txt (2026-09-18 user request) ----------
+   * Same style as avatar-overrides.txt: plain text, one rule per line, # comments, takes effect on page refresh (mtime cache, no restart).
+   *   `prefix*  = group name`   prefix match (longest wins)
+   *   `exact model name = group name` exact match
+   *   `mode = override`  makes the rule take **priority over admin config** (default fallback: applies only to "ungrouped" models)
+   * An empty value = the line is ignored. A broken line never affects the others; see GET /group-rules for syntax hints. */
   const grCache = { mtime: 0, exact: {}, rules: [], mode: 'fallback', warn: '' };
   const groupRulesOf = () => {
     try {
@@ -196,23 +196,23 @@ module.exports.activate = (ctx) => {
         const v = s0.slice(i + 1).trim().replace(/^["']|["']$/g, '');
         if (!k) continue;
         if (k.toLowerCase() === 'mode') { mode = (v.toLowerCase() === 'override') ? 'override' : 'fallback'; continue; }
-        if (!v) continue;                        /* 值留空 = 不参与 */
+        if (!v) continue;                        /* empty value = not participating */
         const kl = k.toLowerCase();
-        /* ★2026-09-18: 支持 `前缀*` / `*后缀` / `*包含*` / 精确名（与 avatar-overrides.txt 同一套语义） */
+        /* *2026-09-18: supports `prefix*` / `*suffix` / `*contains*` / exact name (same semantics as avatar-overrides.txt) */
         if (kl.startsWith('*') && kl.endsWith('*') && kl.length > 2) rules.push({ kind: 'contains', stem: kl.slice(1, -1), group: v, raw: k });
         else if (kl.endsWith('*') && kl.length > 1) rules.push({ kind: 'prefix', stem: kl.slice(0, -1), group: v, raw: k });
         else if (kl.startsWith('*') && kl.length > 1) rules.push({ kind: 'suffix', stem: kl.slice(1), group: v, raw: k });
         else exact[kl] = v;
       }
-      rules.sort((a, b) => b.stem.length - a.stem.length);   /* 越具体(串越长)越优先 */
+      rules.sort((a, b) => b.stem.length - a.stem.length);   /* more specific (longer) first */
       grCache.mtime = mt; grCache.exact = exact; grCache.rules = rules; grCache.mode = mode;
       grCache.warn = warns.join('; ');
       return grCache;
     } catch (e) { grCache.warn = e.message; return grCache; }
   };
-  /** 命中自定义规则 → 分组名; 没命中返回 ''
-   *  匹配语义（2026-09-18 扩展）：精确名 > `前缀*` / `*后缀` / `*包含*`（规则串越长越优先）；
-   *  再兜一层**分词**：整名没中就逐词试 `前缀*`（x-deepseek-v4-pro → deepseek* 也能中）。 */
+  /** A matching custom rule -> group name; no match returns ''
+   *  matching semantics (extended 2026-09-18): exact name > `prefix*` / `*suffix` / `*contains*` (longer rules win);
+   *  a final **tokenization** layer: if the whole name misses, try `prefix*` per token (x-deepseek-v4-pro -> deepseek* also hits). */
   const groupByRules = (name) => {
     const r = groupRulesOf();
     const n = String(name || '').toLowerCase();
@@ -230,7 +230,7 @@ module.exports.activate = (ctx) => {
     }
     return '';
   };
-  /** 一个模型最终落在哪个分组: 管理端显式配置 > 自定义规则(mode=override 时反过来) > 内置前缀推导 */
+  /** Which group a model lands in: explicit admin config > custom rules (reversed when mode=override) > built-in prefix inference */
   const groupFor = (inst, ch, n) => {
     const explicit = groupNameOf(inst, ch, n);
     const byRule = groupByRules(n);
@@ -238,13 +238,13 @@ module.exports.activate = (ctx) => {
     return explicit || byRule || groupOfName(n);
   };
 
-  /* ---------- lobehub 头像自动匹配 (2026-09-13 用户要求) ----------
-   * CDN: npmmirror(阿里, 国内直连) 的 @lobehub/icons-static-png 静态资源。
-   * 优先 -color 变体(主题无关); openai/grok 无 color 变体, 用 dark/ 版(用户深色主题)。
-   * 未匹配 → '' → App 端自动回退文字首字母头像。App ImageLoader 有 LruCache, 只下载一次。 */
-  /* v1.1.3: 图标全量本地化 —— lobehub static-svg 包(906 个 svg, 4.5MB)已拉到插件 icons/ 目录,
-   *  经本网关 /icon?f= 路由本地分发, 不再依赖外部 CDN (快/离线/零外网流量)。
-   *  openai/grok 无 color SVG(mono 是 currentColor 渲染成黑) → 用 static-png 的 dark/ PNG(本地)。 */
+  /* ---------- lobehub avatar auto-matching (2026-09-13 user request) ----------
+   * CDN: the @lobehub/icons-static-png static assets on npmmirror (Alibaba, direct connectivity in mainland China).
+   * Prefer the -color variant (theme-agnostic); openai/grok have no color variant, so use the dark/ one (users are on dark themes).
+   * No match -> '' -> the App falls back to a first-letter avatar automatically. The App's ImageLoader has an LruCache, so it downloads only once. */
+  /* v1.1.3: full icon localization -- the lobehub static-svg package (906 svgs, 4.5MB) is pulled into the plugin's icons/ dir,
+   *  served locally through this gateway's /icon?f= route, no external CDN dependency anymore (fast / offline / zero external traffic).
+   *  openai/grok have no color SVG (mono renders via currentColor as black) -> use static-png's dark/ PNGs (local). */
   const AVATAR_MAP = [
     [/^agnes/, 'agnesai.svg'],
     [/^(gpt|o\d|chatgpt|dall|openai)/, 'dark-openai.png'],
@@ -264,14 +264,14 @@ module.exports.activate = (ctx) => {
     [/^mistral/, 'mistral.svg'],
     [/^ernie|^wenxin/, 'baidu.svg'],
   ];
-  /* ---------- 免改代码的快速修正 (2026-09-13 用户要求) ----------
-   * 与 server.js 同目录放 avatar-overrides.json:
-   *   { "精确模型名": "图标文件.svg", "前缀*": "图标文件.svg", "模型名": "" }
-   * 值 = icons/ 目录里的文件名; 空字符串 = 强制文字头像。
-   * 优先级: 精确名 > 前缀*(最长优先) > 内置映射。改完保存, 刷新页面即生效(mtime 缓存)。 */
+  /* ---------- quick no-code fixes (2026-09-13 user request) ----------
+   * Place an avatar-overrides.json next to server.js:
+   *   { "exact model name": "icon.svg", "prefix*": "icon.svg", "model": "" }
+   * value = a file name inside icons/; an empty string = force the letter avatar.
+   * Priority: exact name > prefix* (longest first) > built-in mapping. Saved changes take effect on refresh (mtime cache). */
   const ovrCache = { mtime: 0, map: {}, warn: '' };
-  /* 宽松解析: 先标准 JSON; 失败则逐行提取 "键": "值" —— 手写文件少个逗号/引号不至于整份失效。
-   * 同时把语法问题记到 warn 里, 经 /avatar-rules 暴露出来 (用户能看到哪里写错了)。 */
+  /* Lenient parsing: standard JSON first; on failure extract "key": "value" line by line -- a hand-edited file missing one comma/quote must not void everything.
+   * Syntax problems are recorded in warn and exposed via /avatar-rules (users can see exactly where they mistyped). */
   const parseOverrides = (txt) => {
     try {
       const o = JSON.parse(txt);
@@ -285,8 +285,8 @@ module.exports.activate = (ctx) => {
     }
   };
 
-  /* ★纯文本格式 (推荐, 手写不易错): 每行 `前缀* = 图标文件.svg`
-   *   # 开头 = 注释; 值留空 = 强制文字头像; 也支持 "键": "值" 这种从 JSON 抄来的写法。 */
+  /* *plain-text format (recommended, hard to get wrong by hand): one `prefix* = icon.svg` per line
+   *   lines starting with # = comments; an empty value = force a text avatar; "key": "value" JSON-style lines also work. */
   const parseTxtOverrides = (txt) => {
     const out = {};
     for (const line of String(txt).split(/\r?\n/)) {
@@ -329,10 +329,10 @@ module.exports.activate = (ctx) => {
     } catch (_) { return {}; }
   };
   const iconUrl = (file, base) => base + '/plugins/model-square/icon?f=' + encodeURIComponent(file);
-  /* ★规则行匹配（2026-09-18 扩展）：`前缀*` / `*后缀` / `*包含*` / 精确名 都支持
-   *  背景：内置规则是"以…开头"，用户报「x-deepseek-v4-pro 没被 deepseek* 匹配到」——
-   *  厂商词出现在名字中间时旧逻辑一律漏掉。现在：①覆盖规则能显式写 `*deepseek*`；
-   *  ②内置规则多一层**分词兜底**（见 avatarOf 末尾），两者都是"只在前面全都没命中时才生效"。 */
+  /* *rule line matching (extended 2026-09-18): `prefix*` / `*suffix` / `*contains*` / exact name all supported
+   *  Background: built-in rules are "starts with", and a user reported "x-deepseek-v4-pro is not matched by deepseek*" --
+   *  vendor words in the middle of a name were always missed by the old logic. Now: (1) override rules can state `*deepseek*` explicitly;
+   *  (2) built-in rules gain a **tokenization fallback** (see the end of avatarOf); both apply "only when everything earlier missed". */
   const ruleHit = (ruleKey, name) => {
     const k = String(ruleKey == null ? '' : ruleKey).toLowerCase();
     const n = String(name == null ? '' : name).toLowerCase();
@@ -343,15 +343,15 @@ module.exports.activate = (ctx) => {
     if (k.startsWith('*') && k.length > 1) return n.endsWith(k.slice(1)) ? 'suffix' : '';
     return '';
   };
-  /** 覆盖规则匹配（对"候选名"逐个试；返回 {file} / null） */
+  /** Override-rule matching (tried against each "candidate name"; returns {file} / null) */
   const ovMatch = (cand) => {
     const ov = overridesOf();
     const keys = Object.keys(ov);
-    for (const k of keys) if (String(k).toLowerCase() === cand) return { file: ov[k] };   /* 精确名 */
+    for (const k of keys) if (String(k).toLowerCase() === cand) return { file: ov[k] };   /* exact name */
     let best = null;
     for (const k of keys) {
       if (!ruleHit(k, cand)) continue;
-      if (best === null || String(k).length > String(best).length) best = k;             /* 越具体越优先 */
+      if (best === null || String(k).length > String(best).length) best = k;             /* more specific wins */
     }
     return best === null ? null : { file: ov[best] };
   };
@@ -359,10 +359,10 @@ module.exports.activate = (ctx) => {
     const n = String(name || '').toLowerCase();
     const tail = n.includes('/') ? n.slice(n.lastIndexOf('/') + 1) : '';
     const toks = n.split(/[-_./\s]+/).filter(Boolean);
-    /* ★候选名级联（2026-09-18 重排）：全名 → 斜杠后段 → 逐个分词；
-     *  每一级都先看**你的覆盖规则**，再看内置表。这样 `dbrx*` 能抓到
-     *  `databricks/dbrx-instruct`（斜杠后段），`deepseek*` 能抓到 `x-deepseek-v4-pro`（分词）。
-     *  值留空 = 强制用文字头像（命中即返回空串）。 */
+    /* *candidate-name cascade (reordered 2026-09-18): full name -> after-slash segment -> individual tokens;
+     *  each level checks **your override rules** before the built-in table, so `dbrx*` can catch
+     *  `databricks/dbrx-instruct` (after the slash); `deepseek*` also catches `x-deepseek-v4-pro` (tokenization).
+     *  an empty value = force a text avatar (a hit returns an empty string). */
     const cands = [n, tail, ...toks];
     for (const c of cands) {
       if (!c) continue;
@@ -375,7 +375,7 @@ module.exports.activate = (ctx) => {
     }
     return '';
   };
-  /* 查看当前生效规则 (排查用) */
+  /* view currently effective rules (for troubleshooting) */
   route('GET', '/avatar-rules', (req, res, p) => {
     jsonRes(res, 200, {
       overrides: overridesOf(),
@@ -384,7 +384,7 @@ module.exports.activate = (ctx) => {
     });
   });
 
-  /* 派生分组的自定义规则(只读): 看当前生效的规则 + 语法提示 —— 对应 group-rules.txt (2026-09-18) */
+  /* Custom rules for derived groups (read-only): view active rules + syntax hints -- backed by group-rules.txt (2026-09-18) */
   route('GET', '/group-rules', (req, res, p) => {
     const r = groupRulesOf();
     jsonRes(res, 200, {
@@ -403,7 +403,7 @@ module.exports.activate = (ctx) => {
     const groups = Array.isArray(ch.groups) ? ch.groups.map(String) : [];
     return namesOf(ch).map((n) => ({
       name: n,
-      /* 分组: 管理端显式指定的优先, 否则自定义规则 / 名称前缀推导 */
+      /* group: explicit admin config wins, else custom rules / name-prefix inference */
       instance: instName || '',
       group: groupFor(instName, ch.name, n),
       alias: aliasOf(instName, ch.name, n),
@@ -417,9 +417,9 @@ module.exports.activate = (ctx) => {
     }));
   };
 
-  /** 全部模型(按 渠道 → 模型 顺序) */
-  /* ★跨实例聚合(2026-09-12 用户决策): 模型清单来自【所有已启用实例】,
-   *   同名模型合并, 记录"可用实例" —— 用户端模型广场一眼看全, 不再被自己路径限制。 */
+  /** All models (ordered by channel -> model) */
+  /* *cross-instance aggregation (user decision 2026-09-12): the model list comes from [all enabled instances],
+   *   same-named models merge with their "available instances" recorded -- the user-side model plaza shows everything at a glance, no longer limited to one's own path. */
   const myInst = () => { try { return ctx.getInstanceConfig() || {}; } catch (_) { return {}; } };
   const myInstName = () => myInst().name || 'default';
   const listInstancesSafe = () => {
@@ -427,15 +427,15 @@ module.exports.activate = (ctx) => {
     catch (_) { return []; }
   };
   const allModels = () => {
-    healOrphans();   /* ★每次渲染前轻量自愈(60s 一次): 渠道改名丢的配置能自动找回来, 详见下方 */
-    /* ★去重键 = 分组 + 名称 (2026-09-17 修复)
-     *   原来只用"模型名"做全局去重键 → 分组/价格/别名**先到先占**, 后到的同名模型
-     *   被并进先到的那条, group 字段永不更新 → 管理端把同名模型分到别的分组后,
-     *   广场里那个分组永远是 0 个 (用户报「筛选 DeepSeek Official 显示 0 个模型」:
-     *   deepseek-v4-pro 先被 default|fake 占位成 Default; deepseek-flash 先被
-     *   default|kwxxxllm 的**别名键**占位成 kwxxxllm, DeepSeek 实例的真名模型被吞掉)。
-     *   现在: **同名不同分组各出一张卡**(分组本来就是管理员的分类, 也常按来源拆开),
-     *   同组同名(如 MotoMoto 的 3 个渠道)仍合并成一张。 */
+    healOrphans();   /* *light self-heal before each render (once per 60s): configs orphaned by channel renames find their way back; details below */
+    /* *dedup key = group + name (fixed 2026-09-17)
+     *   the dedup key used to be just the model name -> group/price/alias were **first-come-wins**; a later same-named model
+     *   merged into the first arrival, its group field never updated -> after the admin moved a same-named model to another group,
+     *   that group in the square always showed 0 (user report: "filtering DeepSeek Official shows 0 models":
+     *   deepseek-v4-pro was claimed first by default|fake as Default; deepseek-flash was claimed first by
+     *   default|kwxxxllm's **alias key** as kwxxxllm, swallowing the DeepSeek instance's real-named model).
+     *   now: **one card per (name, group)** (groups are the admin's own taxonomy, often split by source),
+     *   same group+name (e.g. MotoMoto's 3 channels) still merge into one card. */
     const seen = new Map();
     const keyOf = (m) => String(m.group || '') + '\u0000' + String(m.name);
     const push = (m, instName) => {
@@ -450,9 +450,9 @@ module.exports.activate = (ctx) => {
       if (m.channel && !e.channels.includes(m.channel)) e.channels.push(m.channel);
       if (!e.alias && m.alias) e.alias = m.alias;
       if (!e.price && m.price) e.price = m.price;
-      /* ★各来源价格 (2026-09-17 同批修): 合并后 e.price 取"先到者"会张冠李戴
-       *  (fake 渠道的假价盖住官方渠道的真价) → 把每个来源的价格记下来,
-       *   详情页逐条列出; 列表卡上提示"价格不一", 不再让人误以为全站都是那个价。 */
+      /* *per-source prices (fixed in the same 2026-09-17 batch): after merging, e.price "first arrival wins" mismatches reality
+       *  (a fake channel's bogus price masking the official one) -> record each source's price,
+       *   the details page lists them one by one; the list card notes "prices differ", so nobody assumes one site-wide price. */
       const sig = JSON.stringify(m.price || null) + '|' + (m.perCall == null ? '' : m.perCall);
       const occ = instName || '';
       if (!e.sources.some(s => s.sig === sig && s.instance === occ && s.channel === (m.channel || ''))) {
@@ -468,8 +468,8 @@ module.exports.activate = (ctx) => {
       if (!ic || !Array.isArray(ic.channels)) continue;
       for (const ch of ic.channels) {
         if (!ch || !ch.name) continue;
-        /* ★复用 modelsOf: 别的实例也把 modelMap 的别名键算进来(与自身实例对称)。
-         *  原来这里只遍历 ch.models → 别名模型在广场里凭空消失(2026-09-17 同批修)。 */
+        /* *reuse modelsOf: other instances count modelMap alias keys too (symmetric with the home instance).
+         *  this used to iterate only ch.models -> aliased models vanished from the square (fixed in the same batch, 2026-09-17). */
         for (const m of modelsOf(ch, inst.name)) push(m, inst.name);
       }
     }
@@ -479,13 +479,13 @@ module.exports.activate = (ctx) => {
     return [...seen.values()];
   };
 
-  /* ---------- 孤儿配置自愈 (2026-09-18 用户要求) ----------
-   * 背景: meta 键是 `实例名|渠道名|模型名` —— 渠道**改名**后旧键全部对不上号, 该渠道下所有模型的
-   *  分组/价格/别名**静默失效**（实测: 猫猫→CatCat 一次丢了 49 条配置, 其中 43 条带价格,
-   *  表现为"按名称分组乱成一团""有些渠道没在筛选表里"）。
-   * 做法: 键里的渠道名在该实例**已不存在**(或该渠道已不含此模型) 时, 若该实例下**恰好只有一个**
-   *  渠道暴露这个模型名 → 自动把配置迁到那个渠道（删旧键、写日志）；多候选/无候选**只记日志不动数据**
-   *  （宁可少动, 不可错动）。频率: 60s 最多一次。查看 GET /admin/orphans, 手动重跑 POST /admin/heal-meta。 */
+  /* ---------- Orphaned-config self-heal (2026-09-18 user request) ----------
+   * Background: a meta key is `instance|channel|model` -- after a channel is **renamed** every old key stops matching, and all models under that channel
+   *  groups/prices/aliases **silently broke** (measured: one catcat->CatCat rename lost 49 config entries, 43 of them priced,
+   *  shows up as "name-based groups turn into a mess" and "some channels are missing from the filter list").
+   * Approach: when the key's channel no longer exists on that instance (or the channel no longer carries the model), and **exactly one** remaining
+   *  channel serves that model name -> migrate the config there automatically (delete the old key, log it); with multiple or zero candidates, **log only, never touch data**
+   *  (better to do too little than the wrong thing). Rate: at most once per 60s. See GET /admin/orphans; re-run manually via POST /admin/heal-meta. */
   const healState = { at: 0, last: null };
   const instChannelMaps = () => {
     const all = [];
@@ -498,7 +498,7 @@ module.exports.activate = (ctx) => {
     }
     return all;
   };
-  /** dry=true 只扫描不改动(给只读端点用) */
+  /** dry=true scans without changing anything (for read-only endpoints) */
   const scanOrphans = (dry) => {
     const out = { total: Object.keys(cfg.modelMeta).length, moved: [], pending: [] };
     const instByName = new Map(instChannelMaps().map(x => [String(x.name), x]));
@@ -509,7 +509,7 @@ module.exports.activate = (ctx) => {
       const inst = instByName.get(iName);
       if (!inst) { out.pending.push({ key: k, why: '实例不存在: ' + iName }); continue; }
       const ch = inst.channels.find(c => c && String(c.name) === cName);
-      if (ch && namesOf(ch).includes(mName)) continue;                 /* 配置有效 */
+      if (ch && namesOf(ch).includes(mName)) continue;                 /* config still valid */
       const uniq = [...new Set(inst.channels.filter(c => c && c.name && namesOf(c).includes(mName)).map(c => String(c.name)))];
       if (uniq.length === 1) {
         const nk = metaKey(iName, uniq[0], mName);
@@ -550,10 +550,10 @@ module.exports.activate = (ctx) => {
     }
   };
 
-  /** 该模型对某用户分组是否可见: 渠道 groups 空 = 所有分组都可用 */
+  /** Whether a model is visible to a user group: an empty channel groups list = all groups may use it */
   const visibleToGroup = (m, g) => !g || !m.groups.length || m.groups.includes(g);
 
-  /* ---------- 用户分组(读「用户体系」插件的配置) ---------- */
+  /* ---------- User groups (reads the "user system" plugin's config) ---------- */
   const userOf = (uk) => {
     if (!uk || !uk.uid) return null;
     try {
@@ -576,8 +576,8 @@ module.exports.activate = (ctx) => {
     return gs.length ? gs[0] : '';
   };
 
-  /* ---------- gcui 页面 ---------- */
-  /* 筛选芯片: open(GET) 而非 intent —— 游客也能用; 当前筛选随 query 向前携带 */
+  /* ---------- gcui pages ---------- */
+  /* Filter chips: open(GET) instead of intent -- guests can use them too; current filters carry forward in the query */
   const chip = (label, selected, facet, value, view, f) => {
     const o = Object.assign({}, f, { [facet]: value, view: view || 'main' });
     const P = ['view=' + o.view, facet + '=' + encodeURIComponent(o[facet])];
@@ -589,28 +589,28 @@ module.exports.activate = (ctx) => {
     return { type: 'chip', text: label, selected: !!selected, action: { type: 'open', target: 'page:square?' + P.join('&') } };
   };
 
-  /* 复制模型名 iconButton */
+  /* copy-model-name icon button */
   const copyBtn = (t, name) => ({
     type: 'iconButton', icon: 'msym:copy', container: 'outlined', size: 34,
     desc: t('复制模型名'), action: { type: 'copy', text: name, toast: t('已复制 {0}', name) },
   });
 
-  /* 返回列表按钮 (详情页/筛选页用) */
+  /* Back-to-list button (detail / filter pages) */
   const backBtn = (t, label) => ({
     type: 'button', text: label || t('返回列表'), style: 'tonal', shape: 'pill',
-    /* open(不签名) 而不是 intent —— 游客也能返回; 效果与 intent filter{view:main} 等同 */
-    /* ★nav:'pop' = 退回上一层再显示列表。否则从"模型详情"点返回列表会再压一层新页面,
-     *  再按返回又回到详情(App 端"返回到达的是上一个子页而不是模型广场根页"的根因之一)。 */
+    /* open (unsigned) instead of intent -- guests can return too; equivalent to intent filter{view:main} */
+    /* *nav:'pop' = go back one level and show the list. Otherwise, back from "model details" pushed yet another page,
+     *  pressing back again returned to details (one root cause of "back lands on the previous sub-page instead of the square root page" on the App). */
     action: { type: 'open', target: 'page:square', nav: 'pop' },
   });
 
-  /* 价格展示 */
+  /* price display */
   const fmtN = (n) => { const v = Number(n) || 0; return (Math.round(v * 10000) / 10000).toString(); };
 
-  /* ★完整调用名 `实例:渠道:模型名`（2026-09-18 用户要求）
-   *  内核侧（src/modelref.js）对**同名冲突**的模型才用这个形态暴露，客户端粘它就能指定来源。
-   *  ★渠道/实例名里的**空白统一换成连字符**（`DeepSeek Official` → `DeepSeek-Official`）——
-   *    与 src/modelref.js 的 tokenize() 保持一致（插件不能 require 内核模块，只能照抄这 2 行）。 */
+  /* *the full call name `instance:channel:model` (2026-09-18 user request)
+   *  the kernel side (src/modelref.js) uses this shape only for **name-conflicted** models; pasting it lets clients target a source.
+   *  ★Whitespace inside channel/instance names is **uniformly replaced with hyphens** (`DeepSeek Official` -> `DeepSeek-Official`) --
+   *    kept in sync with src/modelref.js's tokenize() (plugins cannot require kernel modules, so these 2 lines are copied). */
   const REF_SEP = ':';
   const refTok = (s) => String(s == null ? '' : s).trim().replace(/\s+/g, '-');
   const refOf = (inst, ch, model) => {
@@ -626,17 +626,17 @@ module.exports.activate = (ctx) => {
     const f = fOverride || filterOf(uk);
     const models = allModels();
     const my = myGroup(uk);
-    const ug = f.ugroup;   /* '' = 不限分组 */
+    const ug = f.ugroup;   /* '' = any group */
 
-    /* 分组芯片: 管理端定义的分组在前(固定顺序), 其余(按前缀推导的)补在后面 */
+    /* group chips: admin-defined groups first (fixed order), prefix-inferred ones appended after */
     const declared = groupNames();
     const derived = [...new Set(models.map(m => m.group))].filter(g => !declared.includes(g)).sort();
     const groups = declared.concat(derived);
-    /* ★提供商芯片覆盖**全部渠道**(2026-09-18): 一条合并卡可能跨多个渠道, 原来只取"首渠道"
-     *  → MotoMoto 2 / MotoMoto 3 这种"只作为非首渠道出现"的渠道在筛选表里根本不出现。 */
+    /* ★The provider chip spans **all channels** (2026-09-18): one merged card may cross several channels; the old code took only the "first channel"
+     *  -> channels like MotoMoto 2 / MotoMoto 3 that "only ever appear as non-first channels" never made it into the filter table. */
     const chansOf = (m) => ((m.channels && m.channels.length) ? m.channels : [m.channel]).filter(Boolean);
     const providers = [...new Set(models.flatMap(m => chansOf(m)))].sort();
-    /* ★厂商(2026-09-18): 按模型名用 group-rules.txt 自动推导, 与"分组"(管理端配)和"提供商"(渠道名)是独立维度 */
+    /* *vendor (2026-09-18): auto-derived from model names via group-rules.txt; independent of "group" (admin-configured) and "provider" (channel name) */
     const vendorOf = (m) => groupByRules(m.name);
     const vendors = [...new Set(models.map(m => vendorOf(m)).filter(Boolean))].sort();
     const unmatched = models.filter(m => !vendorOf(m)).length;
@@ -649,11 +649,11 @@ module.exports.activate = (ctx) => {
       (!ff.q || ((m.name || '') + ' ' + (m.alias || '') + ' ' + chansOf(m).join(' ') + ' ' + (m.group || '')).toLowerCase().includes(String(ff.q).toLowerCase())) &&
       visibleToGroup(m, ff.ugroup);
     let shown = models.filter(m => match(m, f));
-    /* 排序: '' 默认 / name 名称 / group 分组 */
+    /* sort: '' default / name / group */
     if (f.sort === 'name') shown = shown.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
     else if (f.sort === 'group') shown = shown.slice().sort((a, b) => String(a.group).localeCompare(String(b.group)) || String(a.name).localeCompare(String(b.name)));
 
-    /** 应用 patch 后的可见数量(其余维度沿用当前筛选), 给芯片带个数字 */
+    /** visible count after applying the patch (other dimensions keep current filters); gives the chip a number */
     const countFor = (patch) => models.filter(m => match(m, {
       group: patch.group !== undefined ? patch.group : f.group,
       provider: patch.provider !== undefined ? patch.provider : f.provider,
@@ -669,7 +669,7 @@ module.exports.activate = (ctx) => {
     if (ug) active.push(t('用户分组 {0}', ug));
 
     if (isFilter) {
-      /* ---------- 筛选页(代替弹窗: intent 返回整页, App 原地换页) ---------- */
+      /* ---------- Filter page (instead of a dialog: the intent returns a full page; the App swaps in place) ---------- */
       children.push({
         type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 10, children: [
           { type: 'row', gap: 12, children: [
@@ -698,7 +698,7 @@ module.exports.activate = (ctx) => {
         chip(t('全部 ({0})', countFor({ provider: '' })), !f.provider, 'provider', '', 'filter', f),
         ...providers.map(pp => chip(pp + ' (' + countFor({ provider: pp }) + ')', f.provider === pp, 'provider', pp, 'filter', f)),
       ]);
-      /* ★厂商(2026-09-18): 按 group-rules.txt 自动推导, 与"分组""提供商"独立 */
+      /* *vendor (2026-09-18): auto-derived from group-rules.txt; independent of "group" and "provider" */
       section(t('厂商'), t('按模型名自动推导（group-rules.txt）'), [
         chip(t('全部 ({0})', countFor({ vendor: '' })), !f.vendor, 'vendor', '', 'filter', f),
         ...vendors.map(v => chip(v + ' (' + countFor({ vendor: v }) + ')', f.vendor === v, 'vendor', v, 'filter', f)),
@@ -722,11 +722,11 @@ module.exports.activate = (ctx) => {
         ],
       });
     } else {
-      /* ---------- 主页: 概览瘦身 + 可点模型卡 ---------- */
-      /* ★顶部卡片(用户指定的样式): 搜索框(回车提交) + 一行 [排序] [视图] [筛选] */
-      /* ★2026-10-08 参考管理端设计: 排序/视图从「循环切换」改成**直接可见 chip 组**
-       *  (当前态一眼看到 + 直接点目标, 不用连点三下才到想要的档位) —— 用户报「藏得深」。
-       *  筛选页保留(全量 8 维度), main 视图补一行常用筛选 chip(分组/供应商/厂商)一步直达。 */
+      /* ---------- Home: slimmer overview + tappable model cards ---------- */
+      /* *top card (user-specified style): search box (Enter submits) + one row of [Sort] [View] [Filter] */
+      /* *2026-10-08 modeled on the admin design: sort/view went from "cycle-through" to **directly visible chip groups**
+       *  (current state visible at a glance + tap straight to the target instead of three taps) -- user report: "buried too deep".
+       *  the filter page stays (all 8 dimensions); the main view gains a row of common filter chips (group/provider/vendor) for one-tap access. */
       const sortChips = [
         { v: '', label: t('默认') }, { v: 'name', label: t('名称') }, { v: 'group', label: t('分组') },
       ].map(x => ({ type: 'chip', text: x.label,
@@ -752,7 +752,7 @@ module.exports.activate = (ctx) => {
           { type: 'hscroll', gap: 6, children: [
             { type: 'chip', text: t('筛选') + (active.length ? ' (' + active.length + ')' : ''), icon: 'msym:filter',
               selected: active.length > 0, desc: t('全部筛选维度'),
-              /* ★筛选页是有独立返回语义的子视图 → 压栈(返回键回到模型广场列表, 而不是直接退出广场) */
+              /* *the filter page is a sub-view with its own back semantics -> push it (back returns to the model square list, not out of the square) */
               action: { type: 'open', target: 'page:square?' + qs(f, { view: 'filter' }), nav: 'push' } } ]
             .concat([{ type: 'chip', text: t('分组:') + (f.group || t('全部')), selected: !!f.group,
               action: { type: 'open', target: 'page:square?' + qs(f, { view: 'filter' }), nav: 'push' } }]) },
@@ -769,15 +769,15 @@ module.exports.activate = (ctx) => {
           ],
         });
       } else {
-        /* ★分批渲染（2026-09-18 用户报「怎么只显示150个模型」）：默认 150 条，底部给
-         *  「再看 N 个」/「一次显示全部」按钮 —— 不再把后面的模型藏起来只说一句"只显示了前 150 个"。 */
+        /* *batched rendering (2026-09-18 user report "why only 150 models"): default 150, with bottom
+         *  "show N more" / "show all" buttons -- no more hiding the rest behind "only the first 150 shown". */
         const lim = Math.max(1, Math.min(100000, Number(f.limit) || 150));
         const twoCol = Number(f.cols) === 2;
         const rows = [];
         for (const m of shown.slice(0, lim)) {
           const insts = m.instances || [];
-          /* ★渠道显示（2026-09-18 用户要求「能标明渠道是哪一个就行了」）：一条合并卡可能跨多个渠道，
-           *  只显示第一个渠道会让人误以为整条都来自那个渠道 → 全部列出（超过 3 个折成 "+N"）。 */
+          /* *channel display (2026-09-18 user request "just show which channel"): one merged card may span several channels,
+           *  showing only the first channel suggests everything came from it -> list all (fold into "+N" past 3). */
           const chNames = ((m.channels && m.channels.length) ? m.channels : [m.channel]).filter(Boolean);
           const chTxt = chNames.length > 3
             ? chNames.slice(0, 3).join(' / ') + ' +' + (chNames.length - 3)
@@ -786,9 +786,9 @@ module.exports.activate = (ctx) => {
             + (m.priceDiff ? ' · ' + t('价格不一') : '');
           const title = (m.alias ? (m.alias + ' → ' + m.name) : m.name);
           const avatar = { type: 'avatar', url: avatarOf(m.name, base), text: String(m.name).slice(0, 1).toUpperCase(), size: twoCol ? 22 : 26 };
-          /* ★窄卡片必须 maxLines:1 —— 否则长模型名会逐字竖排并把卡片撑爆 */
-          /* ★卡片快速操作(2026-10-08 参考管理端操作行): 复制完整调用名不用进详情 ——
-           *  单列视图卡片底部一行 chip; 双列空间小不加。 */
+          /* *narrow cards need maxLines:1 -- long model names would wrap one char per line and blow up the card */
+          /* *card quick actions (2026-10-08, modeled on the admin action row): copy the full call name without opening details --
+           *  one chip row at the bottom of single-column cards; omitted in the tighter two-column view. */
           const refFast = refOf((m.instances || [])[0] || '', m.channel, m.name);
           const kids = twoCol
             ? [
@@ -812,14 +812,14 @@ module.exports.activate = (ctx) => {
           rows.push({
             type: 'card', variant: 'outlined', shape: 'large', gap: twoCol ? 4 : 0,
             desc: t('查看 {0} 详情', m.name),
-            /* ★带上 group: 同名不同分组的模型是两张卡, 详情必须按"名称+分组"定位,
-             *  否则点哪张都进同一份(错的)详情 (2026-09-17) */
+            /* *carry group: same-named models in different groups are two cards; details must be located by "name + group",
+             *  otherwise every card opens the same (wrong) details (2026-09-17) */
             action: { type: 'open', target: 'page:detail?model=' + encodeURIComponent(m.name) + '&group=' + encodeURIComponent(m.group || '') },
             children: kids,
           });
         }
         if (Number(f.cols) === 2) {
-          /* 网格视图(两列) */
+          /* grid view (two columns) */
           const grid = [];
           for (let i = 0; i < rows.length; i += 2) {
             const pair = [Object.assign({}, rows[i], { weight: 1 })];
@@ -831,7 +831,7 @@ module.exports.activate = (ctx) => {
           children.push({ type: 'column', gap: 3, children: rows });
         }
         if (shown.length > lim) {
-          /* 底部"加载更多"：每次 +150；也给一个"一次显示全部"（条目多时 App 渲染会慢，用户自己选） */
+          /* bottom "load more": +150 each time; plus a "show all at once" option (large lists render slowly in the App; user's choice) */
           const step = 150;
           const next = Math.min(shown.length, lim + step);
           children.push({
@@ -853,14 +853,14 @@ module.exports.activate = (ctx) => {
     return { gcui: 1, title: isFilter ? t('筛选') : t('模型广场'), root: { type: 'column', gap: 8, children } };
   };
 
-  /* 代币符号 (站点资料 serverInfo.currencySymbol; 旧内核无 gateway.serverInfo 时兜底 元) */
+  /* currency symbol (site profile serverInfo.currencySymbol; falls back to the yuan sign when the old kernel has no gateway.serverInfo) */
   const curSym = () => { try { return (ctx.gateway.serverInfo ? ((ctx.gateway.serverInfo().currencySymbol || '') || '元') : '元'); } catch (_) { return '元'; } };
 
-  /* ---------- 模型详情页(只读, GET /ui/detail 打开, 游客可用) ---------- */
+  /* ---------- Model detail page (read-only, opened via GET /ui/detail, guest-accessible) ---------- */
   const buildDetail = (uk, name, base, group) => {
     const { t } = mkT(ctx, uk);
     const models = allModels();
-    /* ★按"名称 + 分组"定位 (2026-09-17): 同名不同分组是两张卡, 只按名字找会串台 */
+    /* *locate by "name + group" (2026-09-17): same name in different groups = two cards; searching by name alone cross-wires them */
     const m = models.find(x => x.name === name && (!group || String(x.group || '') === String(group)))
       || models.find(x => x.name === name) || null;
     const kids = [];
@@ -878,15 +878,15 @@ module.exports.activate = (ctx) => {
       if (m.alias) kv.push({ label: t('对外名称'), value: m.alias });
       if (m.upstream) kv.push({ label: t('上游模型'), value: m.upstream });
       kv.push({ label: t('分组'), value: m.group + (rate !== 1 ? t('（计费倍率 ×{0}）', rate) : '') });
-      /* ★列出**全部**渠道（2026-09-18）：一条合并卡可能跨渠道，只写第一个渠道会误导 */
+      /* *list **all** channels (2026-09-18): a merged card may span channels; writing only the first misleads */
       const allCh = ((m.channels && m.channels.length) ? m.channels : [m.channel]).filter(Boolean);
       kv.push({ label: t('提供商(渠道)'), value: allCh.join(' / ') || '—' });
       kv.push({ label: t('协议类型'), value: m.type });
       kv.push({ label: t('可用实例'), value: (m.instances || []).join(' / ') || '—' });
       if (m.groups.length) kv.push({ label: t('用户分组限制'), value: t('仅 {0}', m.groups.join(' / ')) });
-      /* ★价格行 (2026-09-18): 合并卡跨多渠道/实例时, m.price 只是"先到者"的价格 ——
-       *  若各来源价不一致, 顶部**不再写单值**(会误导成"全站都是这个价"), 只提示逐条看下面;
-       *  只有一个来源配了价时仍照常显示(信息无损)。 */
+      /* *price row (2026-09-18): on merged cards spanning channels/instances, m.price is merely the "first arrival's" price --
+       *  when sources disagree, the top **no longer shows a single value** (it read as "one site-wide price"); it just points to the list below;
+       *  with only one priced source it still displays normally (no information loss). */
       const srcsAll = (m.sources || []).filter(s => s.price || s.perCall != null);
       const multiPrice = m.priceDiff && srcsAll.length > 1;
       if (multiPrice) {
@@ -902,9 +902,9 @@ module.exports.activate = (ctx) => {
         kv.push({ label: t('价格'), value: t('（未在管理端配置）') });
       }
       if (m.perCall != null) kv.push({ label: t('按次计费'), value: fmtN(m.perCall) + ' ' + curSym() + t(' / 次') });
-      /* ★各来源价格 (2026-09-17 同批修): 同名同组跨渠道合并后, 上面几行只是"先到者"的价格,
-       *  真价可能因渠道而异(fake 渠道的假价盖住官方渠道的真价) → 逐条列清楚, 不再误导。
-       *  单行紧凑格式(不换行): "fake 1/1 · SenseNova Router 0.9/2.7", 单位写在标签里。 */
+      /* *per-source prices (fixed in the same 2026-09-17 batch): after cross-channel same-name+group merging, the rows above are only the "first arrival's" price,
+       *  real prices can differ per channel (a fake channel's price masking the official one) -> list each entry clearly, no more misleading.
+       *  single compact line (no wrap): "fake 1/1 · SenseNova Router 0.9/2.7"; units live in the labels. */
       const srcs = (m.sources || []).filter(s => s.price || s.perCall != null);
       if (m.priceDiff && srcs.length > 1) {
         const one = (s) => {
@@ -914,8 +914,8 @@ module.exports.activate = (ctx) => {
         };
         kv.push({ label: t('各来源价格（输入/输出 {0}/1M）', curSym()), value: srcs.slice(0, 4).map(one).join(' · ') + (srcs.length > 4 ? ' …' : '') });
       }
-      /* ★完整调用名（2026-09-18 用户要求）：同名冲突时 /v1/models 给出的是 `实例:渠道:模型名`，
-       *  这里逐个来源列出来 + 复制按钮 —— 直接粘到 AI 客户端就能精确指定来源，不用自己拼。 */
+      /* *full call name (2026-09-18 user request): on conflicts /v1/models returns `instance:channel:model`,
+       *  each source is listed with a copy button -- paste into any AI client to target it exactly, no manual assembly. */
       const refs = ((m.sources && m.sources.length) ? m.sources : [{ instance: (m.instances || [])[0] || '', channel: m.channel }])
         .map(s => refOf(s.instance, s.channel, m.name)).filter(Boolean);
       if (refs.length) {
@@ -946,11 +946,11 @@ module.exports.activate = (ctx) => {
     return { gcui: 1, title: t('模型详情'), root: { type: 'column', gap: 12, children: kids } };
   };
 
-  /* ---------- 路由 ---------- */
-  /* 与 auth-cardkey 同源查卡, 拿到 uid → 才能知道用户属于哪个分组 */
+  /* ---------- Routing ---------- */
+  /* card lookup through the same source as auth-cardkey; only with the uid can we know the user's group */
   const apis = () => ctx.gateway.authApis();
   const ukOf = (p) => {
-    /* ★优先用认证链结果(管理员密钥也能当用户密钥用, 见内核 params.userKey) */
+    /* *prefer the auth chain's result (an admin key can serve as a user key too; see the kernel's params.userKey) */
     if (p && p.userKey) return p.userKey;
     const t = (p && p.token) || '';
     if (!t || !apis().findKey) return null;
@@ -962,8 +962,8 @@ module.exports.activate = (ctx) => {
   const baseOf = (req) => 'http://' + ((req && req.headers && req.headers.host) || '127.0.0.1:16484');
 
   route('GET', '/ui/square', (req, res, p) => {
-    /* 游客也能筛/排序/切视图: 状态随 query 携带, 服务端无状态(游客不持久化);
-     *  登录用户则持久化到 cfg.filters 以便下次保留。 */
+    /* guests can filter/sort/switch views too: state rides the query; the server stays stateless (guest choices never persist);
+     *  logged-in users persist to cfg.filters so the choice survives. */
     const uk = ukOf(p);
     const qp = parseQ(req);
     const view = qp.view === 'filter' ? 'filter' : 'main';
@@ -989,7 +989,7 @@ module.exports.activate = (ctx) => {
     }
     const page = buildPage(uk, view, baseOf(req), f);
     if (!uk) {
-      const { t } = mkT(ctx, null);   /* 游客 = 默认语言 */
+      const { t } = mkT(ctx, null);   /* guest = default language */
       page.guest = true;
       page.root.children.unshift({ type: 'card', variant: 'outlined', shape: 'extraLarge', gap: 6, children: [
         { type: 'text', text: t('未登录 · 游客浏览'), style: 'title4' },
@@ -999,7 +999,7 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, page);
   });
 
-  /* 本地图标分发 (无鉴权: 图标是公开静态资源; f 严格白名单防目录穿越) */
+  /* local icon serving (no auth: icons are public statics; f is strictly whitelisted against path traversal) */
   route('GET', '/icon', (req, res, p) => {
     const q = String((req.url || '').split('?')[1] || '');
     const m = q.match(/(?:^|&)f=([^&]+)/);
@@ -1019,7 +1019,7 @@ module.exports.activate = (ctx) => {
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
   });
 
-  /* 给网页端用的 JSON(结构化的筛选数据, 网页自己渲染) */
+  /* JSON for the web side (structured filter data; the web page renders it itself) */
   route('GET', '/data/square', (req, res, p) => {
     const uk = ukOf(p);
     const models = allModels();
@@ -1034,13 +1034,13 @@ module.exports.activate = (ctx) => {
     });
   });
 
-  /* ==================== 管理端: 分组 / 模型元数据 ==================== */
+  /* ==================== Admin: groups / model metadata ==================== */
 
-  /* ★2026-09-17「同名模型归并」: 同一实例下，多个渠道(含 modelMap 改名)暴露的同一模型名
-   *  在「快速分组」里合并成一张卡。聚合编辑/批量时 channel 传 '*'，服务端展开到该实例下
-   *  所有暴露该模型名的渠道，逐个写 metaKey(实例|渠道|模型)。
-   *  背景: 之前按 渠道→模型 出卡，同一模型被多个渠道暴露(或经 modelMap 改名后同名)时
-   *  会出多张卡，改价/改分组要重复操作，用户报「不便」。 */
+  /* *2026-09-17 "same-name model merging": within one instance, the same model name exposed by multiple channels (incl. modelMap renames)
+   *  merged into one card in "quick groups". For aggregate edits/bulk, pass channel='*'; the server expands to every channel under the instance
+   *  every channel exposing that model name gets a metaKey (instance|channel|model) written one by one.
+   *  Background: cards used to be listed per channel->model, so when several channels exposed the same model (or the same name after a modelMap rename)
+   *  it emitted one card per channel, so price/group changes had to be repeated; users called it inconvenient. */
   const uidOfInst = (instName) => {
     if (String(instName) === String(myInstName())) return myInst().uid;
     for (const inst of listInstancesSafe()) if (String(inst.name) === String(instName)) return inst.uid;
@@ -1051,14 +1051,14 @@ module.exports.activate = (ctx) => {
     let ic = null; try { ic = ctx.getInstanceConfig(uid); } catch (_) {}
     return (ic && Array.isArray(ic.channels)) ? ic.channels : [];
   };
-  /** 该实例下哪些渠道暴露了某模型名(含 modelMap 别名) */
+  /** Which channels on an instance expose a model name (modelMap aliases included) */
   const chNamesExposing = (instName, modelName) => {
     const m = String(modelName);
     return chsOfInst(instName, uidOfInst(instName))
       .filter(ch => ch && ch.name && namesOf(ch).includes(m))
       .map(ch => ch.name);
   };
-  /** 把「按渠道的模型清单」按模型名归并：同名(含 modelMap 改名后同名)合成一项，记录渠道数与差异标记 */
+  /** Merge the per-channel model lists by model name: same-named entries (including modelMap-renamed ones) collapse into one item, recording channel count and divergence flags */
   const mergeModels = (chs) => {
     const map = new Map();
     for (const c of chs) for (const m of (c.models || [])) {
@@ -1073,10 +1073,10 @@ module.exports.activate = (ctx) => {
     return [...map.values()];
   };
 
-  /* ---------- 孤儿配置: 查看 / 手动重跑自愈 (2026-09-18) ---------- */
+  /* ---------- Orphaned configs: view / manually rerun the self-heal (2026-09-18) ---------- */
   route('GET', '/admin/orphans', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
-    const r = scanOrphans(true);   /* 只读扫描, 不改数据 */
+    const r = scanOrphans(true);   /* read-only scan; data untouched */
     jsonRes(res, 200, {
       ok: true,
       total: r.total,
@@ -1088,18 +1088,18 @@ module.exports.activate = (ctx) => {
   });
   route('POST', '/admin/heal-meta', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
-    healState.at = 0;                     /* 破掉 60s 节流, 立刻重跑 */
+    healState.at = 0;                     /* break the 60s throttle; rerun immediately */
     const r = healOrphans();
     jsonRes(res, 200, { ok: true, moved: (r && r.moved) || [], pending: (r && r.pending) || [] });
   });
 
-  /** 模型清单数据（「模型分组」SDUI 页 / 快速分组 / /admin/groups 端点共用同一份口径）
-   *  instances[].merged = 同名归并卡（含 channels[] 暴露渠道名 / chCount / diff）；
-   *  当前实例的 channels[] 额外带 maps/mapSize（modelMap 改名映射，渠道一览用）。 */
+  /** Model-list data (shared by the "model groups" SDUI page, quick groups, and the /admin/groups endpoint -- one single source of truth)
+   *  instances[].merged = merged same-name cards (with channels[] exposed names / chCount / diff);
+   *  the current instance's channels[] additionally carry maps/mapSize (modelMap renames, for the channel overview). */
   const groupsData = () => {
     const self = myInstName();
     const insts = [];
-    /* 当前实例 */
+    /* current instance */
     insts.push({
       name: self, uid: myInst().uid, current: true,
       channels: channels().map(ch => ({
@@ -1113,7 +1113,7 @@ module.exports.activate = (ctx) => {
         models: modelsOf(ch, self).map(m => ({ name: m.name, group: m.group, alias: m.alias, price: m.price, perCall: m.perCall })),
       }))),
     });
-    /* 其它实例 */
+    /* Other instances */
     for (const inst of listInstancesSafe()) {
       if (String(inst.uid) === String(myInst().uid)) continue;
       let ic = null;
@@ -1145,13 +1145,13 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /** 模型清单(给「快速分组」页): 按渠道分组 + 每个模型的当前元数据 */
+  /** Model list (for the "quick groups" page): grouped by channel + each model's current metadata */
   route('GET', '/admin/groups', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     jsonRes(res, 200, Object.assign({ ok: true }, groupsData()));
   });
 
-  /** 分组增删改 + 单模型 / 批量的分组、名称、价格 */
+  /** Group add/remove/edit + single-model / bulk group, name, and price updates */
   route('POST', '/admin/groups', (req, res, p) => {
     const a = p.authAdmin(); if (!a.ok) return jsonRes(res, a.status || 401, { error: a.error });
     const j = p.body || {};
@@ -1192,8 +1192,8 @@ module.exports.activate = (ctx) => {
       if (!(r >= 0)) return jsonRes(res, 400, { error: '倍率无效' });
       g.rate = r; saveCfg(); return ok();
     }
-    /** 单模型: {channel, model, group?, alias?, price?, perCall?, rules?}
-     *  ★channel='*' = 同名归并编辑：展开到该实例下所有暴露该模型名的渠道 */
+    /** Single model: {channel, model, group?, alias?, price?, perCall?, rules?}
+     *  *channel='*' = merged-name editing: expands to every channel under the instance exposing that model name */
     if (act === 'setModel') {
       const ch = String(j.channel || ''), m = String(j.model || '');
       const inst = String(j.instance || myInstName());
@@ -1221,22 +1221,22 @@ module.exports.activate = (ctx) => {
       saveCfg();
       return jsonRes(res, 200, { ok: true, applied: chList, meta: Object.assign({ key: lastKey }, cfg.modelMeta[lastKey]) });
     }
-    /** 批量: {items:[{channel,model}], group?, price?, perCall?, alias?} */
+    /** bulk: {items:[{channel,model}], group?, price?, perCall?, alias?} */
     if (act === 'bulk') {
       const items = Array.isArray(j.items) ? j.items : [];
       if (!items.length) return jsonRes(res, 400, { error: '没有选中模型' });
       let n = 0;
       for (const raw of items) {
-        /* ★SDUI 页面的多选是 checkbox 集合（{{selected}} 在渲染期展开成字符串数组）→
-         *  这里同时认 "实例|渠道|模型" 字符串与 {instance,channel,model} 对象两种形态。
-         *  （模型名里可能有 '|' → 只按前两个分隔符切，剩下全算模型名，与 App 原生页一致） */
+        /* *SDUI page multi-select is a checkbox set ({{selected}} expands to a string array at render time) ->
+         *  accepts both "instance|channel|model" strings and {instance,channel,model} objects.
+         *  (model names may contain '|' -> split on the first two separators only; the rest is the model name, matching the App's native page) */
         const it = (typeof raw === 'string')
           ? (function () { const a = String(raw).split('|'); return { instance: a[0], channel: a[1], model: a.slice(2).join('|') }; })()
           : raw;
         const ch = String((it && it.channel) || ''), m = String((it && it.model) || '');
         const inst = String((it && it.instance) || j.instance || myInstName());
         if (!ch || !m) continue;
-        /* ★channel='*' = 同名归并批量：展开到该实例所有暴露该模型名的渠道 */
+        /* *channel='*' = merged-name bulk: expands to every channel of the instance exposing that model name */
         const chList = ch === '*' ? chNamesExposing(inst, m) : [ch];
         for (const c of chList) {
           const k = metaKey(inst, c, m);
@@ -1259,9 +1259,9 @@ module.exports.activate = (ctx) => {
       saveCfg();
       return jsonRes(res, 200, { ok: true, updated: n });
     }
-    /* ★2026-09-17 App 端模型编辑页的「添加规则」（与网页端规则编辑器同一套规则格式/存储，天然互通）。
-     *  把「触发类型+操作+值」「效果类型+值」组装成 billing 引擎的 when/then，追加到该模型的 rules。
-     *  channel='*' 时展开到该实例所有暴露该名的渠道。 */
+    /* *2026-09-17 the App model-edit page's "add rule" (shares the rule format/storage with the web rule editor; interops naturally).
+     *  assemble "trigger type+op+value" and "effect type+value" into the billing engine's when/then and append to the model's rules.
+     *  with channel='*' it expands to every channel of the instance exposing that name. */
     if (act === 'addRule') {
       const ch = String(j.channel || ''), m = String(j.model || '');
       const inst = String(j.instance || myInstName());
@@ -1271,7 +1271,7 @@ module.exports.activate = (ctx) => {
       const trig = String(j.trig || 'none'), op = String(j.op || 'eq');
       const val = j.v == null ? '' : String(j.v);
       const eff = String(j.eff || 'mult'), effVal = String(j.effVal == null ? '' : j.effVal);
-      /* 组装触发条件 */
+      /* assembling the trigger condition */
       const when = [];
       const trigK = { model: 'model', ugroup: 'ugroup', hour: 'hour', weekday: 'weekday', ctxLen: 'ctxLen' }[trig];
       if (trig === 'expr') when.push({ k: 'expr', op: 'eq', v: val });
@@ -1281,7 +1281,7 @@ module.exports.activate = (ctx) => {
         else if (op === 'between') v = val.split(',').map(s => Number(s.trim()) || 0).slice(0, 2);
         when.push({ k: trigK, op, v });
       }
-      /* 组装效果 */
+      /* assembling the effect */
       const then = [];
       if (eff === 'free') then.push({ k: 'free' });
       else if (eff === 'mult') then.push({ k: 'mult', v: Number(effVal) || 0 });
@@ -1317,24 +1317,24 @@ module.exports.activate = (ctx) => {
         if (!['group', 'provider', 'ugroup'].includes(facet)) return { ok: false, error: '未知筛选项: ' + facet };
         saveFilter(uk, { [facet]: String(b.value == null ? '' : b.value) });
       }
-      /* 搜索词 / 排序 / 视图列数 (顶部卡片) */
+      /* search term / sort / view column count (top card) */
       if (b.q !== undefined) saveFilter(uk, { q: String(b.q == null ? '' : b.q).slice(0, 60) });
       if (b.sort !== undefined) saveFilter(uk, { sort: ['', 'name', 'group'].includes(String(b.sort)) ? String(b.sort) : '' });
       if (b.cols !== undefined) saveFilter(uk, { cols: Number(b.cols) === 2 ? 2 : 1 });
-      /* 无 facet = 只切视图, 不动筛选 */
+      /* no facet = switch view only, filters untouched */
     }
     const view = String(b.view || 'main') === 'filter' ? 'filter' : 'main';
-    /* 同页就地刷新(切视图/排序/搜索/取消筛选) → 不压栈 */
+    /* same-page in-place refresh (view/sort/search/clear filter) -> never pushes */
     return { ok: true, nav: 'replace', ui: buildPage(uk, view, baseOf(req)) };
   }));
 
-  /* 模型详情 (点模型卡片 → 只读详情页: 价格/分组/倍率/可用实例) */
-  /* 模型详情 GET 版: 游客也能看 (只读元数据, 不需要签名/登录; App 端 open page:detail?model=xxx 走这里) */
+  /* model details (tapping a model card -> a read-only detail page: price/group/multiplier/available instances) */
+  /* the GET variant of model details: guests can view it too (read-only metadata, no signature/login; the App's open page:detail?model=xxx lands here) */
   route('GET', '/ui/detail', (req, res, p) => {
     const q = String((req.url || '').split('?')[1] || '');
     const mm = q.match(/(?:^|&)model=([^&]+)/);
     const name = mm ? decodeURIComponent(mm[1]) : '';
-    /* ★group: 同名不同分组是两张卡 → 详情按"名称+分组"定位 (2026-09-17; 老链接不带 group 也能用) */
+    /* *group: same name, different groups = two cards -> details locate by "name + group" (2026-09-17; old links without group still work) */
     const mg = q.match(/(?:^|&)group=([^&]+)/);
     const group = mg ? decodeURIComponent(mg[1]) : '';
     if (!name) return jsonRes(res, 400, { error: '需要 model 参数' });
@@ -1342,7 +1342,7 @@ module.exports.activate = (ctx) => {
     jsonRes(res, 200, buildDetail(uk, name, baseOf(req), group));
   });
 
-  /* 模型详情结构化 JSON 版 (网页端用; 游客可用, 只读元数据, data/ 在零额度白名单内) */
+  /* the structured-JSON variant of model details (for the web; guest-accessible, read-only metadata; data/ is on the zero-quota whitelist) */
   route('GET', '/data/detail', (req, res, p) => {
     const q = String((req.url || '').split('?')[1] || '');
     const mm = q.match(/(?:^|&)model=([^&]+)/);
@@ -1364,10 +1364,10 @@ module.exports.activate = (ctx) => {
         channels: m.channels || [], type: m.type || '', instances: m.instances || [],
         userGroups: m.groups || [], price: m.price || null,
         perCall: m.perCall == null ? null : m.perCall,
-        /* ★2026-09-17: 同名同组可能跨渠道(价格不一) → 一并给出各来源, 网页端可自行展示 */
+        /* *2026-09-17: same name+group may span channels (differing prices) -> return every source; the web UI can present them */
         priceDiff: !!m.priceDiff,
         sources: (m.sources || []).map(s => ({ instance: s.instance, channel: s.channel, price: s.price, perCall: s.perCall })),
-        /* ★完整调用名（实例:渠道:模型名）—— 同名冲突时 /v1/models 暴露的就是这个形态 (2026-09-18) */
+        /* *full call name (instance:channel:model) -- what /v1/models exposes on name conflicts (2026-09-18) */
         refs: ((m.sources && m.sources.length) ? m.sources : [{ instance: (m.instances || [])[0] || '', channel: m.channel }])
           .map(s => refOf(s.instance, s.channel, m.name)).filter(Boolean),
         avatarUrl: avatarOf(m.name, baseOf(req)),
@@ -1378,34 +1378,34 @@ module.exports.activate = (ctx) => {
   route('POST', '/intent/square/detail', (req, res, p) => ctx.security.guard(req, p, res, (uk) => {
     if (!uk) return { ok: false, error: mkT(ctx, null).t('需要登录') };
     const b = p.body || {};
-    /* 模型详情 = 真子页(压栈); 只读 → 允许刷新时重跑 */
+    /* model details = a real sub-page (pushed); read-only -> may re-run on refresh */
     return { ok: true, nav: 'push', ui: buildDetail(uk, String(b.model || ''), baseOf(req), String(b.group || '')), refresh: 'intent' };
   }));
 
-/* model-edit SDUI 页面（由 model-square registerAdminUi 注册，menu:false 子页）
- * 在「快速分组」里点模型卡 → App 打开 /admin/ui/model-edit?instance=...&channel=...&model=...
- * 返回 gcui JSON：表单（别名/分组/按次/价格）+ 规则列表 + 保存/关闭按钮
- * ★设计决策：
- *   - 按次计费用的 switch 砍了——留空 perCall 字段 = 按量计费，填了数值 = 按次（服务端已处理空串→null）
- *   - 分组用文本输入（列出可选分组名做提示）——chip 选择需要 state+setState 联动，弹窗里太重
- *   - ★2026-09-17 规则可在本页直接新增（segmented 标签式 + 提交按钮读 {{input.xxx}}），
- *     与网页端规则编辑器同一套 when/then 格式、同一份存储（model-square meta.rules），天然互通；
- *     删除走 setModel 回写过滤后的 rules 数组。channel='*' 时展开到全部同名渠道。
- *   - 保存只提交表单字段，不碰 rules（setModel 只更新提供的字段 → rules 保留）
+/** the model-edit SDUI page (registered via model-square's registerAdminUi; a menu:false sub-page)
+   * tapping a model card in "quick groups" -> the App opens /admin/ui/model-edit?instance=...&channel=...&model=...
+   * returns gcui JSON: a form (alias/group/per-call/price) + the rule list + save/close buttons
+   * *design decisions:
+ *   - The per-call billing switch is gone -- an empty perCall field = pay-per-token; a number = pay-per-call (the server maps empty strings to null)
+ *   - Groups use a text input (existing group names are listed as hints) -- chip selection needs state+setState wiring, too heavy inside a dialog
+ *   - ★2026-09-17 rules can be added directly on this page (segmented tab style + a submit button reading {{input.xxx}}),
+ *     same when/then format as the web rule editor, same storage (model-square meta.rules), so they interoperate naturally;
+ *     deletion writes the filtered rules array back through setModel. With channel='*' it fans out to all same-named channels.
+ *   - Saving submits only form fields, never rules (setModel updates only provided fields -> rules survive)
  */
   ctx.registerAdminUi({
     id: 'model-edit',
     title: '编辑模型',
     icon: 'edit',
     menu: false,
-    render: (gw, c, q, caps) => { refreshCfg();   /* ★多实例一致性: 见顶部 refreshCfg 注释 */
-      /* model-square 没有全局 txt/gap/btn 辅助函数（billing 插件才有），这里自己定义 */
+    render: (gw, c, q, caps) => { refreshCfg();   /* *multi-instance consistency: see the refreshCfg comment at the top */
+      /* model-square lacks the global txt/gap/btn helpers (only billing has them); defined locally here */
       const txt = (text, style, color) => { const o = { type: 'text', text }; if (style) o.style = style; if (color) o.color = color; return o; };
-      /* ★能力自检降级 (2026-10-07): caps 由内核注入(registerAdminUi 的 render 第4参数)。
-       *  segmented 是较晚加入 gcui 的组件 —— 老 App 不认识会渲染成红色错误块。
-       *  这里在**生成页面之前**就问一句"这台 App 认不认 segmented", 不认就用 input 替代
-       *  (input 是 gcui 第一版就有的组件, 一定认)。拿不到 caps(网页端) → 用 segmented(不变)。
-       *  注意: 内核出口还有一层兜底协商(admin-ui 的 negotiate), 这里只是"更早、更体面地降级"。 */
+      /* *capability-aware degradation (2026-10-07): caps are injected by the kernel (the 4th render arg of registerAdminUi).
+       *  segmented joined gcui late -- older Apps render it as a red error block.
+       *  before **generating the page**, ask "does this App know segmented"; if not, substitute an input
+       *  (input existed in gcui v1, so every App knows it). Without caps (web) -> use segmented (unchanged).
+       *  note: the kernel outlet still has a fallback negotiation (admin-ui's negotiate); this is just an earlier, more graceful degradation. */
       const canSeg = !caps || caps.hasComponent('segmented');
       const seg = (o) => {
         if (canSeg) return o;
@@ -1424,10 +1424,10 @@ module.exports.activate = (ctx) => {
       const sym = curSym();
       const call = (body) => ({ type: 'adminApi', method: 'POST', path: '/admin/api/plugin-call', body: { plugin: 'model-square', path: '/admin/groups', method: 'POST', body: body } });
 
-      /* ★2026-09-17 channel='*' = 同名归并编辑：聚合该实例下所有暴露该名的渠道的 meta
-       *  （取首个有值的；各渠道不一致时标记 diff 警告）。保存/加规则/删规则都传 channel:'*'，
-       *  服务端 setModel/addRule 会展开到每个渠道。背景：之前按渠道出卡，同名模型(含 modelMap
-       *  改名)出多张卡，改价/改分组要重复操作。 */
+      /* *2026-09-17 channel='*' = merged-name editing: aggregates the meta of every channel under this instance exposing that name
+       *  (first non-empty wins; a diff warning marks disagreement). Save/add-rule/delete-rule all pass channel:'*',
+       *  the server's setModel/addRule expand to every channel. Background: cards used to be per channel, so the same model (incl. modelMap
+       *  renames) producing one card each; changing price/group meant repeating the edit. */
       const merged = chName === '*';
       const variantMetas = merged ? chNamesExposing(inst, modelName).map(ch => metaOf(inst, ch, modelName) || {}).filter(m => m && Object.keys(m).length) : [];
       const meta = merged
@@ -1495,9 +1495,9 @@ module.exports.activate = (ctx) => {
         }
       }
 
-      /* ★2026-09-17 添加规则编辑器（state 驱动；与网页端规则编辑器同一套 when/then 格式/存储，天然互通）。
-       *  segmented 带 key → 选中值实时写 inputs；input 带 key → TextWatcher 实时写 inputs；
-       *  提交按钮的 action 直接用 {{input.xxx}} 读当前选择/输入。提交后 then:'reload'（默认）刷新本页。 */
+      /* *2026-09-17 added a rule editor (state-driven; shares the when/then format and storage with the web rule editor, so they interop naturally).
+       *  segmented with key -> the selected value writes to inputs live; input with key -> a TextWatcher writes inputs live;
+       *  submit buttons read the current selection/input straight via {{input.xxx}}; after submit, then:'reload' (default) refreshes the page. */
       kids.push(gap(8));
       kids.push(btn('添加规则', 'tonal', { type: 'setState', patch: { draft: '1' } }));
       kids.push({
@@ -1536,30 +1536,30 @@ module.exports.activate = (ctx) => {
   });
 
 
-  /* ==================== 「模型分组」页（服务端 SDUI，2026-09-19） ====================
-   * 背景：这一页原来只有 App 原生实现（AdminPages.buildModels + 二级页「快速分组」），
-   *      每改一次界面都要重编 APK。现在本插件注册 id='models'（与 App 侧菜单 id 一致）
-   *      → App 的管理端页面表里「模型分组」指向 /admin/ui/models，改界面只改这里（热重载）。
-   * ★回退保底（App 侧三重，原生实现一行未删）：
-   *   ① 设置页「管理端使用服务端界面」总开关关掉 → 立即全原生（无需联网/重启）；
-   *   ② 本页加载/渲染失败/超时 → App 自动切回原生页并提示（该页 5 分钟内不再重试）；
-   *   ③ 「模型分组」页右上角「快速分组」按钮仍是原生页（长按多选 / 底部操作条 / 分组管理）。
-   * ★筛选为什么走服务端：SDUI 模板（Template.resolve）只支持 {{路径}} 取值 + truthy 判断，
-   *   没有比较运算符，写不出 item.channel == state.ch —— 所以 chip 点击 = open 同页带 query
-   *   （nav:'replace' 原地换页，不压栈），服务端过滤后重渲染。代价：每次筛选一次请求 + 重绘。
-   * ★多选：checkbox 组件自带多选集合（{{selected}} / {{selectedCount}}）。勾选框不写 action
-   *   → 触发原地重渲染（计数与批量动作的 items 重新绑定）。选择跨筛选保留。
-   *   批量动作的 items 用 {{selected}}：模板在**渲染期**就从渲染作用域解析成 JSON 数组
-   *   （Template.bindJson 把整串模板展开成数组）→ 服务端 bulk 必须同时认 "实例|渠道|模型" 字符串。
-   * ★页面 JSON 体积：单页最多渲染 MODELS_PAGE_LIMIT 张卡（193 个模型全渲染太大），其余靠筛选收窄。
+  /* ==================== the "Model groups" page (server-side SDUI, 2026-09-19) ====================
+   * Background: this page used to exist only as a native App implementation (AdminPages.buildModels + the "quick groups" sub-page),
+   *      every UI change meant rebuilding the APK. This plugin now registers id='models' (matching the App-side menu id)
+   *      -> the App admin page table's "Model groups" points at /admin/ui/models; UI edits touch only here (hot reload).
+   * ★Fallback safety net (triple on the App side, the native implementation kept line-for-line):
+   *   (1) the settings master switch "admin uses server-side UI" off -> immediately all-native (no network/restart needed);
+   *   (2) this page failing to load/render/timeout -> the App switches back to the native page with a notice (no retry for 5 minutes);
+   *   (3) the "Model groups" page's top-right "Quick groups" button is still the native page (long-press multi-select / bottom action bar / group management).
+   * ★Why filtering runs server-side: SDUI templates (Template.resolve) support only {{path}} lookups + truthiness checks,
+   *   no comparison operators, so item.channel == state.ch cannot be expressed -- hence a chip tap = open the same page with a query
+   *   (nav:'replace' swaps pages in place, no push), re-rendering after server-side filtering. Cost: one request + one redraw per filter change.
+   * ★Multi-select: the checkbox component ships with a selection set ({{selected}} / {{selectedCount}}). A checkbox itself carries no action
+   *   -> triggers an in-place re-render (the count and the bulk action's items rebind). Selection survives filter changes.
+   *   bulk actions' items use {{selected}}: the template resolves into a JSON array from the render scope **at render time**
+   *   (Template.bindJson expands the whole template into an array) -> the server's bulk path must accept "instance|channel|model" strings too.
+   * ★Page JSON size: at most MODELS_PAGE_LIMIT cards render per page (193 models at once is too large); narrow the rest with filters.
    */
-  const MODELS_PAGE_LIMIT = 40;      /* ★默认单页卡片数：每张卡 ~8 个原生 View，筛选时整页重建的延迟
-                                      *   几乎全在这里（60 张≈500 个 View 仍要让用户等半秒）。
-                                      *   默认 40，不够就点「显示更多」（limit += 40）。 */
+  const MODELS_PAGE_LIMIT = 40;      /* ★Default cards per page: each card is ~8 native Views, and full-page rebuild latency during filtering
+                                      *   is dominated by this (60 cards ~ 500 Views still make users wait half a second).
+                                      *   Default 40; tap "show more" when it is not enough (limit += 40). */
   const MODELS_LIMIT_STEP = 40;
-  const MODELS_LIMIT_MAX = 2000;   /* 「全部显示」用它兜底（真·全部由 all=1 决定，不受档位限制） */
+  const MODELS_LIMIT_MAX = 2000;   /* Backstop for "show all" (true "all" is decided by all=1, not by the tier limit) */
 
-  /** 价格形态：按次 / 有价格 / 未定价（与 App 原生快速分组卡上的徽章口径一致） */
+  /** Price shape: per-call / priced / unpriced (matches the badge semantics on the App's native quick-group cards) */
   const priceKindOf = (m) => (m && m.perCall != null) ? 'percall'
     : ((m && m.price && typeof m.price === 'object') ? 'has' : 'none');
 
@@ -1570,10 +1570,10 @@ module.exports.activate = (ctx) => {
     const fInst = get('inst'), fCh = get('ch'), fPrice = get('price'), fGrp = get('grp');
     const kw = get('kw').trim(), kwl = kw.toLowerCase();
     const cols = Math.min(4, Math.max(2, Number(get('cols')) || 2));
-    /* limit：单页渲染多少张卡（越小越快）。筛选 chip 的 jump() **不带 limit** —— 换筛选就回到默认值，
-     * 免得"先点了几次显示更多、之后每次筛选都重渲染 300 张"。 */
-    /* ★all=1 = 「全部显示」状态：一次性渲染完（并**跟着筛选走** —— 用户在 jump() 里会带 all，
-     *   否则"点全部显示 → 换个筛选 → 又只剩 40 个"会让人反复点）。 */
+    /* limit: how many cards render per page (smaller = faster). Filter chips' jump() deliberately **omits limit** -- changing a filter returns to the default,
+     * avoiding "tapped show-more a few times, then every filter re-rendered 300 cards". */
+    /* ★all=1 = the "show all" state: render everything at once (and **filters still apply** -- the user's jump() carries all,
+     *   otherwise "show all -> change filter -> back to 40" would have users tapping endlessly). */
     const showAll = get('all') === '1';
     const lim = showAll ? MODELS_LIMIT_MAX
       : Math.min(MODELS_LIMIT_MAX, Math.max(1, Number(get('limit')) || MODELS_PAGE_LIMIT));
@@ -1582,19 +1582,19 @@ module.exports.activate = (ctx) => {
     const self = myInstName();
     const sym = curSym();
 
-    /* ---- gcui 拼装小工具 ---- */
+    /* ---- gcui assembly helpers ---- */
     const txt = (text, style, color) => { const o = { type: 'text', text: text }; if (style) o.style = style; if (color) o.color = color; return o; };
     const gap = (h) => ({ type: 'spacer', height: h || 8 });
     const btn = (text, style, action) => { const o = { type: 'button', text: text, style: style }; if (action) o.action = action; return o; };
     const chip = (text, on, action) => { const o = { type: 'chip', text: text, selected: !!on }; if (action) o.action = action; return o; };
     const badge = (text, tone) => ({ type: 'badge', text: text, tone: tone });
-    /* 页面里的写操作统一走内核代调：SDUI 的 adminApi 白名单是 /admin/*，插件端点在 /plugins/<id>/admin/* */
+    /* in-page writes uniformly go through kernel proxy calls: the SDUI adminApi whitelist covers /admin/*, while plugin endpoints sit at /plugins/<id>/admin/* */
     const call = (body) => ({ type: 'adminApi', method: 'POST', path: '/admin/api/plugin-call',
       body: { plugin: 'model-square', path: '/admin/groups', method: 'POST', body: body } });
     const syncCall = (body) => ({ type: 'adminApi', method: 'POST', path: '/admin/api/plugin-call',
       body: { plugin: 'model-sync', path: '/admin/run', method: 'POST', body: body } });
 
-    /* ---- 可选项 ---- */
+    /* ---- Options ---- */
     const instOpts = [], chOpts = [];
     const grpOpts = (d.groups || []).map(g => g.name);
     for (const it of insts) {
@@ -1602,14 +1602,14 @@ module.exports.activate = (ctx) => {
       for (const ch of (it.channels || [])) if (ch.name && chOpts.indexOf(ch.name) < 0) chOpts.push(ch.name);
     }
 
-    /* ---- 同页跳转（筛选 chip / 搜索提交都走它；cols 也走 URL，避免 state 与 URL 两份真相） ---- */
+    /* ---- same-page navigation (filter chips / search submits both use it; cols also rides the URL, avoiding two sources of truth) ---- */
     const mkUrl = (pairs) => {
       const keep = [];
       for (const pair of pairs) {
         const k = pair[0], v = pair[1];
         if (v === undefined || v === null || String(v) === '') continue;
         const s = String(v);
-        /* {{...}} 占位符不能编码（要留给 App 在点击时用输入框的值解析） */
+        /* {{...}} placeholders must not be encoded (the App resolves them at tap time with the live input values) */
         keep.push(k + '=' + (s.indexOf('{{') === 0 ? s : enc(s)));
       }
       return '/admin/ui/models' + (keep.length ? ('?' + keep.join('&')) : '');
@@ -1620,14 +1620,14 @@ module.exports.activate = (ctx) => {
       return { type: 'open', nav: 'replace',
         target: 'page:' + mkUrl([['inst', m.inst], ['ch', m.ch], ['price', m.price], ['grp', m.grp], ['kw', m.kw], ['cols', m.cols], ['all', m.all]]) };
     };
-    /* 「显示更多」：保留当前筛选，只把 limit 往上加一档 */
+    /* "show more": keeps current filters and just raises limit one notch */
     const moreUrl = 'page:' + mkUrl([['inst', fInst], ['ch', fCh], ['price', fPrice], ['grp', fGrp], ['kw', kw],
       ['cols', String(cols)], ['limit', String(Math.min(MODELS_LIMIT_MAX, lim + MODELS_LIMIT_STEP))]]);
     const openPage = (path) => ({ type: 'open', target: 'page:' + path, nav: 'push' });
 
-    /* ★Kit(2.70): 双模式构件收进内核 ctx.gcui —— 插件只声明「筛什么」
-     *  (state键/URL键/行机器字段/算子/现值), caps 探测与 setState/open 分支全在内核。
-     *  field 是行机器字段(数据语义归插件); 新插件要本机筛选 = 声明维度一行事。 */
+    /* ★Kit (2.70): dual-mode components moved into the core's ctx.gcui -- a plugin only declares "what to filter"
+     *  (state key/URL key/row machine field/operator/current value); caps probing and the setState/open branches are all in the kernel.
+     *  field is the row machine field (data semantics belong to the plugin); a new plugin wanting local filtering = one line declaring a dimension. */
     const D_INST = { key: 'fInst', url: 'inst', field: 'inst', op: 'eq', cur: fInst };
     const D_CH = { key: 'fCh', url: 'ch', field: 'chs', op: 'has', cur: fCh };
     const D_PRICE = { key: 'fPrice', url: 'price', field: 'kinds', op: 'has', cur: fPrice };
@@ -1636,17 +1636,17 @@ module.exports.activate = (ctx) => {
     const D_COLS = { key: 'cols', url: 'cols', cur: String(cols) };
     const F = ctx.gcui.filters(caps, [D_INST, D_CH, D_PRICE, D_GRP, D_KW], jump);
 
-    /* ---- 过滤：同名合并卡（与原生「快速分组」同一口径） ---- */
+    /* ---- filtering: merged same-name cards (same convention as the native "quick groups") ---- */
     let totalMerged = 0, totalModels = 0, totalCh = 0;
     for (const it of insts) {
       totalMerged += (it.merged || []).length;
       for (const ch of (it.channels || [])) { totalCh++; totalModels += (ch.models || []).length; }
     }
-    /* 同名模型在各渠道的形态索引（别名兜底 + 分组/价格种类）
-     * ★2026-09-19 用户问「kwxxxllm 与 CatCat 下都有 deepseek-v4.1-flash 怎么办」→ 两条改良：
-     *   ① 筛了具体渠道 → 卡片按**该渠道自己的配置**出（点开/批量只动这一条，不再"先到先占"）；
-     *   ② 不筛渠道（同名合并卡）→ 筛选改「任一渠道命中即算」(union)，不一致就把各值并排显示。
-     * 都不改共享的 mergeModels()，只在本页兜底 —— 避免影响原生页与 /admin/groups 端点。 */
+    /* a per-channel shape index of same-named models (alias fallback + group/price kinds)
+     * *2026-09-19 user asked "what if deepseek-v4.1-flash exists under both kwxxxllm and CatCat" -> two improvements:
+     *   (1) a specific channel is filtered -> cards render from **that channel's own config** (open/bulk touches only it, no more first-come-wins);
+     *   (2) no channel filter (merged same-name card) -> the filter becomes "any channel hit counts" (union); differing values display side by side.
+* without touching the shared mergeModels(), fallbacks live only on this page -- keeping native pages and the /admin/groups endpoint unaffected. */
     const aliasIdx = {}, variantIdx = {};
     for (const it of insts) {
       const am = {}, vm = {};
@@ -1667,13 +1667,13 @@ module.exports.activate = (ctx) => {
     const kindLabel = (k) => (k === 'percall' ? '按次' : (k === 'has' ? '有价格' : '未定价'));
     const rows = [];
     for (const it of insts) {
-      /* ★cond: 不过滤 —— rows 必须是全量池, 本机清筛选后才有行可回来;
-       *  inst 维度交给 list.where(item.inst eq state.fInst)。URL 模式照旧服务端过滤。 */
+      /* *cond: no filtering -- rows must be the full pool, or clearing the filter locally has nothing to come back to;
+       *  the inst dimension goes to list.where(item.inst eq state.fInst). URL mode keeps server-side filtering. */
       if (!F.can && fInst && it.name !== fInst) continue;
       const am = aliasIdx[it.name] || {}, vm = variantIdx[it.name] || {};
-      /* ---- 模式 A：筛了渠道 → 按该渠道展开（每张卡 = 该渠道自己那一条，点开/批量只改它） ----
-       *  ★cond: 不展开 —— 渠道是本机动态筛选, 展开行集固定后清筛选就回不去;
-       *  合并卡(chs 集合) + where(chs has fCh) 语义一致, editUrl 本就是 channel=*。 */
+      /* ---- Mode A: channel filtered -> expand per channel (each card = that channel's own entry; open/bulk touches only it) ----
+       *  *cond: do not expand -- channels are a live local filter; once the row set is frozen, clearing the filter cannot come back;
+       *  merged card (chs set) + where(chs has fCh) are semantically aligned; editUrl is already channel=*. */
       if (!F.can && fCh) {
         const ch = (it.channels || []).find(c => c.name === fCh);
         if (!ch) continue;
@@ -1685,8 +1685,8 @@ module.exports.activate = (ctx) => {
           rows.push({
             inst: it.name, name: nm,
             key: it.name + '|' + fCh + '|' + nm,
-            /* ★2026-10-08 机器字段(cond where): hay=搜索干(显示文本本地化不能当过滤键),
-             *  chs/kinds/groups=渠道/计费种类/分组集合(URL 模式冗余但无害, 两模式口径统一) */
+            /* *2026-10-08 machine fields (cond where): hay = the search corpus (localized display text cannot be a filter key),
+             *  chs/kinds/groups = channel/billing-kind/group sets (redundant in URL mode but harmless; one convention for both modes) */
             hay: nm + ' ' + String(m.alias || ''),
             chs: [fCh], kinds: [kind], groups: [gname],
             label: String(m.alias || nm),
@@ -1699,14 +1699,14 @@ module.exports.activate = (ctx) => {
         }
         continue;
       }
-      /* ---- 模式 B：不筛渠道 → 同名合并卡（任一渠道命中即算，不一致并排显示） ---- */
+      /* ---- Mode B: no channel filter -> merged same-name card (any channel hit counts; differences shown side by side) ---- */
       for (const m of (it.merged || [])) {
         const nm = String(m.name || ''), kind = priceKindOf(m), gname = String(m.group || DEFAULT_GROUP);
         const v = vm[nm];
         const kinds = (v && v.kinds.length) ? v.kinds : [kind];
         const groups = (v && v.groups.length) ? v.groups : [gname];
         const chs = (v && v.chs.length) ? v.chs : (m.channels || []);
-        /* ★cond: 价格/分组/搜索交本机 where(kinds/groups/hay), 服务端只出全量池 */
+        /* *cond: price/group/search handled by the local where(kinds/groups/hay); the server only ships the full pool */
         if (!F.can) {
           if (fPrice && kinds.indexOf(fPrice) < 0) continue;
           if (fGrp && groups.indexOf(fGrp) < 0) continue;
@@ -1733,12 +1733,12 @@ module.exports.activate = (ctx) => {
     const shown = rows.slice(0, lim);
     const filtered = !!(fInst || fCh || fPrice || fGrp || kwl);
 
-    /* 模型卡模板（服务端只给数据，卡片只渲染一次模板） */
+    /* model card template (the server ships data; the card renders the template once) */
     const cardTpl = {
       type: 'card', variant: 'outlined', gap: 6,
       action: { type: 'open', target: 'page:{{item.editUrl}}', nav: 'push' },
-      /* ★长按卡片 = 选中/取消（App v0.18.43 起支持 toggleSelect 动作）——
-       *  与原生「快速分组」页的长按多选手感对齐；勾选框仍然可用。 */
+      /* *long-press a card = select/deselect (the App supports toggleSelect since v0.18.43) --
+       *  aligned with the native "quick groups" page's long-press multi-select feel; checkboxes still work. */
       longAction: { type: 'toggleSelect', value: '{{item.key}}' },
       children: [
         { type: 'row', gap: 8, children: [
@@ -1755,7 +1755,7 @@ module.exports.activate = (ctx) => {
 
     const kids = [];
 
-    /* ---------- 1. 概览 ---------- */
+    /* ---------- 1. Overview ---------- */
     kids.push({ type: 'card', variant: 'outlined', gap: 8, children: [
       txt('模型列表 · ' + self, 'title3'),
       txt('共 ' + totalCh + ' 个渠道 / ' + totalModels + ' 个模型（同名合并后 ' + totalMerged + ' 个，跨 ' + insts.length + ' 个实例）', 'caption', '$onSurfaceVariant'),
@@ -1767,7 +1767,7 @@ module.exports.activate = (ctx) => {
       txt('本页由服务端渲染（服务端页面优先，失败自动回原生）。全回原生：设置页关掉「管理端使用服务端界面」。', 'caption', '$onSurfaceVariant'),
     ] });
 
-    /* ---------- 2. 筛选 ---------- */
+    /* ---------- 2. Filtering ---------- */
     const kwTarget = 'page:' + mkUrl([
       ['inst', fInst], ['ch', fCh], ['price', fPrice], ['grp', fGrp], ['kw', '{{input.kw}}'], ['cols', String(cols)],
     ]);
@@ -1793,15 +1793,15 @@ module.exports.activate = (ctx) => {
                    : '（全库同名合并后 ' + totalMerged + ' 个；分组/价格不一致时会并排列出）')
             + (filtered ? ' · 已筛选' : '') + (showAll ? ' · **全部显示**模式' : ' · 单页 ' + lim + ' 个（越小越快）'), 'caption', '$onSurfaceVariant'),
     ];
-    /* ★重置筛选移出 if(filtered): cond 模式过滤发生在本机, 服务端的 filtered 恒 false
-     *  (没有 fCh 展开、三连过滤被豁免) —— 靠服务端条件按钮永远不出现。
-     *  URL 模式: 行为不变(仍只在已筛选时出现)。 */
+    /* *moved reset-filters out of if(filtered): cond-mode filtering happens locally, so the server's filtered is always false
+     *  (no fCh expansion, the triple filter is exempt) -- server-side condition buttons would simply never appear.
+     *  URL mode: behavior unchanged (still appears only while filtered). */
     fkids.push({ type: 'hscroll', gap: 6, children: [
       F.reset('重置筛选'),
     ] });
     kids.push({ type: 'card', variant: 'outlined', gap: 8, children: fkids });
 
-    /* ---------- 3. 视图 / 同步 / 管理 ---------- */
+    /* ---------- 3. View / sync / admin ---------- */
     const viewChips = [
       txt('列数', 'caption', '$onSurfaceVariant'),
       F.viewChip(D_COLS, '2', '2'),
@@ -1817,10 +1817,10 @@ module.exports.activate = (ctx) => {
       ] },
     ] });
 
-    /* ---------- 4. 选中与操作（两个入口都做成子页）----------
-     * ★2026-09-19 用户实测「勾选和一些按钮还有 1s 左右延迟」→ 主列表页每次筛选都要**整页重建**，
-     *   所以把"表单 + 长列表"搬去子页：主页面只剩 概览 + 筛选 + 工具 + 网格（视图数少一半）。
-     *   已选计数用 {{selectedCount}} —— App 侧只重绑这一个文本节点，不重建视图树（秒回）。 */
+    /* ---------- 4. Selection and actions (both entries are sub-pages) ----------
+     * *2026-09-19 user-measured "checkboxes and some buttons still lag ~1s" -> the main list page rebuilt the **whole page** on every filter change,
+     *   so "form + long list" moved to sub-pages: the main page keeps only overview + filter + tools + grid (half the views).
+     *   the selected count uses {{selectedCount}} -- the App rebinds just that one text node instead of rebuilding the view tree (instant). */
     kids.push({ type: 'card', variant: 'outlined', gap: 8, children: [
       txt('选中与操作', 'title3'),
       txt('勾选卡片右上角的方框、或**长按卡片** = 选中/取消该模型（切换筛选后已选仍保留；没有「全清」，逐个取消即可）。', 'caption', '$onSurfaceVariant'),
@@ -1830,7 +1830,7 @@ module.exports.activate = (ctx) => {
       ] },
     ] });
 
-    /* ---------- 5. 模型网格 ---------- */
+    /* ---------- 5. Model grid ---------- */
     kids.push(F.can
       ? txt('模型 · 筛选/分页在本机执行', 'title3')
       : txt('模型（显示 ' + shown.length + ' / ' + rows.length
@@ -1838,18 +1838,18 @@ module.exports.activate = (ctx) => {
     if (!shown.length) {
       kids.push(txt(rows.length ? '（本页没有可显示的行）' : '没有符合筛选条件的模型。', 'body', '$onSurfaceVariant'));
     } else {
-      /* ★cond 模式: rows 全量在 state.models 里, 本机按五维过滤; 模式 A(筛渠道展开)
-       *  与模式 B(合并卡)的行字段口径一致(label/sub/gText/gTone/pText/pTone/key), 条件通用。
-       *  URL 模式: items 已是服务端过滤后的 shown, 行为不变。 */
+      /* *cond mode: all rows live in state.models, filtered locally across five dimensions; mode A (channel-expand)
+       *  same row-field convention as mode B (merged cards) (label/sub/gText/gTone/pText/pTone/key); conditions are shared.
+       *  URL mode: items are already the server-filtered shown set; behavior unchanged. */
       kids.push(F.can
         ? { type: 'list', items: '{{state.models}}', columns: '{{state.cols}}', limit: '{{state.limit}}', template: cardTpl,
-            /* ★where 由 kit 按 dims 生成(字段=行机器字段, 数据语义归插件); right 空的条件
-             *  App 端自动跳过(维度未激活) —— 五维共用一份全量池。 */
+            /* *where is generated by the kit from dims (field = row machine field; data semantics belong to the plugin); conditions with an empty right side
+             *  the App skips them automatically (dimension inactive) -- the five dimensions share one full pool. */
             where: F.where() }
         : { type: 'list', items: '{{state.models}}', columns: cols, template: cardTpl });
-      /* ★分页(2.69 二轮): 三个 chip 全渲染, 显隐交给 App 按 limit/rowsTotal 数值比较推导
-       *  (visible 对象写法) —— 本地 ±limit 后显隐自动跟着变; 服务端烤死的显隐在本地
-       *  重渲染下是死值(点了「显示更多」按钮自己不消失)。URL 模式不变。 */
+      /* *pagination (2.69 round 2): all three chips always render; visibility is the App's job via limit/rowsTotal numeric comparison
+       *  (the visible-object form) -- show/hide follows local +/-limit automatically; server-baked visibility would go stale locally
+       *  dead value across re-renders (the "show more" button would not disappear after tapping). URL mode unchanged. */
       const pager = F.pager({ limitKey: 'limit', totalKey: 'rowsTotal', total: rows.length,
         step: MODELS_LIMIT_STEP, pageLimit: MODELS_PAGE_LIMIT, max: MODELS_LIMIT_MAX });
       if (pager) {
@@ -1871,7 +1871,7 @@ module.exports.activate = (ctx) => {
       }
     }
 
-    /* ★cond 模式: state = 全量行池 + kit 生成的五维/视图参数初值(键序 = dims 声明序) */
+    /* *cond mode: state = the full row pool + kit-generated five-dimension/view param initial values (key order = dims declaration order) */
     if (F.can) {
       return {
         title: '模型分组',
@@ -1889,9 +1889,9 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /* ---------- 批量子页（menu:false）：作用于"已选"的模型 ----------
-   * 单独一页的理由：① 主列表页要短（每次筛选整页重建）；② 这里的表单用 {{selected}} ——
-   * App 端**故意不在渲染期解析**它（见 Renderer.bindAction），而是点击那一刻取实时集合。 */
+  /* ---------- Bulk sub-pages (menu:false): operate on the "selected" models ----------
+   * Why a separate page: (1) the main list page must stay short (a full rebuild per filter change); (2) the form here uses {{selected}} --
+   * which the App **deliberately does not resolve at render time** (see Renderer.bindAction); it reads the live set at the moment of the tap. */
   const buildBulkPage = () => {
     refreshCfg();
     const txt = (text, style, color) => { const o = { type: 'text', text: text }; if (style) o.style = style; if (color) o.color = color; return o; };
@@ -1944,7 +1944,7 @@ module.exports.activate = (ctx) => {
     };
   };
 
-  /* ---------- 渠道一览子页（menu:false）：各实例的渠道 / 模型数 / 改名映射 ---------- */
+  /* ---------- Channel overview sub-page (menu:false): per-instance channels / model counts / rename maps ---------- */
   const buildChannelsPage = () => {
     refreshCfg();
     const txt = (text, style, color) => { const o = { type: 'text', text: text }; if (style) o.style = style; if (color) o.color = color; return o; };
@@ -1979,7 +1979,7 @@ module.exports.activate = (ctx) => {
         ];
         if (mapText) cc.push(txt(mapText, 'caption', '$onSurfaceVariant'));
         cc.push({ type: 'hscroll', gap: 6, children: [
-          /* nav:'pop' —— 回到列表页并带上该渠道的筛选（不是再压一层） */
+          /* nav:'pop' -- back to the list page carrying that channel's filter (not another push) */
           chip('看这个渠道的模型', false,
             { type: 'open', target: 'page:/admin/ui/models?inst=' + enc2(it.name) + '&ch=' + enc2(ch.name), nav: 'pop' }),
           chip('同步该渠道', false, Object.assign(syncCall({ channel: ch.name }), { confirm: '从上游同步渠道「' + ch.name + '」的模型列表？' })),
@@ -1993,7 +1993,7 @@ module.exports.activate = (ctx) => {
     return { title: '渠道一览', state: {}, root: { type: 'column', gap: 10, children: kids } };
   };
 
-  /* 「分组管理」子页（menu:false，从上面页面的 chip 或直链打开） */
+  /* the "group management" sub-page (menu:false; opened from the chips above or a direct link) */
   const buildGroupManagePage = () => {
     refreshCfg();
     const txt = (text, style, color) => { const o = { type: 'text', text: text }; if (style) o.style = style; if (color) o.color = color; return o; };
@@ -2066,29 +2066,29 @@ module.exports.activate = (ctx) => {
     render: () => buildGroupManagePage(),
   });
 
-  /* ★能力注册 (2026-10-07 深度改造 §能力倒置)
-   *  以前 billing 硬编码 ctx.getPluginConfig('model-square', 0) —— 换一个插件提供价格就崩,
-   *  而且"内核/插件必须知道 model-square 这个名字"这件事本身就是耦合。
-   *  现在改成: 本插件把"价格查询"这个能力注册出去, 谁需要就 requireCapability('model-pricing'),
-   *  完全不需要知道提供方是谁。字段: price 元/1M tokens, perCall 元/次, group 分组, alias 对外名。
-   *  ★必须传 getter 而不是快照: cfg 会被原地刷新(见上面 cfgRevSeen 注释), 快照会读到旧价格。 */
+  /* *capability registration (2026-10-07 deep refactor, capability inversion section)
+   *  billing used to hard-code ctx.getPluginConfig('model-square', 0) -- swapping in another pricing plugin would crash it,
+   *  and "the core/plugins must know the name model-square" is coupling in itself.
+   *  Now: this plugin registers the "price lookup" capability, and anyone who needs it calls requireCapability('model-pricing'),
+   *  with zero need to know the provider. Fields: price per 1M tokens, perCall per call, group, alias (public name).
+   *  *must pass a getter, not a snapshot: cfg is refreshed in place (see the cfgRevSeen comment above); a snapshot would read stale prices. */
   ctx.provideCapability('model-pricing', {
-    /** 取某 实例/渠道/模型 的元数据(含 price/perCall/group/alias); 找不到 → null */
+    /** fetch metadata for an instance/channel/model (price/perCall/group/alias included); missing -> null */
     metaOf: (inst, ch, model) => {
       try {
         const k = [String(inst || ''), String(ch || ''), String(model || '')].join('|');
         return cfg.modelMeta[k] || null;
       } catch (_) { return null; }
     },
-    /** 全部元数据 (键 "实例|渠道|模型") —— 消费方自行遍历/回退匹配 */
+    /** All metadata (keyed "instance|channel|model") -- consumers iterate / fall back to matching on their own */
     allMeta: () => {
       try { return cfg.modelMeta || {}; } catch (_) { return {}; }
     },
-    /** 分组清单 [{name, rate}] —— 计费倍率来源 */
+    /** Group list [{name, rate}] -- the source of billing multipliers */
     groups: () => {
       try { return Array.isArray(cfg.groups) ? cfg.groups : []; } catch (_) { return []; }
     },
-    /** 单次调用价格元数据(元/1M) —— 没配 → null */
+    /** Per-call price metadata (CNY per 1M) -- unset -> null */
     priceOf: (inst, ch, model) => {
       try {
         const k = [String(inst || ''), String(ch || ''), String(model || '')].join('|');
@@ -2096,7 +2096,7 @@ module.exports.activate = (ctx) => {
         return (m && m.price) || null;
       } catch (_) { return null; }
     },
-    /** 版本号: 配置变更时自增, 消费方可用它做缓存失效 */
+    /** version: incremented on config change; consumers may key cache invalidation off it */
     rev: () => cfgRevSeen,
   });
 
