@@ -1,0 +1,21 @@
+{
+  "id": "second-auth",
+  "name": "管理端第二验证",
+  "version": "1.0.0",
+  "type": "auth",
+  "description": "管理端第二验证: 第二密码 / TOTP(RFC6238)",
+  "hasServer": true,
+  "permissions": [
+    "auth:registerAuth",
+    "storage"
+  ],
+  "configSchema": [
+    {
+      "key": "secondKey",
+      "label": "第二密码(留空不用)",
+      "type": "password",
+      "default": ""
+    }
+  ],
+  "icon": "msym:shield_lock"
+}

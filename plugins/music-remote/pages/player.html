@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音乐远程播放</title>
+<style>
+:root{
+  --bg:#141218;--surface:#211F26;--surface-h:#2B2933;--surface-hh:#36333F;
+  --on-surface:#E7E0E8;--on-sv:#CAC4D0;--primary:#D0BCFF;--on-primary:#381E72;
+  --outline:#948F99;--error:#F2B8B5;--ok:#B6F0B9;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--on-surface);font-family:system-ui,-apple-system,sans-serif;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px}
+.wrap{width:100%;max-width:400px;display:flex;flex-direction:column;align-items:center;gap:18px}
+.art{width:190px;height:190px;border-radius:24px;background:linear-gradient(135deg,var(--surface-h),var(--surface-hh));display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+.art img{width:100%;height:100%;object-fit:cover}
+.art .note{font-size:70px;color:var(--primary);opacity:.8}
+.info{text-align:center;width:100%}
+.title{font-size:19px;font-weight:600;line-height:1.3;word-break:break-word}
+.artist{font-size:13px;color:var(--on-sv);margin-top:5px;word-break:break-word}
+.prog{width:100%;display:flex;flex-direction:column;gap:6px}
+.bar{width:100%;height:6px;background:var(--surface-h);border-radius:3px;cursor:pointer;overflow:hidden}
+.fill{height:100%;background:var(--primary);border-radius:3px;width:0%}
+.times{display:flex;justify-content:space-between;font-size:12px;color:var(--on-sv)}
+.ctrls{display:flex;align-items:center;gap:14px}
+.btn{background:var(--surface);border:none;color:var(--on-surface);border-radius:50%;width:46px;height:46px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;transition:background .15s}
+.btn:active{background:var(--surface-hh)}
+.btn.play{background:var(--primary);color:var(--on-primary);width:62px;height:62px;font-size:21px}
+.btn:disabled{opacity:.28}
+@keyframes nudge{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(208,188,255,.6)}50%{transform:scale(1.12);box-shadow:0 0 0 14px rgba(208,188,255,0)}}
+.btn.play.nudge{animation:nudge 1.1s infinite}
+.vol{display:flex;align-items:center;gap:10px;width:100%}
+.vol .btn{width:34px;height:34px;font-size:14px}
+.vol input[type=range]{flex:1;accent-color:var(--primary)}
+.row{display:flex;align-items:center;gap:8px;width:100%}
+.row input[type=text],.row input[type=password]{flex:1;background:var(--surface);border:1px solid var(--outline);border-radius:12px;color:var(--on-surface);padding:9px 13px;font-size:13px;outline:none;min-width:0}
+.row input:focus{border-color:var(--primary)}
+.row .btn{width:36px;height:36px;font-size:14px;flex:none}
+.st{font-size:12px;color:var(--on-sv);text-align:center;line-height:1.6;word-break:break-word}
+.err{color:var(--error)}
+.good{color:var(--ok)}
+.divider{width:100%;height:1px;background:var(--surface-h)}
+.sw{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:13px;color:var(--on-sv)}
+audio{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="art" id="art"><div class="note">♪</div></div>
+  <div class="info">
+    <div class="title" id="title">连接中…</div>
+    <div class="artist" id="artist"></div>
+  </div>
+  <div class="prog">
+    <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+    <div class="times"><span id="cur">0:00</span><span id="tot">0:00</span></div>
+  </div>
+  <div class="ctrls">
+    <button class="btn" id="prev" title="上一首（手机）" disabled>⏮</button>
+    <button class="btn play" id="play" title="播放/暂停">▶</button>
+    <button class="btn" id="next" title="下一首（手机）" disabled>⏭</button>
+  </div>
+  <div class="vol">
+    <button class="btn" id="mute" title="静音">🔊</button>
+    <input type="range" id="vol" min="0" max="100" value="80">
+  </div>
+  <div class="divider"></div>
+  <div class="sw"><span>跟随手机进度</span><input type="checkbox" id="sync" checked style="accent-color:var(--primary)"></div>
+  <div class="row">
+    <input type="password" id="key" placeholder="密钥（可远程切歌，可选）">
+    <button class="btn" id="keysave" title="保存密钥">✓</button>
+  </div>
+  <div class="st" id="st"></div>
+</div>
+<audio id="audio" preload="auto" crossorigin="anonymous"></audio>
+<script>
+const $ = i => document.getElementById(i);
+const audio = $('audio');
+let curKey = '';           // 当前曲目标识
+let phonePos = 0;          // 手机进度(秒)
+let lastTitle = '';
+let muted = false;
+let pollTimer = null;
+
+$('key').value = localStorage.getItem('mr_key') || '';
+$('keysave').onclick = () => {
+  localStorage.setItem('mr_key', $('key').value);
+  $('st').textContent = '密钥已保存';
+  updateCtl();
+};
+
+/* --- 本地播放控制 --- */
+$('play').onclick = () => { if (audio.paused) audio.play().catch(()=>{}); else audio.pause(); };
+audio.onplay  = () => { $('play').textContent='⏸'; $('play').classList.remove('nudge'); };
+audio.onpause = () => { $('play').textContent='▶'; };
+audio.onerror = () => { if (curKey) setSt('<span class="err">音频加载失败</span>'); };
+/* 浏览器自动播放策略会拦首次播放: 给个明显的提示 */
+function tryPlay(){
+  audio.play().then(()=>{ $('play').classList.remove('nudge'); }).catch(()=>{
+    $('play').classList.add('nudge');
+    setSt('浏览器拦截了自动播放 👉 <b>点一下中间的播放键</b>');
+  });
+}
+setInterval(()=>{ if (curKey && audio.paused && !$('play').classList.contains('nudge') && audio.currentTime === 0) tryPlay(); }, 2500);
+
+/* --- 静音 / 音量 --- */
+$('mute').onclick = () => { muted = !muted; audio.muted = muted; $('mute').textContent = muted ? '🔇' : '🔊'; };
+$('vol').oninput = () => { audio.volume = $('vol').value/100; if (+$('vol').value > 0 && muted){ muted=false; audio.muted=false; $('mute').textContent='🔊'; } };
+audio.volume = 0.8;
+
+/* --- 进度条拖动(本地) --- */
+$('bar').onclick = e => {
+  if (!audio.duration) return;
+  const r = $('bar').getBoundingClientRect();
+  audio.currentTime = Math.max(0, Math.min(1, (e.clientX-r.left)/r.width)) * audio.duration;
+};
+
+/* --- 手机侧控制 --- */
+async function ctl(cmd){
+  const k = localStorage.getItem('mr_key') || '';
+  if (!k) { setSt('<span class="err">需要密钥才能控制手机</span>'); return; }
+  try{
+    const r = await fetch('control',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({cmd})});
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) setSt('<span class="err">'+(d.error||'控制失败')+'</span>');
+    else setTimeout(poll, 400);
+  }catch(e){ setSt('<span class="err">网络错误</span>'); }
+}
+$('prev').onclick = () => ctl('previous');
+$('next').onclick = () => ctl('next');
+
+function updateCtl(){
+  const has = !!localStorage.getItem('mr_key');
+  $('prev').disabled = !has; $('next').disabled = !has;
+}
+
+function setSt(html){ $('st').innerHTML = html; }
+function fmt(s){ if(!s||!isFinite(s)||s<0) return '0:00'; const m=Math.floor(s/60),x=Math.floor(s%60); return m+':'+String(x).padStart(2,'0'); }
+
+/* 本地播放进度刷新 */
+setInterval(()=>{
+  if (!audio.duration) return;
+  $('fill').style.width = (audio.currentTime/audio.duration*100)+'%';
+  $('cur').textContent = fmt(audio.currentTime);
+  $('tot').textContent = fmt(audio.duration);
+  if (!audio.paused && $('sync').checked && phonePos > 0) {
+    const drift = Math.abs(audio.currentTime - phonePos);
+    if (drift > 10) audio.currentTime = phonePos;   // 漂移太大才校正
+  }
+}, 500);
+
+function loadArt(){
+  const img = new Image();
+  img.onload = () => { const a=$('art'); a.innerHTML=''; a.appendChild(img); };
+  img.onerror = () => { $('art').innerHTML = '<div class="note">♪</div>'; };
+  img.src = 'art?t=' + Date.now();
+}
+
+function onData(d){
+  if (!d || !d.ok) {
+    $('title').textContent = '读不到媒体会话';
+    $('artist').textContent = '';
+    setSt('<span class="err">'+(d&&d.error?d.error:'未知错误')+'</span><br>需要 Shizuku 在运行');
+    curKey=''; audio.removeAttribute('src'); audio.load();
+    $('art').innerHTML='<div class="note">♪</div>';
+    return;
+  }
+  if (!d.playing) {
+    $('title').textContent = '手机没有在播放';
+    $('artist').textContent = '';
+    setSt('在手机上随便放首歌，页面会自动跟随');
+    curKey=''; audio.removeAttribute('src'); audio.load();
+    $('art').innerHTML='<div class="note">♪</div>';
+    return;
+  }
+  phonePos = (d.position||0)/1000;
+  $('title').textContent = d.title || '未知曲目';
+  $('artist').textContent = [d.artist, d.album].filter(Boolean).join(' · ');
+
+  if (!d.matched) {
+    setSt('<span class="err">这首歌不在本机音乐目录里，无法转发</span><br><span style="font-size:11px;opacity:.7">'+
+          (d.description||'') +'</span><br><span style="font-size:11px">只有本地存储的音频能转发（网络音源拿不到文件）</span>');
+  } else {
+    setSt('<span class="good">正在跟随手机播放</span> · ' + (d.playingBool?'播放中':'已暂停'));
+  }
+
+  const key = d.title + '|' + d.file;
+  if (key !== curKey) {
+    curKey = key;
+    const wasPlaying = !audio.paused || audio.currentTime === 0;
+    if (d.matched) {
+      audio.src = 'stream?t=' + Date.now();
+      audio.load();
+      if ($('sync').checked) {
+        const seek = () => { try { audio.currentTime = phonePos; } catch(e){} };
+        audio.addEventListener('loadedmetadata', seek, { once: true });
+        setTimeout(seek, 600);
+      }
+      if (wasPlaying) tryPlay();
+      loadArt();
+    } else {
+      audio.removeAttribute('src'); audio.load();
+      $('art').innerHTML = '<div class="note">♪</div>';
+    }
+  }
+  updateCtl();
+}
+
+async function poll(){
+  try{
+    const r = await fetch('data/now-playing?t=' + Date.now());
+    onData(await r.json());
+  }catch(e){ setSt('<span class="err">连不上网关</span>'); }
+}
+
+updateCtl();
+poll();
+pollTimer = setInterval(poll, 3000);
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden) clearInterval(pollTimer);
+  else { poll(); pollTimer = setInterval(poll, 3000); }
+});
+</script>
+</body>
+</html>

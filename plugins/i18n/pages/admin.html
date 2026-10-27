@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>多语言 · 翻译管理</title>
+<style>
+  /* ★配色全部走 CSS 变量：App 管理端 WebView 会注入 :root 覆盖实现跟随主题换肤 */
+  :root{
+    --md-sys-color-primary:#D0BCFF; --md-sys-color-on-primary:#381E72;
+    --md-sys-color-surface:#141218; --md-sys-color-on-surface:#E6E1E5;
+    --md-sys-color-surface-container:#211F26; --md-sys-color-surface-container-high:#2B2930;
+    --md-sys-color-on-surface-variant:#CAC4D0; --md-sys-color-outline-variant:#49454F;
+    --md-sys-color-error:#FFB4AB; --md-sys-color-success:#7BD88F;
+    --p:var(--md-sys-color-primary); --sf:var(--md-sys-color-surface);
+    --sfc:var(--md-sys-color-surface-container); --sfh:var(--md-sys-color-surface-container-high);
+    --on:var(--md-sys-color-on-surface); --onv:var(--md-sys-color-on-surface-variant);
+    --ov:var(--md-sys-color-outline-variant); --err:var(--md-sys-color-error); --ok:var(--md-sys-color-success);
+    --font:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:14px 12px 60px;background:var(--sf);color:var(--on);font-family:var(--font);font-size:14px}
+  ::-webkit-scrollbar{width:0;height:0}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:var(--onv);font-size:12.5px;line-height:1.6;margin-bottom:14px}
+  .card{background:var(--sfc);border-radius:18px;padding:14px;margin-bottom:12px;border:1px solid var(--ov)}
+  .card h2{font-size:15px;margin:0 0 10px}
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-bottom:10px}
+  .metric{background:var(--sfh);border-radius:14px;padding:10px;text-align:center}
+  .metric .v{font-size:19px;font-weight:600}
+  .metric .l{font-size:11px;color:var(--onv);margin-top:2px}
+  button{background:var(--p);color:var(--md-sys-color-on-primary);border:0;border-radius:999px;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit}
+  button.t{background:transparent;color:var(--p);border:1px solid var(--ov)}
+  button.d{background:transparent;color:var(--err);border:1px solid var(--ov)}
+  button:active{opacity:.75}
+  button[disabled]{opacity:.45;cursor:not-allowed}
+  input,select,textarea{background:var(--sfh);color:var(--on);border:1px solid var(--ov);border-radius:12px;padding:8px 10px;font-size:13px;font-family:inherit;min-width:0}
+  input:focus,select:focus{outline:2px solid var(--p);outline-offset:-1px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .msg{font-size:12.5px;color:var(--ok);margin-top:8px;min-height:16px}
+  .msg.e{color:var(--err)}
+  .tr{background:var(--sfh);border-radius:14px;padding:12px;margin-bottom:10px;border:1px solid var(--ov)}
+  .tr .src{font-weight:600;margin-bottom:8px;word-break:break-all}
+  .tr .src .miss{font-size:11px;color:var(--err);margin-left:6px}
+  .tr .fld{display:flex;gap:8px;margin-bottom:6px}
+  .tr .fld .lb{flex:0 0 52px;color:var(--onv);font-size:12px;padding-top:9px}
+  .tr input{flex:1}
+  .hint{font-size:12px;color:var(--onv);line-height:1.7;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>多语言 · 翻译管理</h1>
+<div class="sub">键 = 简体中文原文。没查到译文时页面显示原文，所以只翻译需要的条目即可。<br>
+改完即生效（App 端插件页面每次进入都重新拉取，无需重启）。</div>
+
+<div class="card">
+  <div class="metrics">
+    <div class="metric"><div class="v" id="mEn">–</div><div class="l">English 译文</div></div>
+    <div class="metric"><div class="v" id="mTw">–</div><div class="l">繁體中文 译文</div></div>
+    <div class="metric"><div class="v" id="mPref">–</div><div class="l">已设语言用户</div></div>
+  </div>
+  <div class="row">
+    <span style="color:var(--onv);font-size:13px">默认语言（未设置的访客/用户）</span>
+    <select id="defLang"><option value="zh-CN">简体中文</option><option value="en">English</option><option value="zh-TW">繁體中文</option></select>
+    <button class="t" onclick="saveDefault()">保存默认</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>译文列表</h2>
+  <div class="row">
+    <input id="q" placeholder="搜索原文 / 译文…" style="flex:1;min-width:160px" oninput="render()">
+    <button class="t" onclick="toggleMiss()" id="missBtn">只看缺 English 的</button>
+  </div>
+  <div class="hint">「保存」只写这一条；「删除」会把这条的英文+繁中译文一起删掉（原文不受影响）。</div>
+  <div id="list"></div>
+</div>
+
+<div class="card">
+  <h2>新增译文</h2>
+  <div class="tr" style="margin-bottom:0">
+    <input id="nSrc" placeholder="中文原文（键，必须和代码里出现的一致）" style="width:100%;margin-bottom:6px">
+    <input id="nEn" placeholder="English" style="width:100%;margin-bottom:6px">
+    <input id="nTw" placeholder="繁體中文" style="width:100%;margin-bottom:6px">
+    <div class="row"><button onclick="addKey()">添加</button></div>
+  </div>
+  <div class="hint">动态文字用 <b>{0}</b> {1} 占位，例如原文「我的卡密 ({0})」→ 「My keys ({0})」。</div>
+</div>
+
+<div class="card">
+  <h2>种子译文</h2>
+  <div class="hint">插件自带一份初始译文（dict-seed.json）。升级插件后可点下面按钮把新增的种子补进来 —— <b>只补缺，手改过的不会被覆盖</b>。</div>
+  <button class="t" onclick="reseed()">补入种子译文</button>
+</div>
+
+<div class="msg" id="msg"></div>
+
+<script>
+/* 与本插件 server.js 通信：同源 fetch（相对路径 → /plugins/i18n/…）。
+ * ★BASE 用路径推导，兼容“带实例名前缀”的部署（/实例名/plugins/i18n/pages/admin.html）。 */
+const BASE = location.pathname.replace(/\/pages\/.*$/, '');
+const LANGS = ['zh-CN', 'en', 'zh-TW'];
+
+async function api(path, method, body) {
+  const r = await fetch(BASE + '/' + path, {
+    method: method || 'GET',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch (_) { throw new Error('响应不是 JSON（可能被登录页拦截）: ' + t.slice(0, 120)); }
+  if (!j.ok && j.error) throw new Error(j.error);
+  return j;
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const $ = id => document.getElementById(id);
+let DICT = { en: {}, 'zh-TW': {} }, STATS = {}, onlyMiss = false;
+
+function say(m, err) { const el = $('msg'); el.textContent = m; el.className = 'msg' + (err ? ' e' : ''); setTimeout(() => { if (el.textContent === m) el.textContent = ''; }, 4000); }
+
+async function load() {
+  try {
+    const j = await api('admin/state');
+    DICT = j.dict || { en: {}, 'zh-TW': {} };
+    STATS = j;
+    $('mEn').textContent = Object.keys(DICT.en || {}).length;
+    $('mTw').textContent = Object.keys(DICT['zh-TW'] || {}).length;
+    $('mPref').textContent = j.prefsCount != null ? j.prefsCount : '–';
+    $('defLang').value = LANGS.includes(j.defaultLang) ? j.defaultLang : 'zh-CN';
+    render();
+  } catch (e) { say('读取失败：' + e.message, true); }
+}
+
+function allKeys() {
+  const s = new Set([].concat(Object.keys(DICT.en || {}), Object.keys(DICT['zh-TW'] || {})));
+  return [...s].sort((a, b) => a.localeCompare(b, 'zh'));
+}
+
+/* ★行内 onclick 不塞中文串(HTML 属性引号会截断), 全部用下标 KEYS[i] 寻址 */
+let KEYS = [];
+
+function render() {
+  const q = String($('q').value || '').toLowerCase();
+  KEYS = allKeys().filter(k => {
+    if (onlyMiss && (DICT.en || {})[k]) return false;
+    if (!q) return true;
+    return (k + ' ' + (DICT.en[k] || '') + ' ' + (DICT['zh-TW'][k] || '')).toLowerCase().includes(q);
+  });
+  const list = $('list');
+  if (!KEYS.length) { list.innerHTML = '<div class="hint">（没有条目' + (q || onlyMiss ? ' —— 换个搜索词试试' : '') + '）</div>'; return; }
+  list.innerHTML = KEYS.map((k, i) => row(k, i)).join('');
+}
+
+function row(k, i) {
+  const en = (DICT.en || {})[k] || '';
+  const tw = (DICT['zh-TW'] || {})[k] || '';
+  return '<div class="tr">'
+    + '<div class="src">' + esc(k) + (en ? '' : '<span class="miss">缺 English</span>') + '</div>'
+    + '<div class="fld"><div class="lb">English</div><input id="e_' + i + '" value="' + esc(en) + '" placeholder="' + esc(k) + '"></div>'
+    + '<div class="fld"><div class="lb">繁體中文</div><input id="w_' + i + '" value="' + esc(tw) + '" placeholder="' + esc(k) + '"></div>'
+    + '<div class="row"><button onclick="saveKey(' + i + ')">保存</button>'
+    + '<button class="d" onclick="delKey(' + i + ')">删除</button></div>'
+    + '</div>';
+}
+
+async function saveKey(i) {
+  const k = KEYS[i];
+  if (k === undefined) return;
+  try {
+    const en = $('e_' + i).value;
+    const tw = $('w_' + i).value;
+    const j = await api('admin/save-key', 'POST', { src: k, en: en, tw: tw });
+    DICT.en[k] = en; DICT['zh-TW'][k] = tw;
+    say('已保存：' + k.slice(0, 24) + (k.length > 24 ? '…' : '') + '（写入 ' + j.changed + ' 处，已回读校验）');
+    render();
+  } catch (e) { say('保存失败：' + e.message, true); }
+}
+async function delKey(i) {
+  const k = KEYS[i];
+  if (k === undefined) return;
+  if (!confirm('删除这条译文？（' + k.slice(0, 30) + '…，页面将回退显示中文原文）')) return;
+  try {
+    await api('admin/del-key', 'POST', { src: k });
+    delete DICT.en[k]; delete DICT['zh-TW'][k];
+    say('已删除'); render();
+  } catch (e) { say('删除失败：' + e.message, true); }
+}
+async function addKey() {
+  const k = $('nSrc').value.trim();
+  if (!k) return say('原文（键）不能为空', true);
+  try {
+    await api('admin/save-key', 'POST', { src: k, en: $('nEn').value, tw: $('nTw').value });
+    DICT.en[k] = $('nEn').value; DICT['zh-TW'][k] = $('nTw').value;
+    $('nSrc').value = ''; $('nEn').value = ''; $('nTw').value = '';
+    say('已添加：' + k.slice(0, 24)); render();
+  } catch (e) { say('添加失败：' + e.message, true); }
+}
+async function saveDefault() {
+  try {
+    await api('admin/default-lang', 'POST', { lang: $('defLang').value });
+    say('默认语言已保存：' + $('defLang').selectedOptions[0].text);
+  } catch (e) { say('保存失败：' + e.message, true); }
+}
+async function reseed() {
+  try {
+    const j = await api('admin/reseed', 'POST', {});
+    say('已补入 ' + j.added + ' 条种子译文');
+    load();
+  } catch (e) { say('失败：' + e.message, true); }
+}
+function toggleMiss() { onlyMiss = !onlyMiss; $('missBtn').textContent = onlyMiss ? '显示全部' : '只看缺 English 的'; render(); }
+
+load();
+</script>
+</body>
+</html>

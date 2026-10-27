@@ -1,0 +1,11 @@
+{
+  "id": "auth-adminkey",
+  "name": "管理员密钥当用户密钥",
+  "version": "1.0.0",
+  "description": "让实例的 adminKey 也能作为用户密钥调用 /v1/*、/credits、/auth/* —— 管理员用同一个账号即可使用用户端（不限额度）。默认关闭。",
+  "type": "auth",
+  "hasServer": true,
+  "permissions": ["auth:registerAuth"],
+  "configSchema": [],
+  "icon": "msym:key"
+}

@@ -1,0 +1,11 @@
+# 运行时数据(含加密密钥/用户数据,禁止入库)
+data/
+plugins-config/
+plugins-data/
+instances/
+.agwkey
+*.log
+tmp/
+tmp-sync-2/
+*bak*
+node_modules/

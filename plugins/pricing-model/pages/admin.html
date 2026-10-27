@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>计费模型 · 管理页</title>
+<style>
+  /* 颜色全部走 CSS 变量 —— App 管理员模式 WebView 会注入 :root 换肤 */
+  :root {
+    --md-sys-color-surface: #14141a;
+    --md-sys-color-on-surface: #e4e2e6;
+    --md-sys-color-surface-container: #1e1e26;
+    --md-sys-color-on-surface-variant: #b9b6c0;
+    --md-sys-color-primary: #a8c8ff;
+    --md-sys-color-error: #ffb4ab;
+    --md-sys-color-outline-variant: #46464f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface);
+         font-family: system-ui, sans-serif; font-size: 14px; }
+  h2 { margin: 0 0 10px; font-size: 15px; }
+  .card { background: var(--md-sys-color-surface-container); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .hint { color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.5; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .fld { display: flex; flex-direction: column; gap: 3px; }
+  .fld label { font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
+  input { background: transparent; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px;
+          color: var(--md-sys-color-on-surface); padding: 7px 9px; font-size: 14px; width: 100%;
+          font-family: ui-monospace, Menlo, monospace; }
+  input:focus { outline: none; border-color: var(--md-sys-color-primary); }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0;
+         border-bottom: 1px solid var(--md-sys-color-outline-variant); font-size: 13px; }
+  .row:last-child { border-bottom: 0; }
+  .row .v { font-family: ui-monospace, Menlo, monospace; text-align: right; }
+  .row.hi .v { color: var(--md-sys-color-primary); font-weight: 700; font-size: 15px; }
+  .row.bad .v { color: var(--md-sys-color-error); }
+  button { border: 0; border-radius: 999px; padding: 8px 18px; font-size: 13px; cursor: pointer;
+           background: var(--md-sys-color-primary); color: #000; margin-right: 8px; }
+  button.ghost { background: transparent; color: var(--md-sys-color-primary);
+                 border: 1px solid var(--md-sys-color-outline-variant); }
+  .err { color: var(--md-sys-color-error); font-size: 12px; }
+  ::-webkit-scrollbar { width: 0; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>实测（近 30 天 · 只读旁听）</h2>
+  <div id="measured" class="hint">加载中…</div>
+</div>
+
+<div class="card">
+  <h2>参数</h2>
+  <div class="grid" id="params"></div>
+  <div style="margin-top:12px">
+    <button onclick="save()">保存并重算</button>
+    <button class="ghost" onclick="useMeasured()">用实测值填充 N_A / t_C</button>
+    <button class="ghost" onclick="resetMeter()">清空计量</button>
+  </div>
+  <div class="err" id="err"></div>
+</div>
+
+<div class="card">
+  <h2>结果</h2>
+  <div id="out" class="hint">加载中…</div>
+</div>
+
+<div class="card">
+  <h2>说明</h2>
+  <div class="hint">
+    公式：X = (a·s/T + c + N_C·t_C·b) / (N_A·α_A + λ·N_S·α_S)，α = 1 − r·u。<br>
+    本插件<b>只计量、不改扣费</b>——挂竞争性 billing 钩子会让「扣费」和「账本」变成两本账。<br>
+    要真改扣费，走 billing 自己的规则（hour / ctxLen / cache 触发器），不要另挂钩子。
+  </div>
+</div>
+
+<script>
+/* BASE 用路径推导，兼容「带实例名前缀」的部署（/实例名/plugins/pricing-model/pages/admin.html） */
+const BASE = location.pathname.replace(/\/pages\/.*$/, '');
+const KEYS = ['a','s','T','c','b','rA','rS','lam','NA','NS','uA','uS','NC','tC'];
+const LABEL = {
+  a:'a 训练成本 ¥/1M', s:'s 训练数据量(M tok)', T:'T 摊销月数', c:'c 设施成本 ¥/月',
+  b:'b 推理成本 ¥/1M', rA:'r_A 额度倍率', rS:'r_S 额度倍率', lam:'λ = Z/X',
+  NA:'N_A A 档人数', NS:'N_S S 档人数', uA:'u_A 用满率 0~1', uS:'u_S 用满率 0~1',
+  NC:'N_C 免费用户数', tC:'t_C 免费人均 M/月'
+};
+
+async function api(path, opts) {
+  const r = await fetch(BASE + '/' + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  return r.json();
+}
+const fmtMoney = (v) => {
+  if (v == null || !isFinite(v)) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e8) return '¥' + (v / 1e8).toFixed(2) + '亿';
+  if (a >= 1e4) return '¥' + (v / 1e4).toFixed(1) + '万';
+  return '¥' + v.toFixed(1);
+};
+const fmtCnt = (v) => (v == null || !isFinite(v)) ? '—' : (Math.abs(v) >= 1e4 ? (v / 1e4).toFixed(1) + '万' : String(Math.round(v)));
+const row = (k, v, cls) => '<div class="row ' + (cls || '') + '"><span>' + k + '</span><span class="v">' + v + '</span></div>';
+
+let PARAMS = {};
+
+function renderParams() {
+  document.getElementById('params').innerHTML = KEYS.map((k) =>
+    '<div class="fld"><label>' + LABEL[k] + '</label><input id="p_' + k + '" type="number" step="any" value="' + (PARAMS[k] != null ? PARAMS[k] : '') + '"></div>'
+  ).join('');
+}
+function readParams() {
+  const o = {};
+  for (const k of KEYS) { const el = document.getElementById('p_' + k); if (el && el.value !== '') o[k] = Number(el.value); }
+  return o;
+}
+
+function render(out) {
+  const s = out.solved, m = out.measured || {};
+  document.getElementById('measured').innerHTML =
+    '天数 ' + m.days + ' · 请求 ' + fmtCnt(m.req) + ' · 活跃用户 ' + fmtCnt(m.activeUsers) +
+    '<br>Tokens ' + fmtCnt(m.tokens) + ' · 闲时占比 ' + (m.idleShare == null ? '—' : (m.idleShare * 100).toFixed(0) + '%') +
+    ' · 缓存命中 ' + (m.cacheShare == null ? '—' : (m.cacheShare * 100).toFixed(1) + '%') +
+    '<br>人均 ' + fmtCnt(m.perUserTokens30d) + ' tok/30天 · 月折算 ' + fmtCnt(m.perUserTokensPerMonth) +
+    ' · 已扣额度 ' + fmtCnt(m.charged);
+
+  let h = '';
+  h += row('α_A = 1 − r_A·u_A', s.alphaA.toFixed(3), s.alphaA > 0 ? '' : 'bad');
+  h += row('α_S = 1 − r_S·u_S', s.alphaS.toFixed(3), s.alphaS > 0 ? '' : 'bad');
+  h += row('分母 D', fmtCnt(s.divisor));
+  h += row('训练摊销 a·s/T', fmtMoney(s.train));
+  h += row('免费层支出 N_C·t_C·b', fmtMoney(s.freeCost));
+  h += row('解出 A 价 X', s.X == null ? '无正解' : '¥' + s.X.toFixed(1), 'hi');
+  h += row('解出 S 价 Z', s.Z == null ? '无正解' : '¥' + s.Z.toFixed(1), 'hi');
+  h += row('月贡献', fmtMoney(s.contrib));
+  h += row('可分配免费层余量', fmtMoney(s.budget), s.budget > 0 ? '' : 'bad');
+  h += row('每月净利', fmtMoney(s.net), s.net > 0 ? '' : (s.net < 0 ? 'bad' : ''));
+  h += row('免费用户上限', fmtCnt(s.NCmax));
+  h += row('训练回本', s.payback == null ? '—（净利 ≤ 0）' : s.payback.toFixed(0) + ' 个月');
+  h += row('判据 u_A < ' + (s.needUA * 100).toFixed(1) + '%', (PARAMS.uA * 100).toFixed(1) + '%', s.okA ? '' : 'bad');
+  h += row('判据 u_S < ' + (s.needUS * 100).toFixed(1) + '%', (PARAMS.uS * 100).toFixed(1) + '%', s.okS ? '' : 'bad');
+  document.getElementById('out').innerHTML = h;
+}
+
+async function load() {
+  try {
+    const j = await api('admin/summary');
+    if (!j.ok) { document.getElementById('measured').textContent = j.error || '加载失败'; return; }
+    PARAMS = j.params;
+    renderParams();
+    render(j);
+  } catch (e) { document.getElementById('measured').textContent = '网络错误'; }
+}
+
+async function save() {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  const j = await api('admin/params', { method: 'POST', body: JSON.stringify(readParams()) });
+  if (!j.ok) { err.textContent = j.error || '保存失败'; return; }
+  PARAMS = j.params;
+  renderParams();
+  const s = await api('admin/summary');
+  render(s);
+}
+
+async function useMeasured() {
+  const m = (await api('admin/summary')).measured || {};
+  if (m.activeUsers) document.getElementById('p_NA').value = m.activeUsers;
+  if (m.perUserTokensPerMonth) document.getElementById('p_tC').value = (m.perUserTokensPerMonth / 1e6).toFixed(3);
+  if (m.idleShare != null) document.getElementById('p_c').value = document.getElementById('p_c').value;  // 闲时占比仅展示
+  save();
+}
+
+async function resetMeter() {
+  if (!confirm('清空全部计量数据？此操作不可撤销。')) return;
+  const j = await api('admin/meter-reset', { method: 'POST', body: '{}' });
+  if (j.ok) load();
+}
+
+load();
+</script>
+</body>
+</html>

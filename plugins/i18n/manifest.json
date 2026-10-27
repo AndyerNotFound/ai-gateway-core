@@ -1,0 +1,12 @@
+{
+  "id": "i18n",
+  "name": "多语言",
+  "version": "0.1.0",
+  "type": "business",
+  "description": "多语言基础插件：存每用户的语言偏好 + 译文字典（简中/English/繁中）。翻译管理页可在 App 管理端增改译文；模型广场/个人页/隧道页按用户语言渲染。改服务端即可生效，不用重编 App。",
+  "hasServer": true,
+  "permissions": ["storage"],
+  "configSchema": [],
+  "icon": "msym:settings",
+  "adminPage": "pages/admin.html"
+}

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旧版配置导入 · 管理页</title>
+<style>
+  :root {
+    --md-sys-color-surface: #14141a; --md-sys-color-on-surface: #e4e2e6;
+    --md-sys-color-surface-container: #1e1e26; --md-sys-color-on-surface-variant: #b9b6c0;
+    --md-sys-color-primary: #a8c8ff; --md-sys-color-error: #ffb4ab;
+    --md-sys-color-outline-variant: #46464f; --md-sys-color-secondary-container: #2d3040;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface); font-family: system-ui, sans-serif; }
+  h2 { margin: 0 0 8px; font-size: 18px; }
+  .card { background: var(--md-sys-color-surface-container); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+  .hint { color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--md-sys-color-on-surface-variant); margin: 10px 0 4px; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface);
+    border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; padding: 10px 12px; font-size: 14px; font-family: inherit;
+  }
+  textarea { min-height: 140px; resize: vertical; font-family: monospace; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  button { background: var(--md-sys-color-primary); color: #000; border: 0; border-radius: 999px; padding: 9px 22px; font-size: 14px; cursor: pointer; }
+  button.outlined { background: transparent; color: var(--md-sys-color-primary); border: 1px solid var(--md-sys-color-primary); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .err { color: var(--md-sys-color-error); font-size: 13px; }
+  .ok { color: #7fd39b; }
+  .warn { color: #ffcc66; font-size: 13px; }
+  .kv { font-size: 13px; line-height: 1.7; }
+  .kv b { color: var(--md-sys-color-on-surface); }
+  .chip { display: inline-block; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-surface); border-radius: 8px; padding: 2px 8px; font-size: 12px; margin: 2px 4px 0 0; }
+  .results { font-size: 13px; }
+  .results .item { padding: 8px 0; border-top: 1px solid var(--md-sys-color-outline-variant); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>旧版 ai-gateway 配置导入</h2>
+  <p class="hint">把旧版 <code>config.&lt;名&gt;.json</code> 转换并创建为 core 实例。<br>
+  支持 AGWENC1 加密配置 —— 密码留空则自动读取 <code>~/.ai-gateway/.agwkey</code>。<br>
+  旧版的 <code>apiKeys / users / modelSync / openaiExtras / redact</code> 等不会导入 (core 用独立插件系统), 导入后可手动配置。</p>
+</div>
+
+<div class="card">
+  <label>配置内容 (粘贴 JSON / AGWENC1 文本, 或用下方文件选择)</label>
+  <textarea id="txt" placeholder='粘贴 config.AgnesAI.json 的内容…'></textarea>
+  <label>实例名 (留空 = 从 _name 或文件名推导)</label>
+  <input type="text" id="name" placeholder="如 AgnesAI">
+  <label>解密密码 (加密配置且 .agwkey 不可用时填)</label>
+  <input type="password" id="pass" placeholder="留空 = 自动读取 ~/.ai-gateway/.agwkey">
+  <div class="row" style="margin-top:12px;">
+    <label style="margin:0;"><input type="checkbox" id="keepPort"> 保留原端口 (否则仅前缀路由 /实例名/)</label>
+  </div>
+  <p class="warn" id="portWarn" style="display:none;"></p>
+  <div class="row" style="margin-top:14px; gap:10px;">
+    <button id="btnConvert">转换预览</button>
+    <button class="outlined" id="btnCreate" disabled>确认创建</button>
+  </div>
+</div>
+
+<div class="card" id="summaryCard" style="display:none;">
+  <h2 style="font-size:16px;">转换预览</h2>
+  <div class="kv" id="summaryBody"></div>
+</div>
+
+<div class="card">
+  <h2 style="font-size:16px;">批量导入 (选多个文件)</h2>
+  <label>选择旧版配置文件 (config.*.json)</label>
+  <input type="file" id="files" accept=".json,application/json" multiple>
+  <div class="row" style="margin-top:12px;">
+    <button id="btnBatch">批量导入</button>
+    <span class="hint" id="batchHint"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="font-size:16px;">结果</h2>
+  <div class="results" id="results"><p class="hint">尚无导入记录。</p></div>
+</div>
+
+<script>
+const BASE = '/plugins/legacy-import';
+let pending = null; // 待创建的 {config, name}
+
+const $ = id => document.getElementById(id);
+
+function appendResult(name, ok, msg) {
+  const r = $('results');
+  if (r.querySelector('.hint')) r.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'item';
+  d.innerHTML = '<b>' + name + '</b> ' + (ok ? '<span class="ok">✓ 创建成功</span>' : '<span class="err">✗ 失败</span>') + '<br><span class="hint">' + msg + '</span>';
+  r.appendChild(d);
+}
+
+async function apiConvert(text, name, pass, keepPort) {
+  const r = await fetch(BASE + '/admin/convert', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    body: JSON.stringify({ text, name, pass, keepPort: !!keepPort })
+  }).then(r => r.json().catch(() => null));
+  return r;
+}
+
+async function createInstance(config, name) {
+  const body = Object.assign({}, config, { name });
+  const r = await fetch('/admin/api/instance', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    body: JSON.stringify(body)
+  }).then(r => r.json().catch(() => null));
+  return r;
+}
+
+function renderSummary(s) {
+  let h = '';
+  h += '<b>实例名</b>: ' + s.name + '<br>';
+  h += '<b>端口</b>: ' + s.port + '<br>';
+  h += '<b>渠道</b>: ' + s.channels + ' · <b>代理</b>: ' + s.proxies + ' · <b>TLS</b>: ' + (s.tls ? '是' : '否') + '<br>';
+  h += '<b>adminKey</b>: ' + (s.adminKey ? '已设置' : '无') + ' · <b>gatewayKey</b>: ' + (s.gatewayKey ? '已设置' : '无') + '<br>';
+  if (s.skipped && s.skipped.length) {
+    h += '<b>已跳过</b>: <br>';
+    for (const k of s.skipped) h += '<span class="chip">' + k + '</span>';
+  }
+  return h;
+}
+
+$('btnConvert').onclick = async () => {
+  const text = $('txt').value.trim();
+  if (!text) { alert('请粘贴配置内容'); return; }
+  $('btnConvert').disabled = true;
+  $('summaryCard').style.display = 'none';
+  $('portWarn').style.display = 'none';
+  $('btnCreate').disabled = true;
+  pending = null;
+  try {
+    const r = await apiConvert(text, $('name').value.trim(), $('pass').value, $('keepPort').checked);
+    if (!r || !r.ok) { alert('转换失败: ' + (r && r.error || '未知错误')); return; }
+    pending = { config: r.config, name: r.name };
+    $('summaryBody').innerHTML = renderSummary(r.summary);
+    $('summaryCard').style.display = 'block';
+    $('btnCreate').disabled = false;
+    if (r.portBusy) {
+      $('portWarn').textContent = '⚠ 端口 ' + r.config.listen.port + ' 当前已被占用 (旧版 ai-gateway 可能仍在运行) —— 创建后该实例可能无法监听, 建议取消"保留原端口"。';
+      $('portWarn').style.display = 'block';
+    }
+  } catch (e) { alert('请求失败: ' + e.message); }
+  finally { $('btnConvert').disabled = false; }
+};
+
+$('btnCreate').onclick = async () => {
+  if (!pending) return;
+  $('btnCreate').disabled = true;
+  try {
+    const r = await createInstance(pending.config, pending.name);
+    if (r && r.ok) {
+      appendResult(pending.name, true, 'uid=' + r.uid + ' · 端口=' + (pending.config.listen.port || '前缀路由'));
+      $('txt').value = ''; $('name').value = ''; pending = null;
+      $('summaryCard').style.display = 'none';
+    } else {
+      appendResult(pending.name, false, (r && r.error) || '未知错误');
+    }
+  } catch (e) { appendResult(pending.name, false, e.message); }
+  finally { $('btnCreate').disabled = false; }
+};
+
+$('btnBatch').onclick = async () => {
+  const files = $('files').files;
+  if (!files || !files.length) { alert('请选择文件'); return; }
+  $('btnBatch').disabled = true;
+  const keep = $('keepPort').checked;
+  const pass = $('pass').value;
+  $('batchHint').textContent = '导入中 (' + files.length + ' 个文件)…';
+  let okCount = 0;
+  for (const f of files) {
+    let name = $('name').value.trim();
+    const m = f.name.match(/^config\.(.+)\.json$/i);
+    if (m && !name) name = m[1];
+    const text = await f.text();
+    const c = await apiConvert(text, name, pass, keep);
+    if (!c || !c.ok) { appendResult(name || f.name, false, '转换: ' + (c && c.error || '失败')); continue; }
+    const r = await createInstance(c.config, c.name);
+    if (r && r.ok) { appendResult(c.name, true, 'uid=' + r.uid + ' · ' + c.summary.channels + ' 渠道 · ' + c.summary.port); okCount++; }
+    else appendResult(c.name, false, (r && r.error) || '创建失败');
+  }
+  $('batchHint').textContent = '完成: ' + okCount + '/' + files.length + ' 成功';
+  $('btnBatch').disabled = false;
+};
+</script>
+</body>
+</html>

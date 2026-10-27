@@ -1,0 +1,21 @@
+{
+  "id": "pricing-model",
+  "name": "计费模型",
+  "version": "0.1.0",
+  "type": "business",
+  "icon": "msym:wallet",
+  "description": "把定价模型装进网关：实测真实人数 N/人均用量/闲时占比（只计量、不改扣费），再用闭式公式解出各档定价与免费层上限。X = (a·s/T + c + N_C·t_C·b) / (N_A·α_A + λ·N_S·α_S)，α = 1 − r·u。",
+  "hasServer": true,
+  "adminPage": "pages/admin.html",
+  "permissions": ["storage"],
+  "configSchema": [],
+  "scope": "global",
+  "dataScope": "global",
+  "appUi": {
+    "bottomBar": {
+      "title": "计费模型",
+      "icon": "wallet",
+      "ui": "/ui/model"
+    }
+  }
+}

@@ -1,0 +1,45 @@
+# ─── 派生分组规则（model-square 插件，2026-09-18 起）────────────────────────
+# 只影响**没有在管理端配置过分组**的模型（你配过的，永远以你配的为准）。
+# 一行一条；改完保存 → App 里刷新页面即生效（不用重启网关，按文件修改时间热加载）。
+#
+# 格式（2026-09-18 起四种都支持）:
+#     前缀*     = 分组名     以它开头（最长优先）
+#     完整模型名 = 分组名     精确匹配
+#     *后缀     = 分组名     以它结尾
+#     *包含*    = 分组名     名字里出现就行（例：*deepseek* 能抓到 x-deepseek-v4-pro）
+#     行首 # 或 // = 注释；值留空 = 忽略该行
+#
+# 优先级: 精确名  >  规则(串越长越具体，越优先)  >  内置按名字前缀猜（gpt-4o → gpt）
+# ★还有一层"分词兜底": x-deepseek-v4-pro 会被拆成 x / deepseek / v4 / pro，
+#   用 `deepseek*` 也能命中 —— 名字中间带厂商词的模型不用另写规则。
+#
+# 想让规则"连管理端配好的也覆盖"？把下面这行的 # 去掉（默认是 fallback）:
+# mode = override
+#
+# 查看当前生效的规则与语法提示（浏览器打开）:
+#   http://127.0.0.1:16484/plugins/model-square/group-rules
+# 检查"渠道改名丢配置"的孤儿键:
+#   http://127.0.0.1:16484/plugins/model-square/admin/orphans   （需管理密钥）
+
+# ── 下面是我按你站里现有模型写的示例规则（不要就删掉，或在行首加 #）──
+@cf*       = CloudFlare
+gpt* = OpenAI
+codex* = OpenAI
+grok* = xAI
+glm* = Z.AI
+z-ai* = Z.AI
+z.ai* = Z.AI
+kimi* = MoonShotAI
+moonshot* = MoonShotAI
+qwen* = Qwen
+deepseek* = DeepSeek
+hy* = Hunyuan
+mimo* = MiMo
+edge* = Microsoft
+claude* = Anthropic
+gemini* = Google
+gemma* = Google
+llama* = Llama
+mistral* = MistralAI
+nemotron* = NVIDIA
+muse* = Meta
